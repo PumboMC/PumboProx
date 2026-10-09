@@ -287,7 +287,12 @@ plugins:
   dir: plugins
 ```
 
-**3. Point your Pumpkin servers at it.** In each server's `pumpkin.toml`, turn on Velocity forwarding with the secret from `forwarding.secret`, and let the server listen on `127.0.0.1` only:
+**3. Point your Pumpkin servers at it.**
+
+> [!TIP]
+> Run your servers on Pumpkin 0.2.0 (Minecraft 26.3): then players on every version from 1.21 to 26.3 can join.
+
+In each server's `pumpkin.toml`, turn on Velocity forwarding with the secret from `forwarding.secret`, and let the server listen on `127.0.0.1` only:
 
 ```toml
 [networking.proxy]
@@ -406,7 +411,7 @@ cargo build -p pumbo-example --target wasm32-wasip2 --profile plugin
 > **Pumpkin 0.2.0 lets every player use `/tp`, `/xp`, `/banip` and `/pardonip`.** In the official 0.2.0 release (and in 0.1.0-dev) these aliases skip the permission check of the command they stand for, so on a plain server anyone can teleport, give experience and ban IP addresses. Pumpkin fixed it after 0.2.0 ([#3801](https://github.com/Pumpkin-MC/Pumpkin/pull/3801)). PumboBridge and PumboPerms block the four aliases on the server for players without the permission. If you run neither of them, update Pumpkin to a build with the fix.
 
 - **Tab completion for plugin commands is partial.** For a plugin command the proxy suggests the plugin's subcommands and then the names of online players. Suggestions for every argument (durations, group names, servers) come once plugins can answer completions themselves.
-- **Servers on Pumpkin 0.1.0-dev (Minecraft 26.2) work behind the proxy only for 26.2 players:** the translator turns older clients into 26.3 today. Newer clients on older servers come with translation in both directions.
+- A server on the older Pumpkin 0.1.0-dev (Minecraft 26.2) accepts only 26.2 players for now; every version will be able to join it once the translation works in both directions.
 - **This release:** PumboProx with [PumboFilter](https://github.com/PumboMC/PumboFilter), [PumboAuth](https://github.com/PumboMC/PumboAuth), [PumboBans](https://github.com/PumboMC/PumboBans), [PumboPerms](https://github.com/PumboMC/PumboPerms) and [PumboBridge](https://github.com/PumboMC/PumboBridge). Each plugin has its own repository and its own release with the `.wasm` files.
 - **PumboDB, PumboTabasco, PumboGuard, PumboCore and PumboSkins are planned**, not part of this release. PumboDB will be one shared SQL database (SQLite, MySQL, MariaDB, PostgreSQL) for all Pumbo plugins.
 
