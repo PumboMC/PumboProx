@@ -93,7 +93,7 @@ Two players on one network: the bot check in a virtual world, a premium login wi
 
 | | Feature | |
 | --- | --- | --- |
-| 📦 | **One file per plugin** | Drop `pumbo-filter.wasm` into `plugins/`. On the first start the plugin creates its folder and a commented `config.yml`. |
+| 📦 | **One file per plugin** | Drop the plugin's `.wasm` file into `plugins/`. On the first start the plugin creates its folder and a commented `config.yml`. |
 | 🔗 | **Plugins find each other** | Pumbo plugins detect each other and work together. Take one away and the rest keep running. |
 | 🌍 | **Whole network or solo** | Run a plugin on the proxy for the whole network, or standalone on a plain Pumpkin server. |
 | 🗂️ | **Per-server and per-group config** | One plugin, different settings for lobby, survival and minigames. |
@@ -371,9 +371,10 @@ players:
 | ✅ | Version translation 1.21 – 26.2 → 26.3 | done |
 | ✅ | PumboFilter, PumboAuth, PumboBans, PumboBridge | beta |
 | ✅ | PumboPerms for the whole network | beta |
-| 🔜 | Release 0.1: downloads, Docker image, Pterodactyl and Pelican egg, setup wizard | next |
+| ✅ | 0.1.0-beta.1: downloads for Linux, macOS and Windows, Docker image | released |
+| 🔜 | Pterodactyl and Pelican egg, setup wizard, signed Windows files | next |
 | 🔜 | Translation in both directions (newer clients on older servers) | planned |
-| 🔜 | PumboTabasco, PumboGuard, PumboCore | planned |
+| 🔜 | PumboDB, PumboTabasco, PumboGuard, PumboCore, PumboSkins | planned |
 | 🔜 | Web panel built into the proxy | planned |
 | 🔜 | Clients older than 1.21, in our own translator | planned |
 | 🔜 | Bedrock players | planned |
@@ -391,7 +392,7 @@ A PumboProx plugin is a WebAssembly component built against the [`pumbo:prox` WI
 | 🧩 | **Shared library**: YAML config, languages and message styles used by the Pumbo plugins | [`crates/pumbo-common`](https://github.com/PumboMC/PumboProx/tree/main/crates/pumbo-common) |
 | 🌱 | **Example plugin** to copy | [`plugins/example`](https://github.com/PumboMC/PumboProx/tree/main/plugins/example) |
 
-The SDK goes to crates.io with release 0.1. Until then, add it from Git:
+The SDK is not on crates.io yet. Add it from Git:
 
 ```toml
 [dependencies]
