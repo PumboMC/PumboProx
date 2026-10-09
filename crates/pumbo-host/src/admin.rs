@@ -10,7 +10,7 @@ use pumbo_text::template::escape_mini;
 use serde_json::{Value, json};
 
 use crate::HostInner;
-use crate::actor::{PluginSlot, Status};
+use crate::actor::{Control, PluginSlot, Status};
 use crate::commands::{self, CommandOutcome, CommandSender};
 use crate::schema;
 use crate::wit::admin::{Actor, MetricKind, ParamKind, PluginDescription};
@@ -757,13 +757,14 @@ fn plugin_command(host: &Arc<HostInner>, sender: CommandSender, rest: &[String])
         return reply(host, vec![format!("{} is loaded", escape_mini(id))]);
     }
     tracing::info!(plugin = %slot.id, by = %commands::sender_name(host, sender), "plugin {action}");
+    let reply = slot.ask(if action == "unload" {
+        Control::Unload
+    } else {
+        Control::Reload
+    });
     let h = Arc::clone(host);
     tokio::spawn(async move {
-        let r = if action == "unload" {
-            slot.unload().await
-        } else {
-            slot.reload().await
-        };
+        let r = reply.await;
         let restart = slot.restart.lock().ok().and_then(|r| r.clone());
         let line = match (r, restart) {
             (Ok(()), Some(changes)) => format!(

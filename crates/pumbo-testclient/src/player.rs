@@ -390,7 +390,13 @@ impl Player {
                 }
                 Err(e) => return Err(e),
             };
-            self.handle(kind, &f).await?;
+            match self.handle(kind, &f).await {
+                // The server closed after its last packets (a kick): the reply to one
+                // of them fails, the packets already received (the disconnect) are
+                // still read.
+                Err(ClientError::Io(e)) if closed_by_server(&e) => {}
+                r => r?,
+            }
         }
     }
 
@@ -847,6 +853,11 @@ pub fn saw(p: &Player, phase: Phase, kind: PacketKind) -> usize {
         .iter()
         .filter(|(ph, k)| *ph == phase && *k == kind)
         .count()
+}
+
+fn closed_by_server(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind::*;
+    matches!(e.kind(), BrokenPipe | ConnectionReset | ConnectionAborted)
 }
 
 #[cfg(test)]

@@ -5,6 +5,7 @@
 //! after too many failures. Nothing here holds a lock across an `await`.
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -274,24 +275,32 @@ impl PluginSlot {
 
     /// Reloads the plugin from its file; resolves when the new instance runs
     /// or fails to start. Gate events wait in the mailbox meanwhile.
-    pub async fn reload(&self) -> Result<(), String> {
-        let (tx, rx) = oneshot::channel();
-        self.control
-            .send(Control::Reload(tx))
-            .map_err(|_| "plugin actor stopped".to_string())?;
-        rx.await
-            .unwrap_or_else(|_| Err("plugin actor stopped".to_string()))
+    pub fn reload(&self) -> impl Future<Output = Result<(), String>> + Send + 'static {
+        self.ask(Control::Reload)
     }
 
     /// Stops the instance and keeps it down until [`PluginSlot::reload`].
     /// Gates of the plugin deny meanwhile, a player it holds is kicked.
-    pub async fn unload(&self) -> Result<(), String> {
+    pub fn unload(&self) -> impl Future<Output = Result<(), String>> + Send + 'static {
+        self.ask(Control::Unload)
+    }
+
+    /// Sends the request at once, not when the answer is awaited, so requests
+    /// reach the actor in the order they were made (an unload and a load right
+    /// after it, each awaited in its own task).
+    pub(crate) fn ask(
+        &self,
+        make: fn(oneshot::Sender<Result<(), String>>) -> Control,
+    ) -> impl Future<Output = Result<(), String>> + Send + 'static {
         let (tx, rx) = oneshot::channel();
-        self.control
-            .send(Control::Unload(tx))
-            .map_err(|_| "plugin actor stopped".to_string())?;
-        rx.await
-            .unwrap_or_else(|_| Err("plugin actor stopped".to_string()))
+        let sent = self.control.send(make(tx)).is_ok();
+        async move {
+            if !sent {
+                return Err("plugin actor stopped".to_string());
+            }
+            rx.await
+                .unwrap_or_else(|_| Err("plugin actor stopped".to_string()))
+        }
     }
 
     pub(crate) fn stop(&self) {
