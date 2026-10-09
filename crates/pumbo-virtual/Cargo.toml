@@ -1,0 +1,25 @@
+[package]
+name = "pumbo-virtual"
+description = "PumboAPI virtual world: a world served by the proxy itself, encoded per protocol version"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bytes.workspace = true
+flate2.workspace = true
+pumbo-data.workspace = true
+pumbo-nbt.workspace = true
+pumbo-protocol.workspace = true
+pumbo-text.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+pumbo-testclient.workspace = true
+
+[lints]
+workspace = true

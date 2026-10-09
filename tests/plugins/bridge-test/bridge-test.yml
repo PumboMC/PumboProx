@@ -1,0 +1,6 @@
+# Manifest of the PumboBridge test plugin (copy next to bridge-test.wasm).
+id: bridge-test
+version: 0.1.0
+api: "0.1"
+uses:
+  - { service: "pumbo:bridge", version: "1.0", required: false }

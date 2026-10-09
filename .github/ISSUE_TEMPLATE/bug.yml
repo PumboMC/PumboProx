@@ -1,0 +1,69 @@
+name: Bug report
+description: Something in PumboProx does not work as it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. A security problem? Don't report it here, see [SECURITY.md](https://github.com/PumboMC/PumboProx/blob/main/SECURITY.md).
+        A bug in one of the Pumbo plugins goes to that plugin's repository.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: And what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start the proxy with ...
+        2. Join with a 1.21.4 client
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: proxy
+    attributes:
+      label: PumboProx version
+      description: The first line of `pumboprox version`, and how you run it (release binary, Docker, from source at commit ...).
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Debian 12 x86_64, Windows 11, macOS 15 ...
+  - type: input
+    id: pumpkin
+    attributes:
+      label: Pumpkin version
+      description: From the first line of the Pumpkin log, e.g. `0.2.0+26.3-26.51`.
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: Minecraft client version
+      placeholder: 26.3, 1.21.4 ...
+    validations:
+      required: true
+  - type: textarea
+    id: plugins
+    attributes:
+      label: Plugins
+      description: The output of `/pumbo` (or the `.wasm` files in `plugins/`), and the plugins on the Pumpkin servers.
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: The proxy log around the problem, and the server log if it matters. Remove secrets and addresses you don't want to share.
+      render: text
+  - type: textarea
+    id: config
+    attributes:
+      label: Config
+      description: The relevant parts of `pumboprox.yml`, without `forwarding.secret` or keys.
+      render: yaml

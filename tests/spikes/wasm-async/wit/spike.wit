@@ -1,0 +1,39 @@
+package pumbo:spike@0.1.0;
+
+/// Host imports used in the E0 spike.
+interface host {
+  /// Async import: the host waits `ms` milliseconds (tokio).
+  sleep-ms: async func(ms: u32);
+  /// Scenario #2056: the host dispatches `on-event(n)` to the same plugin
+  /// and waits for its result before returning.
+  emit: async func(n: u32) -> u32;
+  /// Synchronous read of host state.
+  counter: func() -> u64;
+}
+
+/// Plugin exports (events).
+interface events {
+  /// Calls `emit(n)` and returns the result + 1.
+  on-command: async func(n: u32) -> u32;
+  /// n == 0: returns 1000; n > 0: calls `emit(n - 1)` (reentrancy chain).
+  on-event: async func(n: u32) -> u32;
+  /// Waits through the host import `sleep-ms`.
+  on-sleep: async func(ms: u32) -> u32;
+  /// Waits through `wasi:clocks/monotonic-clock@0.3.0` (WASI 0.3 in the guest).
+  on-wasi-sleep: async func(ms: u32) -> u32;
+  /// Blocking wait through std (WASI 0.2 underneath); blocks the whole instance.
+  on-block: async func(ms: u32) -> u32;
+  /// Endless loop (interrupted by epochs).
+  on-spin: async func() -> u32;
+  /// Panic in the guest (trap).
+  on-panic: async func() -> u32;
+  /// File write and read through std (WASI 0.2 filesystem, like redb) in an async handler.
+  on-file: async func(n: u32) -> u32;
+  /// Short synchronous handler.
+  on-sync: func(n: u32) -> u32;
+}
+
+world plugin {
+  import host;
+  export events;
+}

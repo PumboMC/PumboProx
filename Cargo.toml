@@ -1,0 +1,113 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/pumbo-bridge-proto",
+    "crates/pumbo-common",
+    "crates/pumbo-core",
+    "crates/pumbo-data",
+    "crates/pumbo-datagen",
+    "crates/pumbo-contracts",
+    "crates/pumbo-forwarding",
+    "crates/pumbo-host",
+    "crates/pumbo-identity",
+    "crates/pumbo-nbt",
+    "crates/pumbo-listener-java",
+    "crates/pumbo-protocol",
+    "crates/pumbo-prox",
+    "crates/pumbo-routing",
+    "crates/pumbo-sdk",
+    "crates/pumbo-store",
+    "crates/pumbo-testclient",
+    "crates/pumbo-text",
+    "crates/pumbo-translate",
+    "crates/pumbo-translate-mv",
+    "crates/pumbo-virtual",
+    "plugins/example",
+    "tests/plugins/bridge-test",
+    "tests/plugins/host-test",
+    "tests/spikes/rsa",
+    "tests/spikes/wasm-async/host",
+]
+
+[workspace.package]
+version = "0.1.0-beta.1"
+edition = "2024"
+rust-version = "1.96"
+license = "GPL-3.0-only"
+authors = ["Patryk Skoczylas"]
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
+
+[workspace.dependencies]
+rand_core = { version = "0.6", features = ["getrandom"] }
+redb = "3.1"
+aes = "0.8"
+argon2 = { version = "0.5", default-features = false, features = ["password-hash", "rand", "std"] }
+aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys", "alloc"] }
+# Already built for reqwest; the server icon in the status answer.
+base64 = "0.23"
+bcrypt = { version = "0.17", default-features = false, features = ["std"] }
+bytes = "1.12"
+cfb8 = "0.8"
+ciborium = "0.2"
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+futures = "0.3"
+md-5 = "0.10"
+proptest = { version = "1.11", default-features = false, features = ["std"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+serde-saphyr = { version = "1.3", default-features = false, features = ["deserialize"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "ansi", "json"] }
+uuid = "1.27"
+pumbo-bridge-proto = { path = "crates/pumbo-bridge-proto" }
+pumbo-contracts = { path = "crates/pumbo-contracts" }
+pumbo-core = { path = "crates/pumbo-core" }
+pumbo-data = { path = "crates/pumbo-data" }
+pumbo-forwarding = { path = "crates/pumbo-forwarding" }
+pumbo-host = { path = "crates/pumbo-host" }
+pumbo-identity = { path = "crates/pumbo-identity" }
+pumbo-nbt = { path = "crates/pumbo-nbt" }
+pumbo-listener-java = { path = "crates/pumbo-listener-java" }
+pumbo-protocol = { path = "crates/pumbo-protocol" }
+pumbo-routing = { path = "crates/pumbo-routing" }
+pumbo-sdk = { path = "crates/pumbo-sdk" }
+pumbo-store = { path = "crates/pumbo-store" }
+pumbo-testclient = { path = "crates/pumbo-testclient" }
+pumbo-text = { path = "crates/pumbo-text" }
+pumbo-translate = { path = "crates/pumbo-translate" }
+pumbo-translate-mv = { path = "crates/pumbo-translate-mv" }
+pumbo-virtual = { path = "crates/pumbo-virtual" }
+serde_json = "1"
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+wasmtime = { version = "=49.0.2", default-features = false, features = ["anyhow", "async", "component-model", "component-model-async", "cranelift", "parallel-compilation", "runtime", "std"] }
+wasmtime-wasi = { version = "=49.0.2", default-features = false, features = ["p2", "p3"] }
+# The version wasmtime uses (reads the custom sections of plugins).
+wasmparser = { version = "0.258", default-features = false, features = ["std", "component-model"] }
+wit-bindgen = "=0.62.0"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# WASM plugins (wasm32-wasip2): small and quick to build.
+[profile.plugin]
+inherits = "release"
+opt-level = "s"
+codegen-units = 16

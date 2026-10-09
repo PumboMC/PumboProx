@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 9a17982c42952e90f4256b689b996a68eaf3d7d60a30c82c81ac7f59476e7625 # shrinks to t = List(List { element: 10, items: [Compound(Compound([("", Byte(0)), ("", Byte(1))]))] })

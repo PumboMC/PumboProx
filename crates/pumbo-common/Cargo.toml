@@ -1,0 +1,19 @@
+[package]
+name = "pumbo-common"
+description = "Shared foundation of the Pumbo plugins: config, messages, text, time, storage, commands and identifiers"
+version.workspace = true
+edition.workspace = true
+license = "MIT OR Apache-2.0"
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+md-5.workspace = true
+rand_core.workspace = true
+redb.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde-saphyr.workspace = true
+
+[lints]
+workspace = true

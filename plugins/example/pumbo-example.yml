@@ -1,0 +1,27 @@
+# Manifest of the example plugin, built into pumbo-example.wasm (pumbo_sdk::embed!).
+id: pumbo-example
+version: 0.1.0
+api: "0.1"
+events: [status, login, disconnect]
+short-name: example
+permissions:
+  - { node: pumbo.example.hello, default: true, description: Use /hello }
+  - { node: pumbo.example.reset, description: Reset the hello counter }
+
+# The counter service; the plugin is its own consumer too (through the host).
+# The example also has a small permission provider (`on_permission_load`). It is
+# off here, because the proxy takes an installed provider on its own
+# (`permissions.provider: auto`); to try it, add `permission-provider: true` and
+# `- { service: "pumbo:permissions", version: "1.0" }` under `provides` in a copy
+# of this file next to the .wasm (plugins/pumbo-example.yml).
+provides:
+  - { service: "example:counter", version: "1.0", max-timeout-ms: 500 }
+uses:
+  - { service: "example:counter", version: "1.0", required: false }
+
+placeholders:
+  namespace: example
+  keys:
+    - { name: hellos, scope: global, mode: push, public: true, fallback: "0" }
+    - { name: greeting, scope: global, mode: pull, public: true, ttl-ms: 1000 }
+  suggested-aliases: { hellos: example_hellos }

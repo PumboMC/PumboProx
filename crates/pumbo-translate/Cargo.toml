@@ -1,0 +1,23 @@
+[package]
+name = "pumbo-translate"
+description = "Version translation providers: passthrough, multiversion (in-proxy) and redirect to ViaProxy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bytes.workspace = true
+pumbo-core.workspace = true
+pumbo-data.workspace = true
+pumbo-protocol.workspace = true
+pumbo-translate-mv.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+pumbo-nbt.workspace = true
+pumbo-testclient.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,14 @@
+[package]
+name = "spike-rsa"
+description = "E0 spike: aws-lc-rs (RSA PKCS#1 v1.5) on macOS arm64 and Linux x86_64/arm64"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+aws-lc-rs.workspace = true
+
+[lints]
+workspace = true

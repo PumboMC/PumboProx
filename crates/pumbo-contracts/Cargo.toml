@@ -1,0 +1,15 @@
+[package]
+name = "pumbo-contracts"
+description = "Types and versions of the pumbo: services and bus topics shared by PumboProx plugins"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT OR Apache-2.0"
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+
+[lints]
+workspace = true

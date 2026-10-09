@@ -1,0 +1,20 @@
+[package]
+name = "pumbo-bridge-test-plugin"
+description = "Plugin for PumboBridge end-to-end tests: calls pumbo:bridge@1.0 from the proxy console (bt ...)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+futures.workspace = true
+pumbo-bridge-proto = { workspace = true, features = ["sdk"] }
+pumbo-sdk.workspace = true
+
+[lints]
+workspace = true

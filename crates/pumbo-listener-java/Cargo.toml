@@ -1,0 +1,18 @@
+[package]
+name = "pumbo-listener-java"
+description = "Listener module: Java Edition over TCP"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+pumbo-core.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

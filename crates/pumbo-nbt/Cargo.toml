@@ -1,0 +1,17 @@
+[package]
+name = "pumbo-nbt"
+description = "Small NBT reader and writer: network NBT (nameless root) and named root, with depth and size limits"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

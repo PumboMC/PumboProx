@@ -1,0 +1,17 @@
+[package]
+name = "spike-wasm-async"
+description = "E0 spike: wasmtime with component-model async (WASI 0.3) and the #2056 reentrancy scenario"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+futures.workspace = true
+tokio.workspace = true
+wasmtime.workspace = true
+wasmtime-wasi.workspace = true
+
+[lints]
+workspace = true

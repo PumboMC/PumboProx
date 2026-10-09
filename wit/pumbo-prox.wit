@@ -1,0 +1,504 @@
+// PumboProx plugin interface, package pumbo:prox@0.1.0.
+//
+// License: MIT OR Apache-2.0 (LICENSE-MIT, LICENSE-APACHE in this directory),
+// so plugin authors may pick their own license.
+//
+// Rules the host follows (plan §4.4):
+// - an import never waits for an event to be dispatched to plugins: it reads a
+//   host snapshot, queues a command and returns, or is an `async func`,
+// - plugin-to-plugin calls go only through the service registry (`services`),
+// - permissions and placeholders are host data; checking them never calls a plugin.
+//
+// Every event export is `async func` (except `describe`): in wasmtime 49 a
+// synchronous export that waits on an async import traps the instance
+// ("cannot block a synchronous task"), so the host offers no synchronous
+// handlers that could do it by accident.
+//
+// WASI the host provides (not listed in the world, std and the `wasip3` crate
+// import them themselves): WASI 0.2 (`/data` read-write and `/config` read-only
+// preopens, random, clocks, no sockets, no environment) and from WASI 0.3 only
+// `wasi:clocks@0.3.0`.
+
+package pumbo:prox@0.1.0;
+
+interface types {
+  type player-id = u64;
+  type server-name = string;
+  type plugin-id = string;
+
+  record uuid { high: u64, low: u64 }
+  record property { name: string, value: string, signature: option<string> }
+  record profile { id: uuid, name: string, properties: list<property> }
+
+  /// MiniMessage with placeholders `%namespace_key%` and argument slots
+  /// `{name}`; arguments go in literally, without placeholders or tags.
+  record text-template { mini: string, args: list<tuple<string, string>> }
+
+  /// Text for a player; the host encodes it for the client's version.
+  variant text { plain(string), legacy(string), mini(string), json(string), template(text-template) }
+
+  /// Context of an entry (permission, placeholder value).
+  variant context { global, group(string), server(server-name) }
+  /// Context of a query: `current` is the player's current server (global in
+  /// the virtual world and before the first backend).
+  variant query-context { current, global, group(string), server(server-name) }
+  /// The player's context right now: server and its groups in config order.
+  record player-context { server: option<server-name>, groups: list<string> }
+
+  enum route { direct, viaproxy }
+
+  record connection {
+    address: string,
+    port: u16,
+    virtual-host: string,
+    protocol: s32,
+    original-protocol: option<s32>,
+    route: route,
+  }
+
+  record client-settings {
+    locale: string, view-distance: u8, chat-mode: u8, chat-colors: bool,
+    skin-parts: u8, main-hand-right: bool, text-filtering: bool, server-listing: bool,
+  }
+
+  record player-info {
+    id: player-id,
+    profile: profile,
+    online-mode: bool,
+    connection: connection,
+    brand: option<string>,
+    settings: option<client-settings>,
+    server: option<server-name>,
+    context: player-context,
+    in-virtual: bool,
+  }
+
+  variant verdict { allow, deny(text) }
+  record title-times { fade-in: u32, stay: u32, fade-out: u32 }
+  enum bossbar-color { pink, blue, red, green, yellow, purple, white }
+  enum bossbar-overlay { progress, notched6, notched10, notched12, notched20 }
+}
+
+interface players {
+  use types.{player-id, player-info, server-name, text, title-times, property};
+
+  variant connect-error { unknown-server, refused(text), unreachable(string), cancelled, already-connected, rate-limited, busy }
+
+  all: func() -> list<player-info>;
+  get: func(id: player-id) -> option<player-info>;
+  find: func(name: string) -> option<player-info>;
+  send-message: func(id: player-id, msg: text);
+  send-action-bar: func(id: player-id, msg: text);
+  send-title: func(id: player-id, title: text, subtitle: text, times: title-times);
+  clear-title: func(id: player-id);
+  play-sound: func(id: player-id, sound: string, volume: f32, pitch: f32);
+  tab-header-footer: func(id: player-id, header: text, footer: text);
+  kick: func(id: player-id, reason: text);
+  connect: async func(id: player-id, server: server-name) -> result<_, connect-error>;
+  /// Reconnect to the current backend (plan §3.3), e.g. after a skin change.
+  reconnect: async func(id: player-id) -> result<_, connect-error>;
+  /// Profile property change; applies from the next forwarding (plan §4.3).
+  set-property: func(id: player-id, prop: property) -> result<_, string>;
+  remove-property: func(id: player-id, name: string) -> result<_, string>;
+}
+
+interface bossbar {
+  use types.{player-id, text, bossbar-color, bossbar-overlay};
+
+  resource bar {
+    constructor(title: text, progress: f32, color: bossbar-color, overlay: bossbar-overlay);
+    set-title: func(title: text);
+    set-progress: func(progress: f32);
+    show: func(id: player-id);
+    hide: func(id: player-id);
+  }
+}
+
+interface servers {
+  use types.{server-name};
+
+  record server-info {
+    name: server-name, address: string, protocol: option<s32>, online: bool, players: u32,
+    /// Groups from `server-group`, in priority order.
+    groups: list<string>,
+    /// From the last `login` packet of this backend; none until someone joined.
+    enforces-secure-chat: option<bool>,
+  }
+
+  all: func() -> list<server-info>;
+}
+
+interface commands {
+  enum permission-state { always, never, permission }
+
+  record command-spec {
+    name: string,
+    aliases: list<string>,
+    permission: option<string>,
+    state: permission-state,
+    /// Arguments never reach logs.
+    sensitive: bool,
+    /// Only in the virtual world.
+    virtual-only: bool,
+    usage: string,
+    /// Admin command under `/pumbo <short-name> <name>` (and `/pumbo<short-name> <name>`).
+    umbrella: bool,
+  }
+
+  register: func(spec: command-spec) -> result<_, string>;
+}
+
+/// PumboAPI virtual world (plan §5): a world the proxy serves itself, before
+/// any backend sees the player (a gate holding it) or in the middle of a game.
+/// Commands are queued for the player's session and return at once; what the
+/// player does comes back in `on-virtual-input`, one batch per tick.
+interface virtual {
+  use types.{player-id};
+
+  enum game-mode { survival, creative, adventure, spectator }
+  enum hand { main, off }
+  record position { x: f64, y: f64, z: f64, yaw: f32, pitch: f32 }
+  record block-pos { x: s32, y: s32, z: s32 }
+
+  /// The dimension is always the void (no sky, no fog, nothing in the
+  /// background); `time` is the fixed time of day, `light` the sky light
+  /// (15: full), `view-distance` the chunk radius sent.
+  record world-options { time: s64, light: u8, game-mode: game-mode, view-distance: u8 }
+
+  /// A world shared by every player a plugin puts in it.
+  resource %world {
+    constructor(opts: world-options);
+    /// A block state by name, e.g. "minecraft:barrier" or
+    /// "minecraft:oak_slab[type=top]"; the host finds its ID per version.
+    set-block: func(pos: block-pos, block: string) -> result<_, string>;
+    /// A structure file (.nbt from a structure block) from the plugin's
+    /// data directory, its origin at `at`; returns the blocks placed.
+    load-structure: func(path: string, at: block-pos) -> result<u32, string>;
+  }
+
+  /// 128×128 map colour indices (16384 bytes; shorter is padded, longer
+  /// cut), encoded once for every version.
+  resource map-image {
+    constructor(pixels: list<u8>);
+  }
+
+  variant input {
+    /// Position, on-ground; only after the last teleport was confirmed.
+    moved(tuple<player-id, position, bool>),
+    teleport-confirmed(tuple<player-id, u32>),
+    /// The client shows the world (chunks there, first teleport confirmed).
+    loaded(player-id),
+    chat(tuple<player-id, string>),
+    /// A command line without the slash; never logged by the host.
+    command(tuple<player-id, string>),
+    settings(player-id),
+    brand(tuple<player-id, string>),
+    plugin-message(tuple<player-id, string, list<u8>>),
+    keepalive-rtt(tuple<player-id, u32>),
+    left(player-id),
+  }
+
+  /// Into the world: from a gate before the first server, from a server
+  /// (through the configuration phase), or a world change in the same
+  /// connection when the player is in a virtual world already. The inputs go
+  /// to this plugin. `commands` are the command names in the tree there.
+  enter: func(id: player-id, w: borrow<%world>, at: position, commands: list<string>) -> result<_, string>;
+  /// Returns the ID the confirmation will carry; one teleport is pending at
+  /// a time, later ones wait.
+  teleport: func(id: player-id, at: position) -> u32;
+  /// The map goes in the hand once the world is loaded.
+  show-map: func(id: player-id, img: borrow<map-image>, hand: hand);
+  clear-inventory: func(id: player-id);
+  set-xp: func(id: player-id, bar: f32, level: s32);
+  set-time: func(id: player-id, ticks: s64);
+  set-game-mode: func(id: player-id, mode: game-mode);
+  set-flying: func(id: player-id, allow: bool, flying: bool);
+  /// Out of the virtual world: a player held by this plugin's gate goes to
+  /// the next gate (like `gates.release`), any other one to a server, without
+  /// a disconnect screen.
+  release: func(id: player-id) -> result<_, string>;
+}
+
+/// Gates (plan §5.6).
+interface gates {
+  use types.{player-id};
+
+  /// End of this plugin's gate for a held player: the host moves on to the
+  /// next gate or to a backend.
+  release: func(id: player-id) -> result<_, string>;
+}
+
+/// Service registry (plan §5.8.2). Payloads are CBOR; typed clients come from the SDK.
+interface services {
+  use types.{player-id};
+
+  record service-ref { name: string, major: u16, minor: u16 }
+
+  variant service-error {
+    /// The service is not in `uses` of the manifest.
+    not-declared,
+    /// No provider, or the provider switched the service off.
+    unavailable,
+    /// Another major version, or a minor version too low.
+    incompatible,
+    unknown-method,
+    timeout,
+    /// Call chain deeper than `max-depth`.
+    too-deep,
+    /// Provider queue full or too many calls in flight.
+    overloaded,
+    /// Payload over 256 KB.
+    too-large,
+    /// Trap or restart of the provider during the call.
+    provider-failed,
+    /// Error returned by the provider.
+    rejected(string),
+  }
+
+  /// Provider-side failure of a call.
+  variant call-reject { unknown-method, rejected(string) }
+
+  record call-options {
+    timeout-ms: option<u32>,
+    player: option<player-id>,
+    /// Chain context from `on-service-call`; the SDK adds it itself.
+    ctx: option<u64>,
+  }
+
+  call: async func(service: string, method: string, payload: list<u8>, opts: call-options)
+    -> result<list<u8>, service-error>;
+  /// Version of the available provider, or none.
+  lookup: func(service: string) -> option<service-ref>;
+  /// Provider: switch its own service off and on again (e.g. when its database is down).
+  set-available: func(service: string, available: bool) -> result<_, string>;
+}
+
+/// Permissions (plan §5.8.4). A check is always a read of the host table.
+interface permissions {
+  use types.{player-id, uuid, context, query-context};
+  use services.{service-error};
+
+  record permission-entry { node: string, value: bool, context: context }
+  record permission-set { entries: list<permission-entry> }
+
+  /// Resolution: server > group (config order) > global.
+  has: func(id: player-id, node: string, at: query-context) -> bool;
+  /// Offline player: permissions.yml, then the provider's `pumbo:permissions`
+  /// service. `current` means global.
+  has-offline: async func(id: uuid, node: string, at: query-context) -> result<bool, service-error>;
+  /// Plugins with `permissions-write` only: change one node for the session.
+  set: func(id: player-id, node: string, value: option<bool>, ctx: context) -> result<_, string>;
+  /// Permission provider only: replace the whole set of an online player.
+  replace: func(id: player-id, entries: permission-set) -> result<_, string>;
+}
+
+/// Events between plugins (plan §6.6): publishing returns at once, delivery is
+/// async to the subscribers from their manifests.
+interface bus {
+  /// Topic with a version, e.g. "pumbo:player-punished@1.0"; CBOR payload, at most 64 KB.
+  publish: func(topic: string, payload: list<u8>) -> result<_, string>;
+}
+
+/// Machine-readable plugin description and metrics (plan §6.6.5).
+interface admin {
+  use types.{player-id};
+
+  enum param-kind { text, integer, number, boolean, duration, player, uuid, server, ip, choice }
+
+  record action-param {
+    name: string,
+    kind: param-kind,
+    required: bool,
+    /// For `choice`.
+    choices: list<string>,
+    /// Key in lang/*.yml.
+    description-key: string,
+  }
+
+  record admin-action {
+    /// e.g. "ban", "purge"; subcommand `/pumbo <short-name> <name>`.
+    name: string,
+    params: list<action-param>,
+    /// pumbo.<plugin>.<action>
+    permission: string,
+    /// UI and console ask for confirmation.
+    dangerous: bool,
+    /// Arguments never reach logs.
+    sensitive: bool,
+    description-key: string,
+  }
+
+  enum metric-kind { counter, gauge, histogram }
+  record metric-desc { name: string, kind: metric-kind, unit: string, labels: list<string>, description-key: string }
+  record topic-desc { topic: string, payload-schema: string, description-key: string }
+
+  record plugin-description {
+    /// JSON Schema (2020-12 subset) of the plugin config; extensions
+    /// `x-pumbo-secret` (write-only field) and `x-pumbo-reload` (change needs a
+    /// plugin restart).
+    config-schema: string,
+    actions: list<admin-action>,
+    metrics: list<metric-desc>,
+    /// `bus` topics the plugin publishes, with payload schemas.
+    topics: list<topic-desc>,
+  }
+
+  /// Who runs an admin action. `tool`: e.g. a panel, with the admin's name.
+  variant actor { console, player(player-id), tool(string) }
+
+  counter-add: func(name: string, value: u64, labels: list<tuple<string, string>>) -> result<_, string>;
+  gauge-set: func(name: string, value: f64, labels: list<tuple<string, string>>) -> result<_, string>;
+  histogram-record: func(name: string, value: f64, labels: list<tuple<string, string>>) -> result<_, string>;
+}
+
+/// Placeholders (plan §5.8.3).
+interface placeholders {
+  use types.{player-id, text, text-template, context, query-context, player-context};
+
+  record placeholder-request {
+    /// Key inside the plugin's namespace.
+    key: string,
+    arg: option<string>,
+    player: option<player-id>,
+    /// Context the host resolves in: explicit from `@` or the player's current one.
+    context: player-context,
+  }
+
+  variant resolve-error { too-many, too-large, parse(string) }
+
+  /// Push: own namespace keys from the manifest only.
+  set: func(key: string, player: option<player-id>, value: text, ctx: context) -> result<_, string>;
+  clear: func(key: string, player: option<player-id>, ctx: context);
+  /// Drops cached pull values of a key (all contexts).
+  invalidate: func(key: string, player: option<player-id>);
+  /// Public keys of every namespace and private keys of the own one.
+  resolve: async func(t: text-template, player: option<player-id>, at: query-context)
+    -> result<text, resolve-error>;
+}
+
+interface scheduler {
+  after: func(ms: u64) -> u64;
+  every: func(ms: u64) -> u64;
+  cancel: func(timer: u64);
+  /// Non-blocking wait (std::thread::sleep would stop the whole plugin).
+  sleep: async func(ms: u64);
+}
+
+interface messaging {
+  use types.{player-id};
+
+  enum side { client, backend }
+
+  subscribe: func(channel: string);
+  send: func(id: player-id, channel: string, data: list<u8>, to: side) -> bool;
+}
+
+/// Password hashing on the host's blocking thread pool.
+interface crypto {
+  record argon2-params { memory-kib: u32, iterations: u32, parallelism: u32 }
+
+  argon2id-hash: async func(password: string, params: argon2-params) -> result<string, string>;
+  argon2id-verify: async func(password: string, phc: string) -> bool;
+  bcrypt-verify: async func(password: string, hash: string) -> bool;
+}
+
+interface log {
+  enum level { trace, debug, info, warn, error }
+
+  write: func(level: level, message: string);
+}
+
+/// Outgoing HTTP: https only, hosts from the manifest only, host limits.
+interface http {
+  record request { method: string, url: string, headers: list<tuple<string, string>>, body: list<u8> }
+  record response { status: u16, headers: list<tuple<string, string>>, body: list<u8> }
+  variant http-error { not-allowed, timeout, too-large, failed(string) }
+
+  fetch: async func(req: request) -> result<response, http-error>;
+}
+
+interface events {
+  use types.{player-id, player-info, profile, property, connection, server-name, text, verdict, plugin-id, player-context, uuid};
+  use services.{service-ref, call-reject};
+  use placeholders.{placeholder-request};
+  use permissions.{permission-set};
+  use admin.{plugin-description, actor};
+  use virtual.{input};
+
+  record status-event { connection: connection, motd: text, online: u32, max: u32, favicon: bool }
+  variant status-reply { keep, change(status-event), cancel }
+  record pre-login-event { connection: connection, name: string, claimed-uuid: option<uuid> }
+  variant pre-login-reply { allow, deny(text), force-online, force-offline }
+  variant gate-reply { pass, deny(text), hold }
+  record connect-event { player: player-id, target: server-name, reason: string }
+  variant connect-reply { allow, deny(text), redirect(server-name) }
+  record kicked-event { player: player-id, server: server-name, reason: text, during-connect: bool }
+  variant kicked-reply { keep, disconnect(text), redirect(tuple<server-name, text>) }
+  variant chat-reply { pass, cancel, replace(string) }
+  record command-event { player: option<player-id>, name: string, args: list<string> }
+  /// Profile patch in on-profile; later plugins see the result of earlier ones.
+  variant property-change { set(property), remove(string) }
+  record profile-patch { id: option<uuid>, name: option<string>, properties: list<property-change> }
+  record backend-command-event { player: player-id, server: server-name, line: string, signed: bool }
+  variant backend-command-reply { pass, cancel }
+  record service-call {
+    service: string, major: u16, minor: u16, method: string, payload: list<u8>,
+    caller: plugin-id, player: option<player-id>, ctx: u64, deadline-ms: u32,
+  }
+
+  init: async func() -> result<_, string>;
+  /// Machine-readable description, called once after `init` and after a reload.
+  describe: func() -> plugin-description;
+  /// Admin action from the description; the host checks the permission first.
+  on-admin-action: async func(action: string, args: list<tuple<string, string>>, by: actor) -> result<text, text>;
+  shutdown: async func();
+  on-handshake: async func(c: connection) -> verdict;
+  on-status: async func(e: status-event) -> status-reply;
+  on-pre-login: async func(e: pre-login-event) -> pre-login-reply;
+  on-profile: async func(p: player-info) -> profile-patch;
+  on-login: async func(p: player-info) -> verdict;
+  on-gate: async func(p: player-info) -> gate-reply;
+  on-server-connect: async func(e: connect-event) -> connect-reply;
+  on-server-connected: async func(p: player-id, server: server-name, previous: option<server-name>);
+  on-server-kicked: async func(e: kicked-event) -> kicked-reply;
+  on-disconnect: async func(p: player-id);
+  on-chat: async func(p: player-id, message: string) -> chat-reply;
+  on-backend-command: async func(e: backend-command-event) -> backend-command-reply;
+  on-command: async func(e: command-event);
+  /// true: forward the message, false: drop it.
+  on-plugin-message: async func(p: player-id, channel: string, data: list<u8>) -> bool;
+  on-timer: async func(timer: u64);
+  /// After joining a backend, changing servers and entering the virtual world.
+  on-context-changed: async func(p: player-id, now: player-context, previous: option<player-context>);
+  on-service-call: async func(c: service-call) -> result<list<u8>, call-reject>;
+  on-service-changed: async func(service: string, available: option<service-ref>);
+  /// Answers in request order; none = fallback value.
+  on-placeholder: async func(reqs: list<placeholder-request>) -> list<option<text>>;
+  /// Permission provider only; the set holds entries of every context.
+  on-permission-load: async func(p: player-info) -> result<permission-set, string>;
+  /// Event of another plugin from a topic in `subscribes`.
+  on-bus-event: async func(topic: string, major: u16, minor: u16, publisher: plugin-id, payload: list<u8>);
+  /// Inputs of players this plugin put in a virtual world, one batch per tick
+  /// (manifest event `virtual-input`).
+  on-virtual-input: async func(batch: list<input>);
+}
+
+world plugin {
+  import players;
+  import bossbar;
+  import servers;
+  import commands;
+  import virtual;
+  import gates;
+  import permissions;
+  import services;
+  import bus;
+  import admin;
+  import placeholders;
+  import scheduler;
+  import messaging;
+  import crypto;
+  import log;
+  import http;
+  export events;
+}

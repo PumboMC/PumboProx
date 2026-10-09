@@ -1,0 +1,34 @@
+name: fuzz
+
+# Fuzzing (plan E2): the frame decoder, the packet decoders of every phase,
+# NBT and text parsers, one hour each. By hand only: 7 hours of runner time
+# would use up the 2000 minutes a month of a private repository in days.
+on:
+  workflow_dispatch:
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [frame, handshake_status, login, configuration, play, nbt, text]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust nightly and cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo install cargo-fuzz --locked
+      - uses: actions/cache@v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      - name: fuzz for one hour
+        working-directory: fuzz
+        run: cargo +nightly fuzz run ${{ matrix.target }} -O -- -max_total_time=3600 -rss_limit_mb=2048 -timeout=10
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts

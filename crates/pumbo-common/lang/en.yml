@@ -1,0 +1,32 @@
+# Messages shared by all Pumbo plugins (English).
+# Feedback messages get the plugin prefix and the colour of their tone (green
+# success, red error, yellow warning, grey information) from the plugin, so they
+# are written without either. & codes still work: &f...&r highlights a value, &r
+# goes back to the colour of the tone. {0}, {1}, ... are arguments, {nl} starts a
+# new line. An empty value disables a message. Forms separated by | depend on a
+# number: "{0} day|{0} days".
+command-no-permission: You don't have permission to do that.
+command-unknown: Unknown subcommand {0}. Use {1}.
+command-unknown-hover: Click to see the commands
+command-usage: "Usage: {0}"
+command-usage-hover: Click to type the command
+command-players-only: Only players can use this command.
+command-player-not-found: Player {0} was not found.
+command-invalid-duration: "Invalid time {0}. Examples: &f30m&r, &f1d12h&r, &fperm"
+command-reloaded: Configuration reloaded.
+command-reload-failed: "Nothing was reloaded, a file has an error: {0}"
+command-error: Something went wrong, see the server log.
+command-help-empty: There are no commands you can use.
+command-help-hint: Hover a command for details, click to type it.
+command-help-previous: Previous page
+command-help-next: Next page
+command-help-permission: "Permission: {0}"
+command-help-click: Click to type it in chat
+version-description: Version and platform
+version-platform: Platform
+time-permanent: permanent
+time-day: "{0} day|{0} days"
+time-hour: "{0} hour|{0} hours"
+time-minute: "{0} minute|{0} minutes"
+time-second: "{0} second|{0} seconds"
+number-separator: ","

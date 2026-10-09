@@ -1,0 +1,21 @@
+[package]
+name = "spike-wasm-async-guest"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-only"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "=0.62.0"
+wasip3 = "=0.9.0"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+
+# The guest is built separately for wasm32-wasip2, outside the proxy workspace.
+[workspace]

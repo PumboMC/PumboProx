@@ -1,0 +1,21 @@
+[package]
+name = "pumbo-host-test-plugin"
+description = "Plugin for pumbo-host tests: reentrancy, loops, panics, service cycles, slow providers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+futures.workspace = true
+pumbo-sdk.workspace = true
+schemars.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

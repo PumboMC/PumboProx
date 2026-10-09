@@ -1,0 +1,10 @@
+hello:
+  greeting: "<prefix><p>{greeting}, <s>{name}</s>! <muted>(hello #{count})"
+  console: Hello from the console.
+  no-service: <prefix><warn>The counter is unavailable, counting locally.
+
+motd:
+  line: <p>PumboProx example <muted>· <s>{online}</s> online · %example_hellos% hellos
+
+admin:
+  reset: <ok>Counter reset.

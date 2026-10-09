@@ -1,0 +1,32 @@
+# Komunikaty wspólne dla wszystkich wtyczek Pumbo (polski).
+# Komunikaty zwrotne dostają od wtyczki prefiks i kolor swojego tonu (zielony
+# sukces, czerwony błąd, żółte ostrzeżenie, szara informacja), więc pisze się je
+# bez nich. Kody & nadal działają: &f...&r wyróżnia wartość, &r wraca do koloru
+# tonu. {0}, {1}, ... to argumenty, {nl} zaczyna nową linię. Pusta wartość
+# wyłącza komunikat. Formy rozdzielone | zależą od liczby:
+# "{0} dzień|{0} dni|{0} dni" (1, 2-4, 5+).
+command-no-permission: Nie masz do tego uprawnień.
+command-unknown: Nieznana podkomenda {0}. Użyj {1}.
+command-unknown-hover: Kliknij, żeby zobaczyć komendy
+command-usage: "Użycie: {0}"
+command-usage-hover: Kliknij, żeby wpisać komendę
+command-players-only: Tej komendy mogą używać tylko gracze.
+command-player-not-found: Nie znaleziono gracza {0}.
+command-invalid-duration: "Nieprawidłowy czas {0}. Przykłady: &f30m&r, &f1d12h&r, &fperm"
+command-reloaded: Konfiguracja przeładowana.
+command-reload-failed: "Nic nie przeładowano, plik ma błąd: {0}"
+command-error: Coś poszło nie tak, szczegóły w logu serwera.
+command-help-empty: Nie ma komend, których możesz użyć.
+command-help-hint: Najedź na komendę po opis, kliknij, by ją wpisać.
+command-help-previous: Poprzednia strona
+command-help-next: Następna strona
+command-help-permission: "Uprawnienie: {0}"
+command-help-click: Kliknij, żeby wpisać na czacie
+version-description: Wersja i platforma
+version-platform: Platforma
+time-permanent: na zawsze
+time-day: "{0} dzień|{0} dni|{0} dni"
+time-hour: "{0} godzina|{0} godziny|{0} godzin"
+time-minute: "{0} minuta|{0} minuty|{0} minut"
+time-second: "{0} sekunda|{0} sekundy|{0} sekund"
+number-separator: " "

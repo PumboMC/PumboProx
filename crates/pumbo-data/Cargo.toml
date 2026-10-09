@@ -1,0 +1,16 @@
+[package]
+name = "pumbo-data"
+description = "Generated per-protocol tables (packet IDs, static registries, block states) and version modules built from them"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[dependencies]
+pumbo-protocol.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

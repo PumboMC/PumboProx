@@ -1,0 +1,26 @@
+# ══════════════════════════════════════════════════════════════
+#  PumboProx example plugin · plugins/pumbo-example/config.yml
+#  Written by the proxy at the first start; your changes stay.
+#  Apply changes:  /pumbo example reload
+#  Per server or group: servers/<server>.yml, groups/<group>.yml
+# ══════════════════════════════════════════════════════════════
+
+general:
+  language: en               # en | pl  (lang/<code>.yml overrides the texts)
+  debug: false
+
+messages:
+  prefix: "<muted>[Example] " # shown by the <prefix> tag
+
+greeting: Hello              # /hello says "<greeting>, <name>!"
+motd: true                   # online counter in the server list
+
+
+# ── Permission provider ───────────────────────────────────────
+# Used with `permissions.provider: pumbo-example` in pumboprox.yml.
+# player name → context (global, server=<name>, group=<name>) → nodes;
+# a node with "-" in front denies, e.g.
+#   steve:
+#     global: [pumbo.example.hello]
+#     server=lobby: ["-pumbo.example.hello"]
+permissions: {}

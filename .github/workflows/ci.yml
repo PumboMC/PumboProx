@@ -1,0 +1,65 @@
+name: ci
+
+# Linux only. The repository is private: 2000 Actions minutes a month, where a
+# macOS minute counts x10 and a Windows minute x2. The release targets
+# (Windows, macOS, Linux aarch64 and musl) are built by release.yml on a tag,
+# or by hand with its Run workflow button before tagging.
+on:
+  push:
+    branches: ['**'] # not tags: release.yml builds those
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch cancels the run still going.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  # Without debug info in test builds; with it the runner disk fills up.
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust
+        run: |
+          rustup toolchain install stable --profile minimal -c rustfmt,clippy -t wasm32-wasip2
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo-deny
+        run: cargo install cargo-deny --locked --version 0.20.2
+      - name: CI steps
+        run: tools/ci-local.sh
+
+  # Generator tables (plan §2.5): every release from 1.21 on, run on demand.
+  # The committed tables must come out byte for byte the same.
+  datagen:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pumbo-datagen
+          key: pumbo-datagen-${{ hashFiles('crates/pumbo-data/tables/*/meta.txt') }}
+          restore-keys: pumbo-datagen-
+      - run: cargo run -p pumbo-datagen --release --locked -- tables
+      - run: git diff --exit-code crates/pumbo-data/tables
+      - run: cargo test -p pumbo-datagen -p pumbo-data --locked -- --nocapture
+      # Recordings of vanilla servers (plan §2.5, E2): synced.txt must not change
+      # and the codec must round-trip every recorded packet.
+      - run: cargo run -p pumbo-datagen --release --locked -- record
+      - run: git diff --exit-code crates/pumbo-data/tables
+      - run: cargo test -p pumbo-testclient --locked --test golden -- --nocapture
+        env:
+          PUMBO_REQUIRE_RECORDINGS: '1'
+

@@ -1,0 +1,85 @@
+[package]
+name = "pumbo-fuzz"
+description = "Fuzz targets for the frame decoder, packet decoders of every phase, NBT and text"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-only"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+bytes = "1.12"
+libfuzzer-sys = "0.4"
+pumbo-data = { path = "../crates/pumbo-data" }
+pumbo-nbt = { path = "../crates/pumbo-nbt" }
+pumbo-protocol = { path = "../crates/pumbo-protocol" }
+pumbo-testclient = { path = "../crates/pumbo-testclient" }
+pumbo-text = { path = "../crates/pumbo-text" }
+
+# Not part of the main workspace (needs nightly and libFuzzer).
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "frame"
+path = "fuzz_targets/frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "handshake_status"
+path = "fuzz_targets/handshake_status.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "login"
+path = "fuzz_targets/login.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "configuration"
+path = "fuzz_targets/configuration.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "play"
+path = "fuzz_targets/play.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nbt"
+path = "fuzz_targets/nbt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "text"
+path = "fuzz_targets/text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "seed"
+path = "src/seed.rs"
+test = false
+doc = false
+bench = false

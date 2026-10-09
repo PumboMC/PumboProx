@@ -1,0 +1,24 @@
+[package]
+name = "pumbo-bridge-proto"
+description = "PumboBridge contract: messages, frames, handshake and the pumbo:bridge@1.0 service types"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT OR Apache-2.0"
+authors.workspace = true
+publish.workspace = true
+
+[features]
+# Typed client of the pumbo:bridge@1.0 service for PumboProx plugins.
+sdk = ["dep:pumbo-sdk"]
+
+[dependencies]
+ciborium.workspace = true
+hmac = "0.12"
+pumbo-sdk = { workspace = true, optional = true }
+serde.workspace = true
+sha2 = "0.10"
+uuid = { workspace = true, features = ["serde"] }
+
+[lints]
+workspace = true

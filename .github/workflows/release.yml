@@ -1,0 +1,144 @@
+name: release
+
+# A tag v* builds pumboprox for every platform, publishes a GitHub Release with
+# the archives and SHA256SUMS (a tag with "-" is a pre-release) and pushes the
+# Docker image. Run by hand (Run workflow) it only builds, to check the
+# platforms before tagging.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # glibc 2.28 and newer (Debian 10, Ubuntu 20.04, RHEL 8), cross-built with zig.
+          - { name: linux-x86_64, os: ubuntu-24.04, target: x86_64-unknown-linux-gnu, glibc: .2.28, run: true }
+          - { name: linux-aarch64, os: ubuntu-24.04, target: aarch64-unknown-linux-gnu, glibc: .2.28 }
+          # Static, for any distribution; the Docker image is made from these.
+          - { name: linux-x86_64-musl, os: ubuntu-24.04, target: x86_64-unknown-linux-musl, run: true }
+          - { name: linux-aarch64-musl, os: ubuntu-24.04, target: aarch64-unknown-linux-musl }
+          - { name: windows-x86_64, os: windows-latest, target: x86_64-pc-windows-msvc, run: true }
+          # Cross-built on x64; aws-lc-sys compiles with clang-cl from the runner's Visual Studio.
+          - { name: windows-aarch64, os: windows-latest, target: aarch64-pc-windows-msvc }
+          - { name: macos-universal, os: macos-14, target: aarch64-apple-darwin x86_64-apple-darwin, run: true }
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Windows x86_64: aws-lc-sys uses its bundled NASM objects, no NASM install.
+      AWS_LC_SYS_PREBUILT_NASM: 1
+    steps:
+      - uses: actions/checkout@v7
+      - name: Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+      - if: runner.os == 'Linux'
+        uses: mlugg/setup-zig@v2
+        with:
+          use-cache: false
+      - if: runner.os == 'Linux'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+      - name: Build and pack
+        run: |
+          dir=pumboprox-${{ matrix.name }}
+          mkdir "$dir"
+          case $RUNNER_OS in
+            Linux)
+              cargo zigbuild --release --locked -p pumbo-prox --target ${{ matrix.target }}${{ matrix.glibc }}
+              cp target/${{ matrix.target }}/release/pumboprox "$dir" ;;
+            Windows)
+              cargo build --release --locked -p pumbo-prox --target ${{ matrix.target }}
+              cp target/${{ matrix.target }}/release/pumboprox.exe "$dir" ;;
+            macOS)
+              cargo build --release --locked -p pumbo-prox --target aarch64-apple-darwin --target x86_64-apple-darwin
+              lipo -create -output "$dir/pumboprox" target/{aarch64,x86_64}-apple-darwin/release/pumboprox ;;
+          esac
+          if [ "${{ matrix.run }}" = true ]; then "$dir/pumboprox" version; fi
+          cp LICENSE "$dir"
+          # README.md lives in PumboMC/PumboProx, not in the development monorepo.
+          if [ -f README.md ]; then cp README.md "$dir"; fi
+          if [ "$RUNNER_OS" = Windows ]; then 7z a "$dir.zip" "$dir"; else tar czf "$dir.tar.gz" "$dir"; fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.name }}
+          path: pumboprox-${{ matrix.name }}.*
+          if-no-files-found: error
+          retention-days: 3
+
+  release:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          merge-multiple: true
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha256sum pumboprox-* > SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes \
+            ${{ contains(github.ref_name, '-') && '--prerelease' || '' }} pumboprox-* SHA256SUMS
+
+  docker:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: '*-musl'
+          merge-multiple: true
+      - name: Binaries and tags
+        id: meta
+        run: |
+          mkdir image
+          for a in x86_64:amd64 aarch64:arm64; do
+            tar xzf "pumboprox-linux-${a%:*}-musl.tar.gz"
+            mv "pumboprox-linux-${a%:*}-musl/pumboprox" "image/pumboprox-${a#*:}"
+          done
+          name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/pumboprox
+          tags=$name:${GITHUB_REF_NAME#v}
+          if [[ $GITHUB_REF_NAME != *-* ]]; then tags+=,$name:latest; fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/build-push-action@v7
+        with:
+          context: image
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}

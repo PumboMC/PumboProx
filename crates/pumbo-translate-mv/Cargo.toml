@@ -1,0 +1,18 @@
+[package]
+name = "pumbo-translate-mv"
+description = "Java Edition version translation for 1.21-26.2 clients on a 26.3 server, ported from pumpkin-java-multiversion and ViaBackwards"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+pumbo-nbt.workspace = true
+pumbo-text.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

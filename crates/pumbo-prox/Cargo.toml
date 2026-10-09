@@ -1,0 +1,51 @@
+[package]
+name = "pumbo-prox"
+description = "PumboProx: Minecraft Java proxy with WebAssembly plugins"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "pumboprox"
+path = "src/main.rs"
+
+[dependencies]
+aws-lc-rs.workspace = true
+base64.workspace = true
+bytes.workspace = true
+ciborium.workspace = true
+futures.workspace = true
+pumbo-bridge-proto.workspace = true
+pumbo-contracts.workspace = true
+pumbo-core.workspace = true
+pumbo-data.workspace = true
+pumbo-forwarding.workspace = true
+pumbo-host.workspace = true
+pumbo-identity.workspace = true
+pumbo-nbt.workspace = true
+pumbo-listener-java.workspace = true
+pumbo-protocol.workspace = true
+pumbo-routing.workspace = true
+pumbo-store.workspace = true
+pumbo-text.workspace = true
+pumbo-translate.workspace = true
+pumbo-translate-mv.workspace = true
+pumbo-virtual.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["signal", "io-std"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+pumbo-datagen = { path = "../pumbo-datagen" }
+pumbo-identity = { workspace = true, features = ["test-endpoints"] }
+pumbo-testclient.workspace = true
+
+[lints]
+workspace = true

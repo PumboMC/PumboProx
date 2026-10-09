@@ -1,0 +1,16 @@
+[package]
+name = "pumbo-routing"
+description = "Backend selection module: try list with fallback"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+pumbo-core.workspace = true
+pumbo-protocol.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
