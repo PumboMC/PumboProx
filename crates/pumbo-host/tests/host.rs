@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use common::*;
+use pumbo_host::manifest::EventKind;
 use pumbo_host::wit::events::{ChatReply, ConnectEvent, PreLoginEvent};
 use pumbo_host::{CommandOutcome, CommandSender, ConnectDecision, GateOutcome, PreLogin, Status};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -39,7 +40,12 @@ const LONG: Duration = Duration::from_secs(120);
 async fn reentrancy_under_load() {
     let env = Env::new("reentrancy");
     env.plugin("loop", "test", r#"events: [server-connect, chat]"#);
-    let (host, bridge) = start(env.host_config("")).await;
+    let mut cfg = env.host_config("");
+    // A loaded CI machine can miss the default deadlines (chat 200 ms, connect 2 s); a
+    // missed deadline lets the event through, which is not what this test is about.
+    cfg.plugins.timeouts.insert(EventKind::ServerConnect, 8_000);
+    cfg.plugins.timeouts.insert(EventKind::Chat, 8_000);
+    let (host, bridge) = start(cfg).await;
     assert_eq!(host.plugin("loop").unwrap().status(), Status::Running);
     let players = env_num("PUMBO_LOAD_PLAYERS", 100);
     let secs = env_num("PUMBO_LOAD_SECS", 5);
