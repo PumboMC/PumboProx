@@ -28,6 +28,7 @@ pumbo-nbt.workspace = true
 pumbo-listener-java.workspace = true
 pumbo-protocol.workspace = true
 pumbo-routing.workspace = true
+pumbo-servers.workspace = true
 pumbo-store.workspace = true
 pumbo-text.workspace = true
 pumbo-translate.workspace = true

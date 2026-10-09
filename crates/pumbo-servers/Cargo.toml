@@ -1,0 +1,24 @@
+[package]
+name = "pumbo-servers"
+description = "Servers run by the proxy: server software downloads, server folders, processes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+aws-lc-rs.workspace = true
+futures.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde-saphyr.workspace = true
+tokio = { workspace = true, features = ["process", "fs", "rt"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["process", "fs", "rt", "rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

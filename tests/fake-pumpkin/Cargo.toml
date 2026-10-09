@@ -1,0 +1,11 @@
+[package]
+name = "fake-pumpkin"
+description = "A stand-in for Pumpkin in the tests of servers run by the proxy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

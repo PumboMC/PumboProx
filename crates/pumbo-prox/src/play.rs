@@ -492,6 +492,7 @@ impl Play<'_> {
         let idle = Duration::from_millis(self.rt.config.limits.idle_timeout_ms);
         let mut shutdown = self.proxy.shutdown_signal();
         loop {
+            self.follow_runtime();
             if let Err(end) = self.progress() {
                 return end;
             }
@@ -553,6 +554,17 @@ impl Play<'_> {
                     }
                 }
             }
+        }
+    }
+
+    /// A reload or a change of the servers run by the proxy replaced the
+    /// runtime: the server list, commands and settings follow it at once (the
+    /// idle limit at the next session), the client gets the command tree again.
+    fn follow_runtime(&mut self) {
+        let now = self.proxy.runtime();
+        if !Arc::ptr_eq(&now, &self.rt) {
+            self.rt = now;
+            self.resend_commands();
         }
     }
 
@@ -1001,6 +1013,7 @@ impl Play<'_> {
     }
 
     fn on_next(&mut self, ev: NextEvent) -> Option<End> {
+        self.follow_runtime();
         match ev {
             NextEvent::Login(Ok(mut conn)) => {
                 Metrics::inc(&self.proxy.metrics.backend_connects);
@@ -1171,6 +1184,7 @@ impl Play<'_> {
     }
 
     fn command(&mut self, cmd: SessionCmd) -> Option<End> {
+        self.follow_runtime();
         if !self.in_play()
             && matches!(
                 cmd,
@@ -1859,6 +1873,7 @@ impl Play<'_> {
     // ------------------------------------------------------------ client
 
     async fn client_frames(&mut self) -> Option<End> {
+        self.follow_runtime();
         loop {
             let (f, body) = match self.client.next_frame() {
                 Ok(Some(x)) => x,
@@ -2232,6 +2247,7 @@ impl Play<'_> {
     // ------------------------------------------------------------ backend
 
     fn backend_frames(&mut self) -> Option<End> {
+        self.follow_runtime();
         loop {
             let b = self.backend.as_mut()?;
             let (f, body) = match b.conn.next_frame() {
@@ -2648,7 +2664,7 @@ impl Play<'_> {
                 flags: NODE_ARGUMENT | FLAG_EXECUTABLE | FLAG_SUGGESTIONS,
                 children: Vec::new(),
                 redirect: None,
-                name: Some("args".into()),
+                name: Some(commands::arg_name(&name).into()),
                 parser: Some(Parser {
                     id: string,
                     properties: ParserProperties::String(2),

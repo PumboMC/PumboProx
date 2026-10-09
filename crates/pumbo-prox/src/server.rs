@@ -24,7 +24,8 @@ use crate::metrics::Metrics;
 use crate::modules::{self, Modules};
 use crate::net::Cidr;
 
-/// Everything that a reload replaces. Sessions keep the snapshot they started with.
+/// Everything that a reload replaces. Sessions in play follow the newest one
+/// (`Play::follow_runtime`); a login finishes with the one it started with.
 #[derive(Debug)]
 pub struct Runtime {
     pub config: Config,
@@ -42,6 +43,8 @@ pub struct Runtime {
     pub operators: HashSet<Uuid>,
     /// `commands.sensitive` in lower case.
     pub sensitive: HashSet<String>,
+    /// Servers of `managed-servers` added to `config.servers`.
+    pub managed: Vec<String>,
 }
 
 impl Runtime {
@@ -103,6 +106,7 @@ impl Runtime {
             modules,
             backends,
             version_name,
+            managed: Vec::new(),
         })
     }
 }
@@ -216,6 +220,8 @@ pub struct Proxy {
     pub plugins: OnceLock<Arc<crate::plugins::Plugins>>,
     /// PumboBridge sessions, when `[bridge] enabled`.
     pub bridge: OnceLock<Arc<crate::bridge::Bridge>>,
+    /// Servers run by the proxy, when `managed-servers.enabled`.
+    pub servers: OnceLock<Arc<pumbo_servers::Manager>>,
 }
 
 impl std::fmt::Debug for Proxy {
@@ -286,6 +292,7 @@ impl Proxy {
             config_path,
             plugins: OnceLock::new(),
             bridge: OnceLock::new(),
+            servers: OnceLock::new(),
         }))
     }
 
@@ -296,8 +303,8 @@ impl Proxy {
             .clone()
     }
 
-    /// Re-reads the config file. Players keep their sessions; new connections
-    /// use the new config. Listeners and logging need a restart.
+    /// Re-reads the config file. Players keep their sessions and see the new
+    /// server list and commands at once. Listeners and logging need a restart.
     pub fn reload(&self) -> Result<(), String> {
         let path = self
             .config_path
@@ -315,7 +322,48 @@ impl Proxy {
         if binds(&config) != binds(&old.config) {
             warn!("listener changes take effect after a restart");
         }
-        let runtime = Runtime::build(config, &self.releases)?;
+        self.replace(config)?;
+        if let Some(p) = self.plugins.get()
+            && let Ok(host) = pumbo_host::HostConfig::parse(&text)
+        {
+            p.host.set_required_gates(host.plugins.required_gates);
+        }
+        Ok(())
+    }
+
+    /// The config file the proxy runs with (`/prox reload`, `/prox route`).
+    pub fn config_path(&self) -> Option<&std::path::Path> {
+        self.config_path.as_deref()
+    }
+
+    /// The server list again after a server of `managed-servers` was
+    /// created or deleted; the rest of the config stays.
+    pub fn refresh(&self) -> Result<(), String> {
+        let old = self.runtime();
+        let mut config = old.config.clone();
+        for name in &old.managed {
+            config.servers.remove(name);
+        }
+        self.replace(config)
+    }
+
+    /// A new runtime from `config` plus the servers of `managed-servers`
+    /// (a server in the config file wins over one of the same name).
+    fn replace(&self, mut config: Config) -> Result<(), String> {
+        let mut managed = Vec::new();
+        if let Some(m) = self.servers.get() {
+            for (name, s) in crate::servers::backends(self, m) {
+                if !config.servers.contains_key(&name) {
+                    config.servers.insert(name.clone(), s);
+                    managed.push(name);
+                }
+            }
+        }
+        if config.managed_servers.enabled {
+            config.check_server_names().map_err(|e| e.to_string())?;
+        }
+        let mut runtime = Runtime::build(config, &self.releases)?;
+        runtime.managed = managed;
         *self
             .runtime
             .write()

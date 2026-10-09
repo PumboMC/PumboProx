@@ -15,6 +15,7 @@ members = [
     "crates/pumbo-protocol",
     "crates/pumbo-prox",
     "crates/pumbo-routing",
+    "crates/pumbo-servers",
     "crates/pumbo-sdk",
     "crates/pumbo-store",
     "crates/pumbo-testclient",
@@ -23,6 +24,7 @@ members = [
     "crates/pumbo-translate-mv",
     "crates/pumbo-virtual",
     "plugins/example",
+    "tests/fake-pumpkin",
     "tests/plugins/bridge-test",
     "tests/plugins/host-test",
     "tests/spikes/rsa",
@@ -30,7 +32,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.1-beta"
+version = "0.2.0-beta"
 edition = "2024"
 rust-version = "1.96"
 license = "GPL-3.0-only"
@@ -87,6 +89,7 @@ pumbo-nbt = { path = "crates/pumbo-nbt" }
 pumbo-listener-java = { path = "crates/pumbo-listener-java" }
 pumbo-protocol = { path = "crates/pumbo-protocol" }
 pumbo-routing = { path = "crates/pumbo-routing" }
+pumbo-servers = { path = "crates/pumbo-servers" }
 pumbo-sdk = { path = "crates/pumbo-sdk" }
 pumbo-store = { path = "crates/pumbo-store" }
 pumbo-testclient = { path = "crates/pumbo-testclient" }

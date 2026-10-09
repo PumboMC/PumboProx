@@ -214,9 +214,9 @@ async fn panic_denies_gate_and_restarts() {
     assert_eq!(host.run_gates(2).await, GateOutcome::Pass);
 }
 
-/// `/pumbo proxy plugin unload|load|reload <id>`: unloading the gate that
-/// holds a player denies it (never a pass) and closes logins until `load`;
-/// players need `pumbo.proxy.plugin`.
+/// `/prox plugins unload|load|reload <id>`: unloading the gate that holds a
+/// player denies it (never a pass) and closes logins until `load`; players
+/// need `pumbo.proxy.plugins.manage`.
 #[tokio::test(flavor = "multi_thread")]
 async fn plugin_command_unloads_and_loads() {
     let env = Env::new("plugin-cmd");
@@ -224,33 +224,28 @@ async fn plugin_command_unloads_and_loads() {
     let mut cfg = env.host_config("");
     cfg.plugins.required_gates = vec!["auth".into()];
     let (host, _) = start(cfg).await;
-    let console = |line: &str| host.dispatch_command(CommandSender::Console, line);
+    let words = |l: &str| l.split(' ').map(str::to_string).collect::<Vec<_>>();
+    let admin = |line: &str| host.proxy_admin(CommandSender::Console, &words(line));
     host.player_joined(player(1, "never_a", None));
     let h = host.clone();
     let gate = tokio::spawn(async move { h.run_gates(1).await });
     tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(
-        console("/pumbo proxy plugin unload auth"),
-        CommandOutcome::Handled
-    );
+    assert_eq!(admin("plugin unload auth"), CommandOutcome::Handled);
     let r = tokio::time::timeout(LONG, gate).await.unwrap().unwrap();
     assert!(matches!(r, GateOutcome::Deny(_)), "{r:?}");
     wait_status(&host, "auth", LONG, |s| matches!(s, Status::Disabled(_))).await;
     assert!(host.login_open().is_err());
     // A later unload changes nothing, a player without the node is refused.
-    console("/pumbo proxy plugin unload auth");
+    admin("plugin unload auth");
     assert!(matches!(
-        host.dispatch_command(CommandSender::Player(1), "/pumbo proxy plugin load auth"),
+        host.proxy_admin(CommandSender::Player(1), &words("plugin load auth")),
         CommandOutcome::Refused(_)
     ));
     assert!(matches!(
-        console("/pumbo proxy plugin load nope"),
+        admin("plugin load nope"),
         CommandOutcome::Reply(_)
     ));
-    assert_eq!(
-        console("/pumbo proxy plugin load auth"),
-        CommandOutcome::Handled
-    );
+    assert_eq!(admin("plugin load auth"), CommandOutcome::Handled);
     wait_status(&host, "auth", LONG, |s| *s == Status::Running).await;
     assert!(host.login_open().is_ok());
     host.player_joined(player(2, "b", None));

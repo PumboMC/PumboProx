@@ -1,8 +1,8 @@
 //! `pumboprox`: `run [config]` (default), `check-config [config]`, `version`,
 //! `describe <plugin> [--json] [config]`.
 //! Console commands while running: `reload`, `stop`, `version`, the
-//! built-in proxy commands `glist`, `find`, `send`, `alert`, `pumbo …` and
-//! `plugin reload|unload|load <id>` (short for `pumbo proxy plugin …`).
+//! built-in proxy commands `glist`, `find`, `send`, `alert`, `pumbo` (the
+//! plugin list), plugin commands and `prox …` (the same as in the game).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -241,6 +241,11 @@ fn run(path: &str) -> ExitCode {
             error!("cannot start: {e}");
             return ExitCode::FAILURE;
         }
+        // Servers from the proxy (after the bridge: new servers get its key).
+        if let Err(e) = pumbo_prox::servers::start(&proxy) {
+            error!("cannot start: {e}");
+            return ExitCode::FAILURE;
+        }
         let listeners = match proxy.bind().await {
             Ok(l) => l,
             Err(e) => {
@@ -252,7 +257,12 @@ fn run(path: &str) -> ExitCode {
         tokio::spawn(console(proxy.clone()));
         tokio::spawn(signals(proxy.clone()));
         let plugins = proxy.plugins.get().cloned();
+        let servers = proxy.servers.get().cloned();
         proxy.serve(listeners).await;
+        if let Some(m) = servers {
+            info!("stopping the servers run by the proxy");
+            m.shutdown().await;
+        }
         if let Some(p) = plugins {
             let _ = tokio::time::timeout(Duration::from_secs(4), p.host.shutdown()).await;
         }
@@ -271,18 +281,10 @@ fn run(path: &str) -> ExitCode {
 async fn console(proxy: std::sync::Arc<Proxy>) {
     let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
     while let Ok(Some(line)) = lines.next_line().await {
-        let line = match line.trim() {
-            l if l.starts_with("plugin ") => format!("pumbo proxy {l}"),
-            // `prox <sub>` as the console command it stands for; the help stays.
-            l if l.starts_with("prox ") => {
-                pumbo_prox::commands::prox_target(l).unwrap_or_else(|| l.to_string())
-            }
-            l if l == "bridge" || l.starts_with("bridge ") => format!("pumbo {l}"),
-            l => l.to_string(),
-        };
-        // `/pumbo bridge` works without the plugin host too.
+        let line = line.trim().to_string();
+        // `prox bridge` is printed, not logged: the key must not land in log files.
         if let Some(rest) = line
-            .strip_prefix("pumbo bridge")
+            .strip_prefix("prox bridge")
             .filter(|r| r.is_empty() || r.starts_with(' '))
         {
             let args: Vec<String> = rest.split_whitespace().map(str::to_string).collect();
@@ -347,7 +349,7 @@ async fn console(proxy: std::sync::Arc<Proxy>) {
                             }
                         }
                         None => warn!(
-                            "unknown command \"{other}\" (prox, reload, stop, version, glist, find, send, alert, pumbo, plugin, bridge, gate)"
+                            "unknown command \"{other}\" (prox, reload, stop, version, glist, find, send, alert, pumbo, gate)"
                         ),
                     },
                 }

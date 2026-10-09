@@ -72,7 +72,7 @@ use pumbo_text::{Component, StyleSheet};
 use tokio::sync::{Semaphore, oneshot};
 
 pub use actor::{CallError, PluginSlot, Status};
-pub use admin::{HELP_PER_PAGE, HelpEntry, help_page};
+pub use admin::{HELP_PER_PAGE, HelpEntry, HelpHeader, help_page};
 pub use bridge::{BossbarCommand, NoProxy, PlayerCommand, ProxyBridge};
 pub use commands::{CommandOutcome, CommandSender, VisibleCommand};
 pub use config::HostConfig;
@@ -119,6 +119,8 @@ pub(crate) struct HostInner {
     /// Itself, for tasks and guards started from `&self`.
     pub me: OnceLock<Weak<HostInner>>,
     login_closed_logged: Mutex<Option<Instant>>,
+    /// `plugins.required-gates`, changeable while running (`/prox route gates`).
+    required_gates: RwLock<Vec<String>>,
     /// Plugin files that did not load (shown by `/pumbo`).
     pub failed: Vec<LoadFailure>,
     /// The permission provider plugin (`permissions.provider`, resolved at start).
@@ -215,6 +217,7 @@ impl Host {
             metrics: admin::Metrics::default(),
             me: OnceLock::new(),
             login_closed_logged: Mutex::new(None),
+            required_gates: RwLock::new(cfg.plugins.required_gates.clone()),
             failed,
             perm_provider,
             provider_down_logged: Mutex::new(None),
@@ -293,7 +296,7 @@ impl Host {
         let inner = &self.inner;
         let cfg = &inner.cfg.plugins;
         let mut missing = Vec::new();
-        for gate in &cfg.required_gates {
+        for gate in &self.required_gates() {
             let up = inner.plugins.values().any(|s| {
                 s.manifest.gate.as_ref().is_some_and(|g| &g.name == gate) && s.status().is_coming()
             });
@@ -320,6 +323,29 @@ impl Host {
             tracing::error!("logins closed, missing: {}", missing.join(", "));
         }
         Err(inner.message(&inner.cfg.plugins.messages.login_unavailable))
+    }
+
+    /// The proxy's admin commands from `/prox`: `plugin reload|load|unload
+    /// <id>`, `perms list|check …`, `services`.
+    pub fn proxy_admin(&self, sender: CommandSender, args: &[String]) -> CommandOutcome {
+        admin::proxy_admin(&self.inner, sender, args)
+    }
+
+    /// `plugins.required-gates` as it is now.
+    pub fn required_gates(&self) -> Vec<String> {
+        self.inner
+            .required_gates
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_default()
+    }
+
+    /// New `plugins.required-gates` (a config reload): logins close at once
+    /// while one of them is missing.
+    pub fn set_required_gates(&self, gates: Vec<String>) {
+        if let Ok(mut g) = self.inner.required_gates.write() {
+            *g = gates;
+        }
     }
 
     // --- state pushed by the proxy core ---

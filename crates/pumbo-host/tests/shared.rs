@@ -720,7 +720,7 @@ async fn descriptions_and_umbrella() {
     assert_eq!(view["level"], 2);
 
     let kick =
-        |p: u64| host.dispatch_command(CommandSender::Player(p), "/pumbo test kick Steve bye now");
+        |p: u64| host.dispatch_command(CommandSender::Player(p), "/pumbotest kick Steve bye now");
     assert!(matches!(kick(2), CommandOutcome::Refused(_)));
     assert_eq!(kick(1), CommandOutcome::Handled);
     wait_for("action", LONG, || {
@@ -734,7 +734,7 @@ async fn descriptions_and_umbrella() {
 
     // A broken config is refused with the field; the plugin keeps the old one.
     env.config_file("adm", "config.yml", "level: high\n");
-    let r = host.dispatch_command(CommandSender::Player(1), "/pumbo test reload");
+    let r = host.dispatch_command(CommandSender::Player(1), "/pumbotest reload");
     let CommandOutcome::Refused(t) = r else {
         panic!("{r:?}")
     };
@@ -763,7 +763,7 @@ async fn descriptions_and_umbrella() {
     .await;
     env.config_file("adm", "servers/survival.yml", "level: 3\n");
     assert_eq!(
-        host.dispatch_command(CommandSender::Player(1), "/pumbo test reload"),
+        host.dispatch_command(CommandSender::Player(1), "/pumbotest reload"),
         CommandOutcome::Handled
     );
     wait_for("reloaded", LONG, || {
@@ -818,19 +818,33 @@ async fn descriptions_and_umbrella() {
     let v = replies(host.dispatch_command(CommandSender::Console, "/tt version"));
     assert_eq!(v, ["adm 0.1.0 Running"]);
     let help = replies(host.dispatch_command(CommandSender::Console, "/tt"));
-    assert_eq!(help[0], "adm 0.1.0   /pumbo test", "{help:?}");
+    assert_eq!(help[0], "adm 0.1.0   /pumbotest", "{help:?}");
     assert!(help.contains(&"kick".to_string()), "{help:?}");
-    let perms = replies(host.dispatch_command(CommandSender::Console, "/pumbo proxy perms list"));
-    assert!(perms.iter().any(|l| l.starts_with("pumbo.test.kick")));
-    let check = replies(host.dispatch_command(
+    let perms = replies(host.proxy_admin(
         CommandSender::Console,
-        "/pumbo proxy perms check boss pumbo.test.kick",
+        &["perms".to_string(), "list".to_string()],
+    ));
+    assert!(perms.iter().any(|l| l.starts_with("pumbo.test.kick")));
+    let check = replies(host.proxy_admin(
+        CommandSender::Console,
+        &[
+            "perms".to_string(),
+            "check".to_string(),
+            "boss".to_string(),
+            "pumbo.test.kick".to_string(),
+        ],
     ));
     assert!(check[0].starts_with("pumbo.test.kick = true"), "{check:?}");
     // A server node without an entry is not denied by the proxy: the server decides.
-    let check = replies(host.dispatch_command(
+    let check = replies(host.proxy_admin(
         CommandSender::Console,
-        "/pumbo proxy perms check boss minecraft:command.gamemode survival",
+        &[
+            "perms".to_string(),
+            "check".to_string(),
+            "boss".to_string(),
+            "minecraft:command.gamemode".to_string(),
+            "survival".to_string(),
+        ],
     ));
     assert!(
         check[0].contains("not set") && check[0].contains("the server decides"),

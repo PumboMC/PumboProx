@@ -469,6 +469,19 @@ impl Plugins {
         outcome(self.host.dispatch_command(CommandSender::Player(id), line))
     }
 
+    /// `/prox plugins …` and `/prox debug …` (the host's proxy admin
+    /// commands); `None`: the console.
+    pub fn admin(&self, uuid: Option<Uuid>, args: &[String]) -> Vec<Component> {
+        let sender = match uuid {
+            Some(u) => match self.id(u) {
+                Some(id) => CommandSender::Player(id),
+                None => return Vec::new(),
+            },
+            None => CommandSender::Console,
+        };
+        outcome(self.host.proxy_admin(sender, args)).unwrap_or_default()
+    }
+
     /// A console line (`/pumbo …` and plugin commands).
     pub fn console(&self, line: &str) -> Option<Vec<Component>> {
         outcome(self.host.dispatch_command(CommandSender::Console, line))

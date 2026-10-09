@@ -333,7 +333,9 @@ async fn unloading_the_holding_gate_kicks() {
     .unwrap();
     let wait = Duration::from_secs(15);
     assert!(p.pump(wait, |p| !p.titles.is_empty()).await.unwrap());
-    assert!(plugins.console("pumbo proxy plugin unload auth").is_some());
+    assert!(
+        Some(plugins.admin(None, &["plugin".into(), "unload".into(), "auth".into()])).is_some()
+    );
     p.pump(wait, |p| p.disconnect.is_some()).await.unwrap();
     let kick = p.disconnect.clone().unwrap_or_default();
     assert!(kick.contains("Could not verify the connection"), "{kick}");
@@ -341,7 +343,7 @@ async fn unloading_the_holding_gate_kicks() {
     let refused = login(addr, "steve").await.unwrap_or_default();
     assert!(refused.contains("temporarily unavailable"), "{refused}");
 
-    assert!(plugins.console("pumbo proxy plugin load auth").is_some());
+    assert!(Some(plugins.admin(None, &["plugin".into(), "load".into(), "auth".into()])).is_some());
     let slot = plugins.host.plugin("auth").unwrap();
     for _ in 0..300 {
         if slot.status() == pumbo_host::Status::Running {

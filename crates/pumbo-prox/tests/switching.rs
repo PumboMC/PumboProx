@@ -754,10 +754,12 @@ async fn command_tree_permissions_suggestions_and_collisions() {
     let server = t
         .nodes
         .iter()
-        .find(|n| n.name.as_deref() == Some("server"))
+        .find(|n| n.name.as_deref() == Some("server") && !n.children.is_empty())
         .unwrap();
     let arg = &t.nodes[server.children[0] as usize];
     assert_eq!(arg.suggestions.as_deref(), Some("minecraft:ask_server"));
+    // The client shows `/server <server>`.
+    assert_eq!(arg.name.as_deref(), Some("server"));
     // Tab completion for proxy commands comes from the proxy.
     admin
         .c
@@ -813,13 +815,33 @@ async fn command_tree_permissions_suggestions_and_collisions() {
     // /prox: the help (only what the sender may use) and the version.
     admin.command("prox").await.unwrap();
     assert!(message(&mut admin, "PumboProx 0.").await);
-    assert!(message(&mut admin, "glist   Lists players").await);
-    assert!(message(&mut admin, "reload   Reloads").await);
+    // Descriptions are aligned in pixels: compare words.
+    let words = |m: &String| m.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(message(&mut admin, "Players on each server").await);
+    assert!(
+        admin
+            .messages
+            .iter()
+            .any(|m| words(m).contains("/glist Players on each server"))
+    );
+    assert!(message(&mut admin, "Reloads").await);
+    assert!(
+        admin
+            .messages
+            .iter()
+            .any(|m| words(m).contains("reload Reloads"))
+    );
     // Without the plugin host its commands are not listed.
     assert!(!admin.messages.iter().any(|m| m.contains("plugins")));
     guest.command("prox help").await.unwrap();
     assert!(message(&mut guest, "· Proxy   /prox").await);
-    assert!(message(&mut guest, "version   Proxy version").await);
+    assert!(message(&mut guest, "Proxy version").await);
+    assert!(
+        guest
+            .messages
+            .iter()
+            .any(|m| words(m).contains("version Proxy version"))
+    );
     assert!(!guest.messages.iter().any(|m| m.contains("/glist")));
     admin.command("prox version").await.unwrap();
     assert!(

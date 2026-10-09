@@ -64,6 +64,9 @@ pub struct Config {
     /// `bridge`: PumboBridge sessions of the Pumpkin servers.
     #[serde(default)]
     pub bridge: crate::bridge::BridgeConfig,
+    /// Servers the proxy downloads, creates and runs (`managed-servers`).
+    #[serde(default)]
+    pub managed_servers: pumbo_servers::Config,
     /// `server-group` (a list), read by the plugin host (§5.8.4).
     #[serde(default, rename = "server-group")]
     pub server_groups: Vec<ModuleConfig>,
@@ -600,19 +603,9 @@ impl Config {
                 ));
             }
         }
-        if let Some(serde_json::Value::Array(order)) = self.routing.rest.get("try") {
-            for v in order {
-                if let Some(n) = v.as_str()
-                    && !self.servers.contains_key(n)
-                {
-                    return bad(format!("routing.try names unknown server {n}"));
-                }
-            }
-        }
-        for (host, order) in &self.forced_hosts {
-            if let Some(n) = order.iter().find(|n| !self.servers.contains_key(*n)) {
-                return bad(format!("forced-hosts.\"{host}\" names unknown server {n}"));
-            }
+        // Servers from the proxy are known only once they are added (`Proxy`).
+        if !self.managed_servers.enabled {
+            self.check_server_names()?;
         }
         for id in &self.commands.operators {
             if uuid::Uuid::parse_str(id).is_err() {
@@ -628,12 +621,42 @@ impl Config {
             }
         }
         self.bridge.validate().map_err(ConfigError::Invalid)?;
+        self.managed_servers
+            .validate()
+            .map_err(|e| ConfigError::Invalid(format!("managed-servers: {e}")))?;
         if self.limits.max_pending_logins == 0 || self.limits.max_concurrent_has_joined == 0 {
             return bad(
                 "limits: max-pending-logins and max-concurrent-has-joined must be > 0".into(),
             );
         }
         Ok(())
+    }
+
+    /// `routing.try` and `forced-hosts` name only servers of `servers`.
+    pub fn check_server_names(&self) -> Result<(), ConfigError> {
+        let bad = |m: String| Err(ConfigError::Invalid(m));
+        for n in self.try_order() {
+            if !self.servers.contains_key(&n) {
+                return bad(format!("routing.try names unknown server {n}"));
+            }
+        }
+        for (host, order) in &self.forced_hosts {
+            if let Some(n) = order.iter().find(|n| !self.servers.contains_key(*n)) {
+                return bad(format!("forced-hosts.\"{host}\" names unknown server {n}"));
+            }
+        }
+        Ok(())
+    }
+
+    /// `routing.try`, the servers in the order players try them.
+    pub fn try_order(&self) -> Vec<String> {
+        match self.routing.rest.get("try") {
+            Some(serde_json::Value::Array(order)) => order
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect(),
+            _ => Vec::new(),
+        }
     }
 
     pub fn trusted(&self, l: &ListenerConfig) -> Result<Vec<Cidr>, ConfigError> {
