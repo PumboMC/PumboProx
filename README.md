@@ -82,7 +82,7 @@ Two players on one network: the bot check in a virtual world, a premium login wi
 | 🔀 | **Server switching** | `/server`, `/glist`, `/send`, `/find`, `/alert`, a fallback server when one goes down, forced hosts. |
 | 🧩 | **PumboAPI** | One API for every plugin: services, placeholders, permissions, per-server and per-group config. |
 | 🌌 | **PumboVir** | Virtual worlds on the proxy. Bot checks and logins happen before a player reaches any server. |
-| 🌉 | **PumboBridge** | The proxy can teleport players, change game modes, read inventories and apply its ranks on every server. |
+| 🌉 | **PumboBridge** | Moving players between servers works without it. With PumboBridge on a server, the proxy can also act inside it: teleport within the world, change game modes, read inventories, apply its ranks and see the server's TPS. |
 | 🛡️ | **Built-in protection** | Connection limits, packet limits, flood kicks, encrypted logins. |
 | 📄 | **Readable YAML config** | Plain files with comments. Errors point to the exact line. |
 | 📊 | **Metrics** | A Prometheus endpoint for your dashboards. |
@@ -112,7 +112,7 @@ Every plugin keeps its logic in one place and comes in two builds: one for the p
 | 🔒 [**PumboAuth**](https://github.com/PumboMC/PumboAuth) | One account for the whole network, premium auto-login, passwords, 2FA | ✅ | ✅ | ![beta](https://img.shields.io/badge/-beta-orange) |
 | 🚫 [**PumboBans**](https://github.com/PumboMC/PumboBans) | Bans, mutes and warnings across all servers | ✅ | ✅ | ![beta](https://img.shields.io/badge/-beta-orange) |
 | 👥 [**PumboPerms**](https://github.com/PumboMC/PumboPerms) | Ranks, groups and permissions for the whole network, imports what you already have | ✅ | ✅ | ![beta](https://img.shields.io/badge/-beta-orange) |
-| 🌉 [**PumboBridge**](https://github.com/PumboMC/PumboBridge) | Lets the proxy control your servers: teleports, game modes, inventories, ranks | ✅ | ✅ | ![beta](https://img.shields.io/badge/-beta-orange) |
+| 🌉 [**PumboBridge**](https://github.com/PumboMC/PumboBridge) | Lets the proxy act inside each server: teleports within the world, game modes, inventories, ranks, TPS | ✅ | ✅ | ![beta](https://img.shields.io/badge/-beta-orange) |
 | 🏰 **PumboGuard** | Region protection, managed from the proxy | 🔜 | 🔜 | ![coming soon](https://img.shields.io/badge/-coming%20soon-lightgrey) |
 | 📋 **PumboTabasco** | Tab list, scoreboard, boss bars, name tags and network chat (`/tbsc`) | 🔜 | | ![coming soon](https://img.shields.io/badge/-coming%20soon-lightgrey) |
 | 🏠 **PumboCore** | `/home`, `/spawn`, `/tp` and everyday commands | 🔜 | 🔜 | ![coming soon](https://img.shields.io/badge/-coming%20soon-lightgrey) |
@@ -128,7 +128,7 @@ You don't wire anything up. Each Pumbo plugin looks for the others when it start
 | **PumboFilter + PumboBans** | Addresses that keep failing the bot check get a temporary IP ban through PumboBans (`auto-ban` in the config). |
 | **PumboBans + PumboAuth** | A ban ends the player's login sessions, so after the ban is lifted they type their password again. |
 | **PumboPerms on the proxy + PumboBridge** | Ranks you set on the proxy with `/pp` apply on every server right away. A PumboPerms that also runs on a server steps back and lets the proxy decide. |
-| **Any plugin + PumboBridge** | The plugin can teleport players, change game modes or open inventories on any server, and read `%server_tps:lobby%` and other placeholders. |
+| **Any plugin + PumboBridge** | The plugin can teleport players within a server's world, change game modes or open inventories on any server, and read `%server_tps:lobby%` and other placeholders. |
 
 ### PumboBridge
 
@@ -159,7 +159,7 @@ Every message between the proxy and a server is signed with the key, so a fake p
 
 <img src="assets/diagram.webp" alt="PumboProx: the core, PumboAPI and plugins/ on the proxy; forwarding and the bridge to lobby, survival and skyblock, each with PumboBridge" width="100%">
 
-Players connect to the proxy. It checks them, logs them in and sends them to a server with Velocity forwarding, so every server sees the real UUID, IP and skin. Every server also runs PumboBridge, so the proxy can teleport players, change game modes and apply its ranks there.
+Players connect to the proxy. It checks them, logs them in and sends them to a server with Velocity forwarding, so every server sees the real UUID, IP and skin. Moving players between servers needs nothing more. Every server also runs PumboBridge, so the proxy can act inside it as well: teleport players within the world, change game modes and apply its ranks there.
 
 <details>
 <summary>Text version</summary>
