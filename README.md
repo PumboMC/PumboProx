@@ -68,7 +68,7 @@ https://github.com/user-attachments/assets/224d9859-b9b5-4844-a02f-295abef80e18
 Two players on one network: the bot check in a virtual world, a premium login without a password, a new account with `/register`, `/server` between lobby and survival, and a ban that follows the player across the whole network.
 
 > [!NOTE]
-> PumboProx is in **beta**. Everything marked as available below works and is covered by tests against real Pumpkin servers, but the first release (0.1) is not out yet. Try it on a test network before you put players on it.
+> PumboProx is in **beta** (0.1.0-beta.1). Everything marked as available below works and is covered by tests against real Pumpkin servers. Try it on a test network before you put players on it.
 
 <a name="the-proxy"></a>
 <p align="center"><img src="assets/section-proxy.webp" alt="Proxy" width="60%"></p>
