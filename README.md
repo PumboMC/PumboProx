@@ -281,7 +281,7 @@ servers:
 routing:
   try: [lobby]
 forwarding:
-  mode: modern                 # modern | legacy | none
+  mode: modern                 # modern | none (none: tests only)
   secret-file: forwarding.secret
 plugins:
   dir: plugins
