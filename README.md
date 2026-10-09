@@ -372,6 +372,8 @@ players:
 | ✅ | PumboFilter, PumboAuth, PumboBans, PumboBridge | beta |
 | ✅ | PumboPerms for the whole network | beta |
 | ✅ | 0.1.0-beta.1: downloads for Linux, macOS and Windows, Docker image | released |
+| 🔜 | Server management from the proxy: download Pumpkin, create and manage servers (idea by [@Uncover-F](https://github.com/Uncover-F)) | next |
+| 🔜 | HTTP API for panels and hosting: servers, players, bans | next |
 | 🔜 | Pterodactyl and Pelican egg, setup wizard, signed Windows files | next |
 | 🔜 | Translation in both directions (newer clients on older servers) | planned |
 | 🔜 | PumboDB, PumboTabasco, PumboGuard, PumboCore, PumboSkins | planned |
