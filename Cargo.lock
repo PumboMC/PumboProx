@@ -1544,7 +1544,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-bridge-proto"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "ciborium",
  "hmac",
@@ -1556,7 +1556,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-bridge-test-plugin"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "futures",
  "pumbo-bridge-proto",
@@ -1565,7 +1565,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-common"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "md-5",
  "rand_core 0.6.4",
@@ -1577,14 +1577,14 @@ dependencies = [
 
 [[package]]
 name = "pumbo-contracts"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "pumbo-core"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "bytes",
  "futures",
@@ -1599,7 +1599,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-data"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "pumbo-protocol",
  "thiserror",
@@ -1607,7 +1607,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-datagen"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "aws-lc-rs",
  "pumbo-data",
@@ -1621,7 +1621,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-example"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "pumbo-sdk",
  "schemars",
@@ -1630,7 +1630,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-forwarding"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "aws-lc-rs",
  "pumbo-core",
@@ -1641,7 +1641,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-host"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "argon2",
  "bcrypt",
@@ -1666,7 +1666,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-host-test-plugin"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "futures",
  "pumbo-sdk",
@@ -1676,7 +1676,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-identity"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "aws-lc-rs",
  "md-5",
@@ -1688,7 +1688,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-listener-java"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "pumbo-core",
  "tokio",
@@ -1696,7 +1696,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-nbt"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "proptest",
  "thiserror",
@@ -1704,7 +1704,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-protocol"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "aes",
  "aws-lc-rs",
@@ -1719,7 +1719,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-prox"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "aws-lc-rs",
  "base64 0.23.1",
@@ -1756,7 +1756,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-routing"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "pumbo-core",
  "pumbo-protocol",
@@ -1765,7 +1765,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-sdk"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "ciborium",
  "futures",
@@ -1779,7 +1779,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-store"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "bytes",
  "pumbo-core",
@@ -1788,7 +1788,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-testclient"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "aws-lc-rs",
  "bytes",
@@ -1805,7 +1805,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-text"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "proptest",
  "pumbo-nbt",
@@ -1815,7 +1815,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-translate"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "bytes",
  "pumbo-core",
@@ -1829,7 +1829,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-translate-mv"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "pumbo-nbt",
  "pumbo-text",
@@ -1838,7 +1838,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-virtual"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "bytes",
  "flate2",
@@ -2476,14 +2476,14 @@ dependencies = [
 
 [[package]]
 name = "spike-rsa"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "aws-lc-rs",
 ]
 
 [[package]]
 name = "spike-wasm-async"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "futures",
  "tokio",

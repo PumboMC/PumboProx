@@ -866,7 +866,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-core"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "bytes",
  "futures",
@@ -881,7 +881,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-data"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "pumbo-protocol",
  "thiserror",
@@ -902,7 +902,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-identity"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "aws-lc-rs",
  "md-5",
@@ -914,14 +914,14 @@ dependencies = [
 
 [[package]]
 name = "pumbo-nbt"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "pumbo-protocol"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "aes",
  "aws-lc-rs",
@@ -935,7 +935,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-testclient"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "aws-lc-rs",
  "bytes",
@@ -950,7 +950,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-text"
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 dependencies = [
  "pumbo-nbt",
  "serde_json",
