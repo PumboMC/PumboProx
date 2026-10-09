@@ -366,17 +366,6 @@ fn tooltip(lang: &Lang, entry: &Entry) -> Text {
     text
 }
 
-/// The page asked for in `help <n>` (the arguments after the command name);
-/// 1 when there is none or it is not a number.
-pub fn page_arg(args: &[String]) -> usize {
-    match args {
-        [first, page, ..] if first.eq_ignore_ascii_case("help") || first == "?" => {
-            page.parse().ok().filter(|p| *p >= 1).unwrap_or(1)
-        }
-        _ => 1,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -638,17 +627,5 @@ mod tests {
         let alias = header.segments.last().unwrap();
         assert_eq!(alias.click, Some(Click::Suggest("/pb ".into())));
         assert!(help.console(&en, all).plain().starts_with("PumboBans 0.1.0 · Admin   /pumbobans /pb\n"));
-    }
-
-    #[test]
-    fn page_argument() {
-        let args = |s: &str| s.split_whitespace().map(str::to_string).collect::<Vec<_>>();
-        assert_eq!(page_arg(&args("help 2")), 2);
-        assert_eq!(page_arg(&args("? 3")), 3);
-        assert_eq!(page_arg(&args("HELP x")), 1);
-        assert_eq!(page_arg(&args("help 0")), 1);
-        assert_eq!(page_arg(&args("help")), 1);
-        assert_eq!(page_arg(&args("ban 2")), 1);
-        assert_eq!(page_arg(&[]), 1);
     }
 }

@@ -107,8 +107,11 @@ pub enum Dispatch<'a, H> {
         sub: &'a Sub<H>,
         args: &'a [String],
     },
-    /// No subcommand or `help`: show the subcommands the sender may use.
-    Help,
+    /// No subcommand or `help [page]`: show the subcommands the sender may
+    /// use, at `page` (1 when it is missing or not a number).
+    Help {
+        page: usize,
+    },
     Unknown {
         name: String,
     },
@@ -190,11 +193,12 @@ impl<H> Commands<H> {
     /// sender has a permission node.
     pub fn dispatch<'a>(&'a self, args: &'a [String], allowed: impl Fn(&str) -> bool) -> Dispatch<'a, H> {
         let Some((first, rest)) = args.split_first() else {
-            return Dispatch::Help;
+            return Dispatch::Help { page: 1 };
         };
         let name = first.to_lowercase();
         if name == "help" || name == "?" {
-            return Dispatch::Help;
+            let page = rest.first().and_then(|p| p.parse().ok()).filter(|p| *p >= 1).unwrap_or(1);
+            return Dispatch::Help { page };
         }
         let Some(sub) = self.subs.iter().find(|s| s.matches(&name)) else {
             return Dispatch::Unknown { name };
@@ -289,8 +293,12 @@ mod tests {
         assert!(
             matches!(t.dispatch(&args("ban"), all), Dispatch::Usage { usage } if usage == "/pumbo bans ban <player> [reason...]")
         );
-        assert!(matches!(t.dispatch(&[], all), Dispatch::Help));
-        assert!(matches!(t.dispatch(&args("help"), all), Dispatch::Help));
+        assert!(matches!(t.dispatch(&[], all), Dispatch::Help { page: 1 }));
+        assert!(matches!(t.dispatch(&args("help"), all), Dispatch::Help { page: 1 }));
+        assert!(matches!(t.dispatch(&args("help 2"), all), Dispatch::Help { page: 2 }));
+        assert!(matches!(t.dispatch(&args("? 3"), all), Dispatch::Help { page: 3 }));
+        assert!(matches!(t.dispatch(&args("HELP x"), all), Dispatch::Help { page: 1 }));
+        assert!(matches!(t.dispatch(&args("help 0"), all), Dispatch::Help { page: 1 }));
         assert!(matches!(t.dispatch(&args("kick x"), all), Dispatch::Unknown { name } if name == "kick"));
         let only_ban = |p: &str| p == "pumbo.bans.ban";
         assert!(
