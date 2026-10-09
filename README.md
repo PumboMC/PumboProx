@@ -134,14 +134,14 @@ You don't wire anything up. Each Pumbo plugin looks for the others when it start
 
 PumboBridge is a small plugin you put on every Pumpkin server behind the proxy. It is the same file and the same `config.yml` on all of them.
 
-1. Turn on `bridge:` in `pumboprox.yml`. The proxy creates a key on the first start (`/pumbo bridge key` shows it).
+1. Turn on `bridge:` in `pumboprox.yml`. The proxy creates a key on the first start (`/prox bridge key` shows it).
 
-   <img src="assets/bridge-key.png" alt="/pumbo bridge key in the game, with part of the key hidden" width="100%">
+   <img src="assets/bridge-key.png" alt="/prox bridge key in the game, with part of the key hidden" width="100%">
 
 2. Put `PumboBridge.wasm` into `plugins/` of each server, with the proxy's address and the key in its `config.yml`.
-3. Each server connects to the proxy on its own and finds out which server it is. `/pumbo bridge` shows them all:
+3. Each server connects to the proxy on its own and finds out which server it is. `/prox bridge` shows them all:
 
-<img src="assets/bridge-status.png" alt="/pumbo bridge in the game: lobby and survival connected, version 0.1.0 / 1.0, ping 35 ms, connected for 50 minutes" width="100%">
+<img src="assets/bridge-status.png" alt="/prox bridge in the game: lobby and survival connected, version 0.1.0 / 1.0, ping 35 ms, connected for 50 minutes" width="100%">
 
 With the bridge, the proxy and its plugins can:
 
@@ -311,40 +311,151 @@ On Pumpkin 0.2.0, read the [warning under Known issues](#known-issues) first.
 ./pumboprox run pumboprox.yml     # Docker starts it for you
 ```
 
-**5. Add plugins.** Put the `.wasm` files into `plugins/` and restart the proxy, or load them with `/prox plugin load <id>`.
+**5. Add plugins.** Put the `.wasm` files into `plugins/` and restart the proxy, or load them with `/prox plugins load <id>`.
 
 <img src="assets/pumbo-plugins.png" alt="/pumbo in the game: pumbo-auth, pumbo-bans, pumbo-filter and pumbo-perms 0.1.0, all running" width="100%">
+
+### Servers from the proxy
+
+PumboProx can download Pumpkin, create servers, run them and add them to the
+network without a restart. It is meant for the owner of a network on one
+machine: no customer accounts, no resource quotas. It is off by default.
+
+```yaml
+managed-servers:
+  enabled: true
+  dir: servers                # server folders, servers.yml, templates/, .trash/
+  versions-dir: versions      # downloads, versions/<software>/<tag>/
+  ports: 25700-25799          # ports of new servers (127.0.0.1)
+  download-from-game: false   # /prox download from the game; the console always can
+  allow-unverified: false     # accept releases without a SHA256 checksum
+  stop-timeout-secs: 30       # after "stop" on the console, then a kill
+  templates:
+    default:
+      source: pumpkin
+      version: latest         # the newest downloaded release, or a tag
+      autostart: true         # start right after `new` and with the proxy
+      restart-on-crash: 3     # restarts within 10 minutes, then it stays down
+```
+
+From the console (or the game, with the permissions below):
+
+```
+prox download                      # what can be downloaded, what is downloading
+prox download pumpkin              # numbered list of releases, newest first
+prox download pumpkin #2           # download one (by number or tag), SHA256 checked
+prox servers new arena              # folder, pumpkin.toml, plugins from the template
+prox servers start arena            # then: /server arena
+prox servers                       # state, version, port, players, memory, uptime
+prox servers logs arena 30
+prox servers stop|restart arena
+prox servers delete arena confirm   # stops it and moves the folder to servers/.trash/
+```
+
+<details><summary>How it works, the way into the network, permissions</summary>
+
+- Downloads come only from the Pumpkin-MC/Pumpkin GitHub releases, with the
+  file for this machine, and are checked against the release's
+  `checksums.sha256`. Development builds (canary, nightly) have no checksums
+  and are refused unless `allow-unverified: true`.
+- Each new server gets its own `pumpkin.toml`: a random seed, `127.0.0.1` and
+  a free port of `ports`, offline mode behind the proxy, Velocity forwarding
+  with the proxy's secret. Telemetry stays at Pumpkin's default; the file
+  says how to turn it off. With the bridge on, PumboBridge gets its
+  `config.yml` (address and key). Everything in
+  `servers/templates/<template>/` (for example `plugins/PumboBridge.wasm`) is
+  copied into the server.
+- A server is `ready` when its port answers. A crashed server is restarted
+  after 1, 5 and 15 seconds, at most `restart-on-crash` times in 10 minutes.
+- When the proxy stops, it stops its servers (`stop` on their console, a kill
+  after `stop-timeout-secs`). If the proxy itself dies, the servers keep
+  running and the next start takes them over (their PID is in
+  `servers/servers.yml`).
+- The player who starts a download sees its progress on a boss bar (percent,
+  speed, size); the console logs it every 10%. `prox download stop [name]`
+  stops one download or all of them and leaves no partial file.
+- Servers in `servers:` of the config win over servers from the proxy with
+  the same name. `routing.try` and `forced-hosts` may name servers from the
+  proxy. Changes to `managed-servers` itself need a restart.
+
+#### The way into the network
+
+`/prox route` shows the way a player takes: domains with servers of their
+own (`forced-hosts`), the gates of plugins in order (required or optional),
+the servers of `routing.try` and the fallback. Every step can be changed
+from the game or the console; the change is written to `pumboprox.yml`
+(only that key, comments stay) and applied at once:
+
+```
+prox route servers add arena 1           # try arena first
+prox route servers move lobby 1
+prox route host set play.example.org arena
+prox route host remove play.example.org
+prox route gates require auth            # no login without the auth gate
+```
+
+Permissions: `pumbo.proxy.route` to look, `pumbo.proxy.route.edit` to change.
+A domain never skips the gates.
+
+| Command | Permission |
+| --- | --- |
+| `/prox download [pumpkin\|paper] [#n\|version]`, `/prox download stop …` | `pumbo.proxy.download` |
+| `/prox servers` | `pumbo.proxy.servers` |
+| `/prox servers new <name> [#n\|tag\|latest] [template]` | `pumbo.proxy.servers.create` |
+| `/prox servers start\|stop\|restart <name>` | `pumbo.proxy.servers.control` |
+| `/prox servers logs <name> [lines]` | `pumbo.proxy.servers.logs` |
+| `/prox servers delete <name> confirm` | `pumbo.proxy.servers.delete` |
+
+Without a permission plugin these belong to `commands.operators` and the
+console.
+
+</details>
 
 ### Commands
 
 | Command | What it does |
 | --- | --- |
-| `/server [name]` | Go to another server, or list them |
-| `/glist` | Players on every server |
-| `/send <player\|all> <server>` | Move players to a server |
-| `/find <player>` | Which server a player is on |
-| `/alert <message>` | A message to the whole network |
-| `/prox` | The proxy commands you may use, like `/velocity` on Velocity |
-| `/prox version` | The proxy's version and the protocols it speaks |
-| `/prox reload` | Reload `pumboprox.yml` |
-| `/prox plugins` | Plugins, their versions and state (also `/pumbo`) |
-| `/prox plugin reload\|load\|unload <id>` | Manage plugins while the proxy runs |
-| `/prox bridge [status\|key]` | Which servers run PumboBridge, and the bridge key |
-| `/prox perms list\|check <player> <node> [server]` | Permission nodes, and how one is decided for a player |
-| `/prox services` | The services plugins offer each other |
+| `/server <server>` | Go to another server, or list them |
+| `/send <player\|all\|current> <server>` | Move players to a server |
+| `/prox` | The proxy commands you may use (help with pages and tooltips) |
+| `/prox servers` | Servers run by the proxy |
+| `/pf` `/pa` `/pb` `/pp` | PumboFilter, PumboAuth, PumboBans, PumboPerms |
 
-`/prox` is the short form of the admin commands under `/pumbo`: `/prox plugin …` is `/pumbo proxy plugin …` and `/prox bridge` is `/pumbo bridge`. In the proxy console the same commands work without the slash.
+<details><summary>All proxy commands</summary>
 
-Every Pumbo plugin has its own command, a short form of it, and a place under `/pumbo`. `/pumbo <plugin>` on its own shows the plugin's help:
+| Command | What it does | Permission |
+| --- | --- | --- |
+| `/server [server]` | Go to another server, or list them | `pumbo.proxy.server` |
+| `/glist` | Players on every server | `pumbo.proxy.glist` |
+| `/send <player\|all\|current> <server>` | Move players to a server | `pumbo.proxy.send` |
+| `/find <player>` | Which server a player is on | `pumbo.proxy.find` |
+| `/alert <message>` | A message to the whole network | `pumbo.proxy.alert` |
+| `/prox [help] [page]` | The proxy commands you may use | |
+| `/prox version` | The proxy's version and the protocols it speaks | |
+| `/prox reload` | Reload `pumboprox.yml` | `pumbo.proxy.reload` |
+| `/prox plugins [reload\|load\|unload <id>]` | Plugins, their versions and state; manage them while the proxy runs | `pumbo.proxy.plugins`, changes: `.plugins.manage` |
+| `/prox bridge [key]` | Which servers run PumboBridge, and the bridge key | `pumbo.proxy.bridge`, key: `.bridge.key` |
+| `/prox route …` | The way into the network: domains, gates, servers | `pumbo.proxy.route`, changes: `.route.edit` |
+| `/prox download …` | Download server software | `pumbo.proxy.download` |
+| `/prox servers …` | Create and run servers | `pumbo.proxy.servers.*` |
+| `/prox debug perms\|services` | How a permission is decided; plugin services | `pumbo.proxy.debug` |
 
-| Plugin | Command | Short | Under `/pumbo` |
-| --- | --- | --- | --- |
-| PumboFilter | `/pumbofilter` | `/pf` | `/pumbo filter` |
-| PumboAuth | `/pumboauth` | `/pa` | `/pumbo auth` |
-| PumboBans | `/pumbobans` | `/pb` | `/pumbo bans` |
-| PumboPerms | `/pumboperms` | `/pp` | `/pumbo perms` |
+In the proxy console the same commands work without the slash. `/pumbo` lists the Pumbo plugins; a click opens a plugin's help.
+
+</details>
+
+<details><summary>Plugin commands</summary>
+
+| Plugin | Command | Short |
+| --- | --- | --- |
+| PumboFilter | `/pumbofilter` | `/pf` |
+| PumboAuth | `/pumboauth` | `/pa` |
+| PumboBans | `/pumbobans` | `/pb` |
+| PumboPerms | `/pumboperms` | `/pp` |
 
 Player commands such as `/login` or `/ban`, and their aliases, are listed in each plugin's README.
+
+</details>
 
 Permissions live in `permissions.yml`, with server, group and global contexts:
 
@@ -372,7 +483,8 @@ players:
 | ✅ | PumboFilter, PumboAuth, PumboBans, PumboBridge | beta |
 | ✅ | PumboPerms for the whole network | beta |
 | ✅ | 0.1.0-beta.1: downloads for Linux, macOS and Windows, Docker image | released |
-| 🔜 | Server management from the proxy: download Pumpkin, create and manage servers (idea by [@Uncover-F](https://github.com/Uncover-F)) | next |
+| ✅ | Server management from the proxy: download Pumpkin, create and manage servers (idea by [@Uncover-F](https://github.com/Uncover-F)) | released (0.2.0-beta) |
+| 🔜 | Paper servers from the proxy: download and run them like Pumpkin | next |
 | 🔜 | HTTP API for panels and hosting: servers, players, bans | next |
 | 🔜 | Pterodactyl and Pelican egg, setup wizard, signed Windows files | next |
 | 🔜 | Translation in both directions (newer clients on older servers) | planned |
@@ -417,6 +529,7 @@ cargo build -p pumbo-example --target wasm32-wasip2 --profile plugin
 - A server on the older Pumpkin 0.1.0-dev (Minecraft 26.2) accepts only 26.2 players for now; every version will be able to join it once the translation works in both directions.
 - **This release:** PumboProx with [PumboFilter](https://github.com/PumboMC/PumboFilter), [PumboAuth](https://github.com/PumboMC/PumboAuth), [PumboBans](https://github.com/PumboMC/PumboBans), [PumboPerms](https://github.com/PumboMC/PumboPerms) and [PumboBridge](https://github.com/PumboMC/PumboBridge). Each plugin has its own repository and its own release with the `.wasm` files.
 - **PumboDB, PumboTabasco, PumboGuard, PumboCore and PumboSkins are planned**, not part of this release. PumboDB will be one shared SQL database (SQLite, MySQL, MariaDB, PostgreSQL) for all Pumbo plugins.
+- `/prox download paper` answers "coming soon": Paper servers from the proxy come in a later beta.
 
 ## Contributing
 
