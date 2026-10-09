@@ -380,14 +380,15 @@ async fn supervise(host: Arc<HostInner>, slot: Arc<PluginSlot>, mut rx: Receiver
                     tracing::error!(plugin = %slot.id, "cannot load plugin: {}: {e}", slot.wasm.display());
                     let file = slot.wasm.file_name().unwrap_or_default().to_string_lossy();
                     let msg = format!("{file}: {e}");
-                    if let Some(r) = reply.take() {
-                        let _ = r.send(Err(msg.clone()));
-                    }
                     slot.set_status(if missing {
                         Status::Missing
                     } else {
-                        Status::Failed(msg)
+                        Status::Failed(msg.clone())
                     });
+                    // After the status, so the caller sees it with the answer.
+                    if let Some(r) = reply.take() {
+                        let _ = r.send(Err(msg.clone()));
+                    }
                     match wait_for_reload(&slot, &mut rx).await {
                         Some(r) => {
                             reply = Some(r);
@@ -429,9 +430,6 @@ async fn supervise(host: Arc<HostInner>, slot: Arc<PluginSlot>, mut rx: Receiver
             Outcome::Failed { init, msg } => {
                 tracing::error!(plugin = %slot.id, init, "plugin failed: {msg}");
                 let msg = short_reason(&msg);
-                if let Some(r) = reply.take() {
-                    let _ = r.send(Err(msg.clone()));
-                }
                 let now = Instant::now();
                 failures.push_back(now);
                 let window = Duration::from_millis(cfg.failure_window_ms);
@@ -443,7 +441,10 @@ async fn supervise(host: Arc<HostInner>, slot: Arc<PluginSlot>, mut rx: Receiver
                 }
                 if failures.len() >= cfg.max_failures {
                     tracing::error!(plugin = %slot.id, "plugin disabled after {} failures", failures.len());
-                    slot.set_status(Status::Disabled(msg));
+                    slot.set_status(Status::Disabled(msg.clone()));
+                    if let Some(r) = reply.take() {
+                        let _ = r.send(Err(msg));
+                    }
                     let Some(r) = wait_for_reload(&slot, &mut rx).await else {
                         return;
                     };
@@ -453,10 +454,13 @@ async fn supervise(host: Arc<HostInner>, slot: Arc<PluginSlot>, mut rx: Receiver
                     continue;
                 }
                 slot.set_status(if init {
-                    Status::InitFailed(msg)
+                    Status::InitFailed(msg.clone())
                 } else {
-                    Status::Restarting(msg)
+                    Status::Restarting(msg.clone())
                 });
+                if let Some(r) = reply.take() {
+                    let _ = r.send(Err(msg));
+                }
                 let step = failures.len().saturating_sub(1);
                 let backoff = cfg
                     .restart_backoff_ms
