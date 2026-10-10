@@ -153,8 +153,8 @@ impl Manager {
         }))
     }
 
-    /// Called after a server was created or deleted (the proxy adds it to
-    /// or removes it from its server list).
+    /// Called after a server was created, deleted or became ready (the proxy
+    /// updates its server list and lets waiting players join).
     pub fn on_change(&self, f: impl Fn() + Send + Sync + 'static) {
         let _ = self.on_change.set(Box::new(f));
     }

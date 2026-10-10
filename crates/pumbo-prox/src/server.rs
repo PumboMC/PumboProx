@@ -179,6 +179,7 @@ pub struct PlayerEntry {
     pub name: String,
     /// Server the player is on (after its play `login`).
     pub server: Option<String>,
+    pub address: SocketAddr,
     tx: mpsc::Sender<SessionCmd>,
     /// Teleports the client has not confirmed (PumboBridge holds its own).
     tp: crate::bridge::TpGate,
@@ -205,7 +206,8 @@ pub struct Proxy {
     newest: Arc<dyn VersionModule>,
     releases: (String, String),
     pub key: ServerKey,
-    runtime: RwLock<Arc<Runtime>>,
+    /// A watch, so sessions waiting in the Pumbox see a new server list at once.
+    runtime: watch::Sender<Arc<Runtime>>,
     players: Mutex<HashMap<Uuid, PlayerEntry>>,
     chat_filter: RwLock<Option<Arc<ChatFilter>>>,
     /// Backends already reported, per reason (secure chat §2.8 point 1, D-COMPAT-1).
@@ -222,6 +224,9 @@ pub struct Proxy {
     pub bridge: OnceLock<Arc<crate::bridge::Bridge>>,
     /// Servers run by the proxy, when `managed-servers.enabled`.
     pub servers: OnceLock<Arc<pumbo_servers::Manager>>,
+    /// `/prox claim`: the operator code and the wrong tries so far; gone
+    /// for good once the network has a server.
+    pub(crate) claim: Mutex<Option<(String, u8)>>,
 }
 
 impl std::fmt::Debug for Proxy {
@@ -280,7 +285,7 @@ impl Proxy {
             newest,
             releases,
             key,
-            runtime: RwLock::new(Arc::new(runtime)),
+            runtime: watch::channel(Arc::new(runtime)).0,
             players: Mutex::new(HashMap::new()),
             chat_filter: RwLock::new(None),
             warned: Mutex::new(HashSet::new()),
@@ -293,14 +298,17 @@ impl Proxy {
             plugins: OnceLock::new(),
             bridge: OnceLock::new(),
             servers: OnceLock::new(),
+            claim: Mutex::new(None),
         }))
     }
 
     pub fn runtime(&self) -> Arc<Runtime> {
-        self.runtime
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+        self.runtime.borrow().clone()
+    }
+
+    /// Changes after now of the runtime (reload, servers of the proxy).
+    pub fn runtime_changes(&self) -> watch::Receiver<Arc<Runtime>> {
+        self.runtime.subscribe()
     }
 
     /// Re-reads the config file. Players keep their sessions and see the new
@@ -359,15 +367,19 @@ impl Proxy {
                 }
             }
         }
-        if config.managed_servers.enabled {
-            config.check_server_names().map_err(|e| e.to_string())?;
+        // A server the proxy has not created yet is skipped until it exists.
+        if config.managed_servers.enabled
+            && let Err(e) = config.check_server_names()
+        {
+            warn!("{e}; players skip it until it exists");
         }
         let mut runtime = Runtime::build(config, &self.releases)?;
         runtime.managed = managed;
-        *self
-            .runtime
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::new(runtime);
+        // The operator code is for a fresh network only.
+        if !runtime.backends.is_empty() && self.claim.lock().is_ok_and(|mut c| c.take().is_some()) {
+            info!("The operator code expired: the network has a server now.");
+        }
+        self.runtime.send_replace(Arc::new(runtime));
         Ok(())
     }
 
@@ -389,6 +401,7 @@ impl Proxy {
     pub fn register_player(
         self: &Arc<Self>,
         profile: &GameProfile,
+        address: SocketAddr,
     ) -> Option<(PlayerGuard, mpsc::Receiver<SessionCmd>)> {
         let mut p = self.players.lock().ok()?;
         if p.contains_key(&profile.id) {
@@ -401,6 +414,7 @@ impl Proxy {
                 id: profile.id,
                 name: profile.name.clone(),
                 server: None,
+                address,
                 tx,
                 tp: crate::bridge::new_gate(),
             },
