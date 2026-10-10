@@ -66,7 +66,19 @@ Bot checks and logins happen in a virtual world on the proxy, before a player re
 
 ---
 
-## What's new in 0.2.0-beta
+<a name="see-it-in-action"></a>
+<p align="center"><img src="assets/section-action.webp" alt="See it in action" width="60%"></p>
+
+### 0.2.5-beta: run and play
+
+<img src="assets/pumbox.webp" alt="The Pumbox: an empty world on the proxy with the title Waiting for a server…, while Pumpkin downloads" width="100%">
+
+- **Start and join:** run `pumboprox` in an empty folder. It writes its own config, and you can join right away.
+- **The Pumbox:** with no server yet, you land in an empty world that PumboVir builds inside the proxy. From there you set up the whole network from the game, before a single server exists.
+- **`/prox claim <code>`:** the console shows a one-time code; type it and you are the operator of the network. Later, `/prox op` and `/prox deop` hand it out.
+- **First server, done:** `/prox download pumpkin`, `/prox servers new <name>`. When it is ready, everyone in the Pumbox moves there and the Pumbox is gone.
+
+### 0.2.0-beta: servers from the proxy
 
 - **Download Pumpkin from the proxy:** `/prox download pumpkin`, with a progress bar and a checksum check.
 - **Run servers directly in game, from the proxy:** `/prox servers new|start|stop|restart|logs|delete`. No proxy restart needed, and a crashed server starts again on its own.
@@ -75,17 +87,18 @@ Bot checks and logins happen in a virtual world on the proxy, before a player re
 
 https://github.com/user-attachments/assets/6ae651c3-0782-4c79-ac05-6018fe869001
 
-Pumpkin downloaded from the game, the server `demo` created and joined with `/server demo`, all without touching a file. More in [Servers from the proxy](docs/servers.md), every change in the [changelog](CHANGELOG.md).
+Pumpkin downloaded from the game, the server `demo` created and joined with `/server demo`, all without touching a file. More in [Servers from the proxy](docs/servers.md).
 
-<a name="see-it-in-action"></a>
-<p align="center"><img src="assets/section-action.webp" alt="See it in action" width="60%"></p>
+### 0.1.0-beta: one network, one login
 
 https://github.com/user-attachments/assets/224d9859-b9b5-4844-a02f-295abef80e18
 
 Two players on one network: the bot check in a virtual world, a premium login without a password, a new account with `/register`, `/server` between lobby and survival, and a ban that follows the player across the whole network.
 
+Every change: [changelog](CHANGELOG.md).
+
 > [!NOTE]
-> PumboProx is in **beta** (0.2.0-beta). Everything marked as available below works and is covered by tests against real Pumpkin servers. Try it on a test network before you put players on it.
+> PumboProx is in **beta** (0.2.5-beta). Everything marked as available below works and is covered by tests against real Pumpkin servers. Try it on a test network before you put players on it.
 
 <a name="the-proxy"></a>
 <p align="center"><img src="assets/section-proxy.webp" alt="Proxy" width="60%"></p>
@@ -100,6 +113,7 @@ Two players on one network: the bot check in a virtual world, a premium login wi
 | 🧩 | **PumboAPI** | One API for every plugin: services, placeholders, permissions, per-server and per-group config. |
 | 🌌 | **PumboVir** | Virtual worlds on the proxy. Bot checks and logins happen before a player reaches any server. |
 | 🖥️ | **Servers from the proxy** | Download Pumpkin, then create, start and stop servers from the game. [How](docs/servers.md) |
+| 📦 | **Pumbox** | With no server available, players wait in an empty world instead of being kicked, and move to a server as soon as one is ready. |
 | 🌉 | **PumboBridge** | Moving players between servers works without it. With [PumboBridge](docs/bridge.md) on a server, the proxy can also act inside it: teleport within the world, change game modes, read inventories, apply its ranks and see the server's TPS. |
 | 🛡️ | **Built-in protection** | Connection limits, packet limits, flood kicks, encrypted logins. |
 | 📄 | **Readable YAML config** | Plain files with comments. Errors point to the exact line. |
@@ -150,9 +164,9 @@ Pumbo plugins find each other and work together, and a new player passes the bot
 <p align="center"><img src="assets/section-start.webp" alt="Get started" width="60%"></p>
 
 1. **Get PumboProx:** the file for Linux, Windows or macOS from [Releases](https://github.com/PumboMC/PumboProx/releases/latest), the Docker image `ghcr.io/pumbomc/pumboprox`, or build it with Cargo.
-2. **Write `pumboprox.yml`:** where to listen and which servers you have.
-3. **Point your Pumpkin servers at it** with Velocity forwarding, or let the proxy [run them for you](docs/servers.md).
-4. **Start it** with `./pumboprox run pumboprox.yml` and drop plugins into `plugins/`.
+2. **Start it** with `./pumboprox`. On the first start it writes `pumboprox.yml`, `forwarding.secret` and `plugins/` itself.
+3. **Join and become an operator** with the code from the console: `/prox claim <code>`.
+4. **Get a server:** `/prox download pumpkin`, then `/prox servers new lobby`. Until it is ready you wait in the Pumbox, then you move there.
 
 Step by step, with the config and Docker: **[Get started](docs/getting-started.md)**.
 
@@ -164,6 +178,8 @@ Step by step, with the config and Docker: **[Get started](docs/getting-started.m
 | `/send <player\|all\|current> <server>` | Move players to a server |
 | `/prox` | The proxy commands you may use (help with pages and tooltips) |
 | `/prox servers` | Servers run by the proxy |
+| `/prox op <player>` | Make a player an operator (`/prox deop` takes it away) |
+| `/prox claim <code>` | Become the first operator of a new network |
 | `/pf` `/pa` `/pb` `/pp` | PumboFilter, PumboAuth, PumboBans, PumboPerms |
 
 Every command and permission: [Commands](docs/commands.md).
@@ -191,6 +207,7 @@ Every command and permission: [Commands](docs/commands.md).
 | ✅ | PumboPerms for the whole network | beta |
 | ✅ | 0.1.0-beta.1: downloads for Linux, macOS and Windows, Docker image | released |
 | ✅ | Server management from the proxy: download Pumpkin, create and manage servers (thanks to [@Uncover-F](https://github.com/Uncover-F) for the great idea) | released (0.2.0-beta) |
+| ✅ | Run and play: the Pumbox, `/prox claim`, a config written on the first start | released (0.2.5-beta) |
 | 🔜 | Paper servers from the proxy: download and run them like Pumpkin | planned |
 | 🔜 | HTTP API for panels and hosting: servers, players, bans | planned |
 | 🔜 | Pterodactyl and Pelican egg, setup wizard, signed Windows files | planned |
