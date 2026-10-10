@@ -1,4 +1,5 @@
-//! `pumboprox`: `run [config]` (default), `check-config [config]`, `version`,
+//! `pumboprox`: `run [config]` (default; a missing config is written with
+//! the defaults), `check-config [config]`, `version`,
 //! `describe <plugin> [--json] [config]`.
 //! Console commands while running: `reload`, `stop`, `version`, the
 //! built-in proxy commands `glist`, `find`, `send`, `alert`, `pumbo` (the
@@ -181,7 +182,27 @@ fn check_config(path: &str) -> ExitCode {
     }
 }
 
+/// First start: the default config and an empty `plugins/` next to it.
+/// A `.toml` of the same name is left to [`read`]'s message.
+fn create_default(path: &str) -> Result<bool, String> {
+    let file = std::path::Path::new(path);
+    if file.exists() || file.with_extension("toml").is_file() {
+        return Ok(false);
+    }
+    std::fs::write(file, pumbo_prox::config::DEFAULT_FILE).map_err(|e| format!("{path}: {e}"))?;
+    let plugins = file.with_file_name("plugins");
+    std::fs::create_dir_all(&plugins).map_err(|e| format!("{}: {e}", plugins.display()))?;
+    Ok(true)
+}
+
 fn run(path: &str) -> ExitCode {
+    let created = match create_default(path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("config error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let cfg = match load(path) {
         Ok(c) => c,
         Err(e) => {
@@ -190,6 +211,9 @@ fn run(path: &str) -> ExitCode {
         }
     };
     pumbo_prox::logging::init(&cfg.logging);
+    if created {
+        info!("created {path} with the default settings");
+    }
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -223,13 +247,13 @@ fn run(path: &str) -> ExitCode {
                 }
             }
         }
-        // Plugin host (E5), from the same file; skipped without a plugin directory.
+        // Plugin host (E5), from the same file; a missing plugin directory is created.
         let text = std::fs::read_to_string(path).unwrap_or_default();
         match pumbo_prox::plugins::Plugins::start(&text, &proxy, natives).await {
             Ok(Some(p)) => {
                 let _ = proxy.plugins.set(p);
             }
-            Ok(None) => info!("no plugin directory, running without plugins"),
+            Ok(None) => warn!("no plugin directory, running without plugins"),
             Err(e) => {
                 error!("cannot start plugins: {e}");
                 return ExitCode::FAILURE;
@@ -254,6 +278,9 @@ fn run(path: &str) -> ExitCode {
             }
         };
         info!("PumboProx {} started", env!("CARGO_PKG_VERSION"));
+        if let Some(code) = pumbo_prox::commands::claim_code(&proxy) {
+            warn!("No operator yet: join and type /prox claim {code} to become one");
+        }
         tokio::spawn(console(proxy.clone()));
         tokio::spawn(signals(proxy.clone()));
         let plugins = proxy.plugins.get().cloned();
@@ -379,4 +406,34 @@ async fn signals(proxy: std::sync::Arc<Proxy>) {
     }
     info!("stopping (signal)");
     proxy.stop();
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[test]
+    fn the_first_start_writes_the_default_config_once() {
+        let dir = std::env::temp_dir().join(format!("pumbo-first-start-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("pumboprox.yml");
+        let path = path.to_str().unwrap();
+        assert!(create_default(path).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            pumbo_prox::config::DEFAULT_FILE
+        );
+        assert!(dir.join("plugins").is_dir());
+        assert!(!create_default(path).unwrap(), "an existing file stays");
+        // Next to an old `.toml` nothing is written: `read` explains.
+        let old = dir.join("old.yml");
+        std::fs::write(dir.join("old.toml"), "").unwrap();
+        assert!(!create_default(old.to_str().unwrap()).unwrap());
+        assert!(
+            read(old.to_str().unwrap())
+                .unwrap_err()
+                .contains("this version reads YAML")
+        );
+    }
 }

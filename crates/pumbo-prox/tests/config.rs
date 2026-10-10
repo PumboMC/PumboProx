@@ -62,7 +62,8 @@ fn e4_sections_are_checked() {
     Config::parse(&ok).unwrap();
     for (bad, why) in [
         (
-            "forced-hosts:\n  mc.example.org: [nowhere]\n",
+            // Without servers from the proxy, every name must be in `servers`.
+            "managed-servers:\n  enabled: false\nforced-hosts:\n  mc.example.org: [nowhere]\n",
             "unknown server nowhere",
         ),
         ("commands:\n  operators: [Notch]\n", "not a UUID"),
@@ -113,4 +114,23 @@ login:
         err.contains("encrypt-offline") || err.contains("bool"),
         "{err}"
     );
+}
+
+#[test]
+fn the_default_file_is_valid() {
+    let cfg = Config::parse(pumbo_prox::config::DEFAULT_FILE).unwrap();
+    assert_eq!(cfg.listener[0].bind, "0.0.0.0:25565");
+    assert!(cfg.servers.is_empty() && cfg.try_order().is_empty());
+    assert!(cfg.managed_servers.enabled && cfg.managed_servers.download_from_game);
+    assert_eq!(cfg.forwarding.mode, "modern");
+    assert!(cfg.pumbox.enabled);
+    assert!(cfg.commands.operators.is_empty());
+    let host = pumbo_host::HostConfig::parse(pumbo_prox::config::DEFAULT_FILE).unwrap();
+    assert_eq!(host.plugins.dir, std::path::Path::new("plugins"));
+    // A server named in routing.try before the proxy made it: accepted.
+    let ahead = format!(
+        "{}routing:\n  try: [lobby]\n",
+        pumbo_prox::config::DEFAULT_FILE
+    );
+    assert_eq!(Config::parse(&ahead).unwrap().try_order(), ["lobby"]);
 }

@@ -250,6 +250,7 @@ impl Manager {
             let (pid, mut exited) = match orphan.take() {
                 Some(pid) => {
                     self.set(&name, State::Ready, Some(pid));
+                    self.changed();
                     (pid, self.watch_pid(pid))
                 }
                 None => match self.spawn(&name) {
@@ -376,6 +377,7 @@ impl Manager {
                     }
                 });
                 info!("server {name} is ready on 127.0.0.1:{port}");
+                self.changed();
                 return;
             }
         }

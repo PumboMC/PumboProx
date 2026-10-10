@@ -71,7 +71,9 @@ jobs:
               cp target/${{ matrix.target }}/release/pumboprox.exe "$dir" ;;
             macOS)
               cargo build --release --locked -p pumbo-prox --target aarch64-apple-darwin --target x86_64-apple-darwin
-              lipo -create -output "$dir/pumboprox" target/{aarch64,x86_64}-apple-darwin/release/pumboprox ;;
+              lipo -create -output "$dir/pumboprox" target/{aarch64,x86_64}-apple-darwin/release/pumboprox
+              # The Pumbo icon in Finder; tar keeps it (as extended attributes).
+              osascript -l JavaScript -e "ObjC.import('AppKit'); \$.NSWorkspace.sharedWorkspace.setIconForFileOptions(\$.NSImage.alloc.initWithContentsOfFile('$PWD/crates/pumbo-prox/pumboprox-icon.png'), '$PWD/$dir/pumboprox', 0)" ;;
           esac
           if [ "${{ matrix.run }}" = true ]; then "$dir/pumboprox" version; fi
           cp LICENSE "$dir"

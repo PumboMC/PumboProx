@@ -42,11 +42,11 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             dir: "servers".into(),
             versions_dir: "versions".into(),
             ports: "25700-25799".into(),
-            download_from_game: false,
+            download_from_game: true,
             allow_unverified: false,
             stop_timeout_secs: 30,
             templates: BTreeMap::new(),
@@ -153,8 +153,8 @@ impl Manager {
         }))
     }
 
-    /// Called after a server was created or deleted (the proxy adds it to
-    /// or removes it from its server list).
+    /// Called after a server was created, deleted or became ready (the proxy
+    /// updates its server list and lets waiting players join).
     pub fn on_change(&self, f: impl Fn() + Send + Sync + 'static) {
         let _ = self.on_change.set(Box::new(f));
     }

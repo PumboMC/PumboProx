@@ -1,0 +1,34 @@
+# PumboProx, written on the first start. Change it and type `reload` in the
+# console (listeners need a restart). Every other setting has a default.
+
+listener:
+  - bind: "0.0.0.0:25565"
+
+# Servers you run yourself. For example:
+#   lobby: { address: "127.0.0.1:25566" }
+servers: {}
+
+# Servers the proxy downloads and runs itself: /prox download, /prox servers.
+# The first one that is ready becomes the server players join.
+managed-servers:
+  enabled: true
+  download-from-game: true
+
+# Velocity modern forwarding; servers need the secret from this file.
+forwarding:
+  mode: modern
+  secret-file: forwarding.secret
+
+plugins:
+  dir: plugins
+
+# Players wait in an empty world while no server is available, and join one
+# as soon as it is ready.
+pumbox:
+  enabled: true
+
+# Player UUIDs with every proxy permission. /prox op and /prox deop edit it.
+# On a new network, without operators or servers, the console shows a code:
+# the first player to type /prox claim <code> is added here.
+commands:
+  operators: []

@@ -219,7 +219,10 @@ fn gate(proxy: &Proxy, _rt: &Runtime, op: &str, name: &str) -> Result<String, St
 
 /// Writes the edited config, reloads, and puts the old file back when the
 /// reload refuses the new one.
-fn save(proxy: &Proxy, edit: impl FnOnce(&str) -> Result<String, String>) -> Result<(), String> {
+pub(crate) fn save(
+    proxy: &Proxy,
+    edit: impl FnOnce(&str) -> Result<String, String>,
+) -> Result<(), String> {
     let path = proxy.config_path().ok_or("no config file")?.to_path_buf();
     let old = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let new = edit(&old)?;
@@ -316,9 +319,13 @@ fn show(proxy: &Proxy, rt: &Runtime, console: bool) -> Reply {
         lines.push(row(&text));
     }
     // 4. Fallback.
+    let none_left = if cfg.pumbox.enabled {
+        "they wait in the Pumbox".to_string()
+    } else {
+        format!("<v>{}", esc(&cfg.messages.no_server))
+    };
     lines.push(row(&format!(
-        "<v>4 Fallback</v>  <s>a server that stops or restarts sends its players to the next one; with none left: <v>{}",
-        esc(&cfg.messages.no_server)
+        "<v>4 Fallback</v>  <s>a server that stops or restarts sends its players to the next one; with none left: {none_left}"
     )));
     lines.push(row(&format!(
         "<s>Commands:{}",
@@ -711,6 +718,29 @@ mod tests {
             "forced-hosts:\n  a.org: [lobby]\nrouting:\n  try: [lobby]\n"
         );
         assert_eq!(set_key(&out, "forced-hosts", "x", None).unwrap(), out);
+    }
+
+    #[test]
+    fn the_first_operator_and_server_go_into_the_default_file() {
+        let text = crate::config::DEFAULT_FILE;
+        let id = "069a79f4-44e9-4726-a5be-fca90e38aaf5";
+        let out = set_key(
+            text,
+            "commands",
+            "operators",
+            Some(&flow_list(&[id.into()])),
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            text.replace("operators: []", &format!("operators: [{id}]"))
+        );
+        let out = set_key(&out, "routing", "try", Some("[arena]")).unwrap();
+        assert!(out.ends_with("routing:\n  try: [arena]\n"), "{out}");
+        let cfg = Config::parse(&out).unwrap();
+        assert_eq!(cfg.commands.operators, [id]);
+        assert_eq!(cfg.try_order(), ["arena"]);
+        assert!(out.contains("# Player UUIDs with every proxy permission."));
     }
 
     #[test]

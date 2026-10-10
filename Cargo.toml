@@ -32,7 +32,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0-beta"
+version = "0.2.5-beta"
 edition = "2024"
 rust-version = "1.96"
 license = "GPL-3.0-only"
@@ -66,6 +66,8 @@ bcrypt = { version = "0.17", default-features = false, features = ["std"] }
 bytes = "1.12"
 cfb8 = "0.8"
 ciborium = "0.2"
+# The icon and file details of pumboprox.exe, compiled in by the build script on Windows.
+embed-resource = "3.0"
 flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
 futures = "0.3"
 md-5 = "0.10"

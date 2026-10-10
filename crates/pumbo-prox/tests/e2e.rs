@@ -901,7 +901,8 @@ async fn reload_and_metrics_endpoint() {
         motd(pumbo_testclient::status(addr, module(777)).await.unwrap().1),
         "first"
     );
-    assert!(status().await.get("favicon").is_none());
+    // No server-icon.png: the Pumbo icon.
+    let pumbo = status().await["favicon"].as_str().unwrap().to_string();
     // The server icon comes with a reload, without a restart.
     let icon = path.with_extension("png");
     let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
@@ -919,7 +920,7 @@ async fn reload_and_metrics_endpoint() {
     );
     let favicon = status().await["favicon"].as_str().unwrap().to_string();
     assert!(
-        favicon.starts_with("data:image/png;base64,iVBORw0KGgo"),
+        favicon.starts_with("data:image/png;base64,iVBORw0KGgo") && favicon != pumbo,
         "{favicon}"
     );
     // A broken file keeps the old config: a value of the wrong type...

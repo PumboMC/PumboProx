@@ -661,6 +661,29 @@ async fn fallback_after_shutdown_kick_or_lost_server_and_kick_otherwise() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_lost_last_server_leaves_the_player_in_the_pumbox() {
+    let lobby = Backend::start(spec("lobby")).await;
+    let (proxy, addr) = start_proxy(&config(&[("lobby", &lobby)], "")).await;
+    let mut p = join(addr, "Alone").await;
+    lobby.ctl(Ctl::Close);
+    next_login(&mut p).await;
+    assert_eq!(p.logins[1].dimension, "pumbo:virtual");
+    assert!(
+        message(&mut p, "Lost connection to the server.").await,
+        "{:?}",
+        p.messages
+    );
+    assert!(p.disconnect.is_none());
+    // The server answers again: `/server` from the Pumbox goes there.
+    p.command("server lobby").await.unwrap();
+    next_login(&mut p).await;
+    assert_eq!(p.logins[2].dimension, "minecraft:overworld");
+    assert!(p.disconnect.is_none());
+    p.close().await;
+    proxy.stop();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn reconnect_to_the_same_server_without_a_duplicate_login() {
     let lobby = Backend::start(spec("lobby")).await;
     let (proxy, addr) = start_proxy(&config(&[("lobby", &lobby)], "")).await;

@@ -11,9 +11,12 @@ pub const DEFAULT_FAVICON: &str = "server-icon.png";
 /// leaves room for the rest.
 const FAVICON_MAX: usize = 28 * 1024;
 
+/// The Pumbo icon, shown when there is no `server-icon.png` of your own.
+const PUMBO_ICON: &[u8] = include_bytes!("pumbo-icon.png");
+
 /// `status.favicon` as the `data:` URL of the status answer. A file that is
 /// not a 64x64 PNG (what the client shows) gives a warning and no icon; a
-/// missing `server-icon.png` (the default) means no icon, quietly.
+/// missing `server-icon.png` (the default) shows the Pumbo icon.
 pub fn load_favicon(path: &str) -> Option<String> {
     if path.is_empty() {
         return None;
@@ -21,7 +24,7 @@ pub fn load_favicon(path: &str) -> Option<String> {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && path == DEFAULT_FAVICON => {
-            return None;
+            PUMBO_ICON.to_vec()
         }
         Err(e) => {
             tracing::warn!("status.favicon: {path}: {e}, the server list shows no icon");
@@ -189,5 +192,8 @@ mod tests {
             None
         );
         assert_eq!(load_favicon(""), None);
+        // No server-icon.png of your own: the Pumbo icon.
+        assert_eq!(png_size(PUMBO_ICON), Some((64, 64)));
+        assert!(load_favicon(DEFAULT_FAVICON).is_some_and(|u| u.len() <= FAVICON_MAX));
     }
 }

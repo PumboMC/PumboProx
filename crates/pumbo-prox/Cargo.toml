@@ -42,6 +42,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 
+[target.'cfg(windows)'.build-dependencies]
+embed-resource.workspace = true
+
 [dev-dependencies]
 proptest.workspace = true
 pumbo-datagen = { path = "../pumbo-datagen" }

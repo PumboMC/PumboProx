@@ -1,5 +1,5 @@
 //! The virtual world in a session (PumboAPI, §5): commands to the session,
-//! inputs from it, and the test gate.
+//! inputs from it, the test gate and the Pumbox.
 //!
 //! Whoever drives a player in a virtual world (the plugin host, the test
 //! gate) sends [`VirtualCmd`]s through the session queue ([`Proxy::send_to`])
@@ -14,7 +14,7 @@ use pumbo_virtual::physics::{FallCheck, FallParams, FallStatus};
 use pumbo_virtual::{BlockPos, Hand, Input, MapImage, Position, World, WorldOptions};
 use tokio::sync::mpsc;
 use tokio::time::{Instant, sleep_until};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::server::{Proxy, SessionCmd};
@@ -225,6 +225,74 @@ async fn test_gate(proxy: Arc<Proxy>, id: Uuid, seconds: u64) {
                     return;
                 }
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Pumbox
+
+const PUMBOX_FLOOR: i32 = 64;
+/// Where a player stands in the Pumbox: on one barrier block.
+pub const PUMBOX_SPAWN: (f64, f64, f64) = (0.5, 65.0, 0.5);
+/// One long title instead of sending it again (ticks, an hour).
+const PUMBOX_TITLE_TICKS: i32 = 72_000;
+
+/// The Pumbox: an empty world, the player on an invisible block, in
+/// adventure mode without damage (the defaults of a virtual world).
+pub(crate) fn pumbox_world() -> Arc<World> {
+    static WORLD: OnceLock<Arc<World>> = OnceLock::new();
+    WORLD
+        .get_or_init(|| {
+            let world = World::new(WorldOptions::default());
+            if let Err(e) = world.fill_layer((0, 0), (0, 0), PUMBOX_FLOOR, "minecraft:barrier") {
+                warn!("Pumbox world: {e}");
+            }
+            Arc::new(world)
+        })
+        .clone()
+}
+
+/// Drives a player in the Pumbox: the title, and commands run as on a
+/// server (`commands::run`). Ends when the player leaves the Pumbox.
+pub(crate) async fn pumbox(
+    proxy: Arc<Proxy>,
+    id: Uuid,
+    name: String,
+    mut inputs: mpsc::Receiver<PlayerInput>,
+) {
+    proxy.send_to(
+        id,
+        SessionCmd::Title {
+            title: Box::new(parse_text("&6Waiting for a server…")),
+            subtitle: Box::new(parse_text("&7You join one as soon as it is ready.")),
+            times: (10, PUMBOX_TITLE_TICKS, 20),
+        },
+    );
+    while let Some(PlayerInput { input, .. }) = inputs.recv().await {
+        let line = match input {
+            Input::Command(line) => line,
+            Input::Left => return,
+            _ => continue,
+        };
+        let say = |c: Component| proxy.send_to(id, SessionCmd::Message(Box::new(c)));
+        let source = crate::commands::Source::Player { id, server: None };
+        let Some(reply) = crate::commands::run(&proxy, &proxy.runtime(), &source, &line) else {
+            say(parse_text("&cOnly proxy commands work here."));
+            continue;
+        };
+        crate::metrics::Metrics::inc(&proxy.metrics.proxy_commands);
+        info!("{name} issued proxy command /{line}");
+        for l in reply.lines {
+            say(l);
+        }
+        if let Some(server) = reply.connect {
+            proxy.send_to(
+                id,
+                SessionCmd::Connect {
+                    server,
+                    quiet: false,
+                },
+            );
         }
     }
 }
