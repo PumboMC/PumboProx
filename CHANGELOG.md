@@ -2,6 +2,23 @@
 
 All notable changes to PumboProx, one section per release. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.5-beta] - 2026-10-10
+
+Run and play: start `pumboprox` in an empty folder, join, and set up the whole network from the game.
+
+### Added
+
+- First start: a missing `pumboprox.yml` is written with the default settings (servers from the proxy on, downloads from the game on), together with `forwarding.secret` and `plugins/`.
+- Pumbox: while no server is available, players wait in an empty virtual world on the proxy (PumboVir) instead of being kicked, also when their server goes down with no fallback. Proxy commands and Tab completion work there; as soon as a server is ready, everyone moves to it and the Pumbox is gone. `pumbox.enabled` turns it off.
+- `/prox claim <code>`: on a new network, without an operator and a server, the console shows a one-time code; the first player to type it becomes an operator. The code expires with the first server or after five wrong tries.
+- `/prox op <player|uuid>` and `/prox deop <player|uuid>` edit `commands.operators` in `pumboprox.yml`, comments kept.
+
+### Changed
+
+- The first server from the proxy that is ready while `routing.try` is empty becomes the server players join.
+- `routing.try` may name a server from the proxy that does not exist yet: a warning instead of a failed start.
+- A missing `plugins/` folder is created on every start.
+
 ## [0.2.0-beta] - 2026-10-09
 
 ### Added
@@ -42,6 +59,7 @@ All notable changes to PumboProx, one section per release. The format follows [K
 
 First public beta.
 
+[0.2.5-beta]: https://github.com/PumboMC/PumboProx/compare/v0.2.0-beta...v0.2.5-beta
 [0.2.0-beta]: https://github.com/PumboMC/PumboProx/compare/v0.1.1-beta...v0.2.0-beta
 [0.1.1-beta]: https://github.com/PumboMC/PumboProx/compare/v0.1.0-beta.1...v0.1.1-beta
 [0.1.0-beta.1]: https://github.com/PumboMC/PumboProx/releases/tag/v0.1.0-beta.1
