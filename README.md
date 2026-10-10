@@ -76,7 +76,7 @@ Bot checks and logins happen in a virtual world on the proxy, before a player re
 - **Start and join:** run `pumboprox` in an empty folder. It writes its own config, and you can join right away.
 - **The Pumbox:** with no server yet, you land in an empty world that PumboVir builds inside the proxy. From there you set up the whole network from the game, before a single server exists.
 - **`/prox claim <code>`:** the console shows a one-time code; type it and you are the operator of the network. Later, `/prox op` and `/prox deop` hand it out.
-- **First server, done:** `/prox download pumpkin`, `/prox servers new lobby`. When it is ready, everyone in the Pumbox moves there and the Pumbox is gone.
+- **First server, done:** `/prox download pumpkin`, `/prox servers new <name>`. When it is ready, everyone in the Pumbox moves there and the Pumbox is gone.
 
 ### 0.2.0-beta: servers from the proxy
 
