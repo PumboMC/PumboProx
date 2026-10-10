@@ -10,15 +10,14 @@ https://github.com/user-attachments/assets/6ae651c3-0782-4c79-ac05-6018fe869001
 
 ## Turn it on
 
-The config the proxy writes on its first start has it on, with downloads from the game too. In an older config, add this and restart the proxy:
+It is off by default. Add this to `pumboprox.yml` and restart the proxy:
 
 ```yaml
 managed-servers:
   enabled: true
-  download-from-game: true   # false: downloads from the console only
 ```
 
-Everything else has a default, listed under [Options](#options).
+That's all. Everything else has a default, listed under [Options](#options). Downloads work from the console right away; to download from the game as well, as in the video, add `download-from-game: true`.
 
 ## Download Pumpkin and create a server
 
@@ -30,16 +29,7 @@ prox download pumpkin #3           # download one (by number or tag), SHA256 che
 prox servers new arena             # created, started and added to the network
 ```
 
-Then `/server arena` in the game, and you are on it. The first server that is ready while `routing.try` is empty becomes the server players join (it is written to `routing.try`), so on a new network there is nothing else to set.
-
-## The Pumbox
-
-While no server is available, a player who joins waits in the Pumbox: an empty world on the proxy, standing on an invisible floor, with "Waiting for a server…" on screen. No fall, no damage. Commands work there, so an operator can download Pumpkin and create a server from inside it. As soon as a server is ready, everyone in the Pumbox moves there. A player whose server goes down with no fallback left waits there too.
-
-```yaml
-pumbox:
-  enabled: true    # false: players without a server are kicked, as before
-```
+Then `/server arena` in the game, and you are on it.
 
 ## Manage your servers
 
@@ -54,15 +44,15 @@ prox download stop [name]          # stop one download or all of them
 
 ## Options
 
-The config written on the first start already sets what you need. Change the rest when you need to:
+Only `enabled` has to be set. Change the rest when you need to:
 
 | Option | Default | What it does |
 | --- | --- | --- |
-| `enabled` | `false` (`true` in the config written on the first start) | Turns servers from the proxy on |
+| `enabled` | `false` | Turns servers from the proxy on |
 | `dir` | `servers` | Server folders, `servers.yml`, `templates/`, `.trash/` |
 | `versions-dir` | `versions` | Downloads, in `versions/<software>/<tag>/` |
 | `ports` | `25700-25799` | Ports for new servers, on `127.0.0.1` |
-| `download-from-game` | `false` (`true` in the config written on the first start) | Allow `/prox download` from the game; the console always can |
+| `download-from-game` | `false` | Allow `/prox download` from the game; the console always can |
 | `allow-unverified` | `false` | Accept releases without a SHA256 checksum (canary, nightly) |
 | `stop-timeout-secs` | `30` | How long a server gets after `stop` before it is killed |
 | `templates` | `default` | How new servers are made, see below |

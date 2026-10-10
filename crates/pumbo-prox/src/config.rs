@@ -10,9 +10,6 @@ use serde::Deserialize;
 
 use crate::net::Cidr;
 
-/// The config a first start writes (`pumboprox` without a config file).
-pub const DEFAULT_FILE: &str = include_str!("default-config.yml");
-
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     /// Not valid YAML, or a value of the wrong type (with line and column).
@@ -64,8 +61,6 @@ pub struct Config {
     pub virtual_world: VirtualConfig,
     #[serde(default)]
     pub tab: TabConfig,
-    #[serde(default)]
-    pub pumbox: PumboxConfig,
     /// `bridge`: PumboBridge sessions of the Pumpkin servers.
     #[serde(default)]
     pub bridge: crate::bridge::BridgeConfig,
@@ -350,20 +345,6 @@ impl Default for VirtualConfig {
             test_gate_seconds: 10,
             gate_timeout_ms: 600_000,
         }
-    }
-}
-
-/// The Pumbox: an empty world of the proxy where players wait while no
-/// server can take them, instead of a "no server" kick.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "kebab-case", default)]
-pub struct PumboxConfig {
-    pub enabled: bool,
-}
-
-impl Default for PumboxConfig {
-    fn default() -> Self {
-        Self { enabled: true }
     }
 }
 

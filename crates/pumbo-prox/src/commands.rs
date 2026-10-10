@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use pumbo_host::HelpEntry;
 use pumbo_text::Component;
-use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::server::{Proxy, Runtime, SessionCmd};
@@ -18,8 +17,7 @@ pub const NAMES: &[&str] = &["server", "glist", "send", "find", "alert", "prox"]
 
 /// `/prox` subcommands, for completion.
 const PROX_SUBS: &[&str] = &[
-    "help", "version", "reload", "plugins", "bridge", "route", "download", "servers", "op", "deop",
-    "debug",
+    "help", "version", "reload", "plugins", "bridge", "route", "download", "servers", "debug",
 ];
 
 /// The main `/prox` help: commands for players and staff, then the proxy's
@@ -109,27 +107,6 @@ const PROX_HELP: &[HelpEntry] = &[
         "Servers run by the proxy",
         "Create, start, stop, logs.\nClick, then Enter: the commands of this group.",
         Some("pumbo.proxy.servers"),
-    ),
-    entry(
-        "/prox op",
-        "<player|uuid>",
-        "Makes a player an operator",
-        "Adds the UUID to commands.operators.\nExample: /prox op Steve",
-        Some("pumbo.proxy.op"),
-    ),
-    entry(
-        "/prox deop",
-        "<player|uuid>",
-        "Takes operator away",
-        "Removes the UUID from commands.operators.",
-        Some("pumbo.proxy.op"),
-    ),
-    entry(
-        "/prox claim",
-        "<code>",
-        "Become an operator",
-        "With the code from the console, while the network has no operator and no server.",
-        Some("pumbo.proxy.claim"),
     ),
 ];
 
@@ -359,7 +336,7 @@ pub fn visible(proxy: &Proxy, rt: &Runtime, source: &Source<'_>) -> Vec<&'static
     NAMES
         .iter()
         .copied()
-        .filter(|n| allowed(proxy, rt, source, n) || (*n == "prox" && claim_open(proxy, rt)))
+        .filter(|n| allowed(proxy, rt, source, n))
         .collect()
 }
 
@@ -388,18 +365,10 @@ pub fn root(line: &str) -> String {
 /// the source may not run it (then it belongs to the backend).
 pub fn run(proxy: &Arc<Proxy>, rt: &Runtime, source: &Source<'_>, line: &str) -> Option<Reply> {
     let name = root(line);
-    let args: Vec<&str> = line.split(' ').skip(1).filter(|a| !a.is_empty()).collect();
-    // Open to everyone: the way to the first operator.
-    if name == "prox"
-        && args
-            .first()
-            .is_some_and(|a| a.eq_ignore_ascii_case("claim"))
-    {
-        return Some(claim(proxy, rt, source, args.get(1).copied()));
-    }
     if !NAMES.contains(&name.as_str()) || !allowed(proxy, rt, source, &name) {
         return None;
     }
+    let args: Vec<&str> = line.split(' ').skip(1).filter(|a| !a.is_empty()).collect();
     Some(match name.as_str() {
         "server" => server(rt, source, &args),
         "glist" => glist(proxy, rt),
@@ -442,7 +411,6 @@ fn prox(
                 .collect::<Vec<_>>()
                 .join(", ")
         )),
-        "op" | "deop" => op(proxy, rt, source, sub == "op", args.get(1).copied()),
         "reload" if !allowed(proxy, rt, source, "reload") => denied(),
         "reload" => match proxy.reload() {
             Ok(()) => crate::servers::reply("<ok>Config reloaded."),
@@ -555,152 +523,6 @@ fn denied() -> Reply {
     crate::servers::reply("<err>You do not have permission to do that.")
 }
 
-/// Wrong codes for `/prox claim` before the code stops working.
-const CLAIM_TRIES: u8 = 5;
-
-/// A new one-time code for `/prox claim` on a fresh network: no operator
-/// and no server yet. Kept in memory only, so every start has its own; the
-/// first server ends it (`Proxy::replace`).
-pub fn claim_code(proxy: &Proxy) -> Option<String> {
-    let rt = proxy.runtime();
-    if !rt.operators.is_empty() || !rt.backends.is_empty() {
-        return None;
-    }
-    let n = u32::from_be_bytes(crate::session::random_bytes::<4>().ok()?) % 1_000_000;
-    let code = format!("{n:06}");
-    *proxy.claim.lock().ok()? = Some((code.clone(), 0));
-    Some(code)
-}
-
-/// Whether `/prox claim` takes a code now.
-pub fn claim_open(proxy: &Proxy, rt: &Runtime) -> bool {
-    rt.operators.is_empty()
-        && proxy
-            .claim
-            .lock()
-            .is_ok_and(|c| c.as_ref().is_some_and(|(_, wrong)| *wrong < CLAIM_TRIES))
-}
-
-/// `/prox claim <code>`: the right code puts the player in
-/// `commands.operators` (in the file, comments stay) and is used up.
-fn claim(proxy: &Arc<Proxy>, rt: &Runtime, source: &Source<'_>, code: Option<&str>) -> Reply {
-    use crate::servers::{reply, usage};
-    let Source::Player { id, .. } = source else {
-        return reply("<err>Only players can claim. <s>Put a UUID in commands.operators instead.");
-    };
-    let mut claim = proxy
-        .claim
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let Some((right, wrong)) = claim.as_mut().filter(|_| rt.operators.is_empty()) else {
-        return reply("<s>There is nothing to claim.");
-    };
-    if *wrong >= CLAIM_TRIES {
-        return reply(
-            "<err>The code no longer works after too many wrong tries. <s>A restart of the proxy makes a new one.",
-        );
-    }
-    let Some(code) = code else {
-        return usage("/prox claim <code>");
-    };
-    if code != right.as_str() {
-        *wrong += 1;
-        if *wrong >= CLAIM_TRIES {
-            warn!(
-                "the operator code no longer works after {CLAIM_TRIES} wrong tries; restart the proxy for a new one"
-            );
-        }
-        return reply("<err>Wrong code.");
-    }
-    // Out of the lock: the save reloads, and a reload may end the code.
-    let taken = claim.take();
-    drop(claim);
-    if let Err(e) = save_operator(proxy, *id, true) {
-        if proxy.runtime().backends.is_empty()
-            && let Ok(mut c) = proxy.claim.lock()
-        {
-            *c = taken;
-        }
-        return reply(&format!("<err>Not saved: <s>{}", esc(&e)));
-    }
-    let (name, ip) = proxy
-        .players()
-        .into_iter()
-        .find(|p| p.id == *id)
-        .map(|p| (p.name, proxy.ip(p.address)))
-        .unwrap_or_default();
-    info!("{name} ({id}, {ip}) is now an operator");
-    reply("<ok>You are now an operator of this proxy.")
-}
-
-/// Adds `id` to or removes it from `commands.operators` (in the file,
-/// comments stay; a failed reload puts the old file back).
-fn save_operator(proxy: &Proxy, id: Uuid, add: bool) -> Result<(), String> {
-    crate::route::save(proxy, |text| {
-        // Keeps an operator someone wrote in the file without a reload.
-        let mut ops = crate::config::Config::parse(text)
-            .map(|c| c.commands.operators)
-            .unwrap_or_default();
-        ops.retain(|o| Uuid::parse_str(o).ok() != Some(id));
-        if add {
-            ops.push(id.to_string());
-        }
-        crate::route::set_key(
-            text,
-            "commands",
-            "operators",
-            Some(&crate::route::flow_list(&ops)),
-        )
-    })
-}
-
-/// `/prox op|deop <player|uuid>`: an online player's name or a UUID.
-fn op(proxy: &Proxy, rt: &Runtime, source: &Source<'_>, add: bool, who: Option<&str>) -> Reply {
-    use crate::servers::{reply, usage};
-    if !permitted(proxy, rt, source, "pumbo.proxy.op") {
-        return denied();
-    }
-    let Some(who) = who else {
-        return usage(if add {
-            "/prox op <player|uuid>"
-        } else {
-            "/prox deop <player|uuid>"
-        });
-    };
-    let (id, name) = match Uuid::parse_str(who) {
-        Ok(id) => match proxy.players().into_iter().find(|p| p.id == id) {
-            Some(p) => (id, p.name),
-            None => (id, id.to_string()),
-        },
-        Err(_) => match proxy.find_player(who) {
-            Some(p) => (p.id, p.name),
-            None => {
-                return reply(&format!(
-                    "<err>There is no player <v>{}</v> online. <s>Use a UUID for someone offline.",
-                    esc(who)
-                ));
-            }
-        },
-    };
-    if rt.operators.contains(&id) == add {
-        let state = if add { "already" } else { "not" };
-        return reply(&format!("<s><v>{}</v> is {state} an operator.", esc(&name)));
-    }
-    if let Err(e) = save_operator(proxy, id, add) {
-        return reply(&format!("<err>Not saved: <s>{}", esc(&e)));
-    }
-    if add {
-        info!("{name} ({id}) is now an operator");
-        reply(&format!("<ok><v>{}</v> is now an operator.", esc(&name)))
-    } else {
-        info!("{name} ({id}) is no longer an operator");
-        reply(&format!(
-            "<ok><v>{}</v> is no longer an operator.",
-            esc(&name)
-        ))
-    }
-}
-
 /// A help page of `/prox` or one of its groups, with the entries the source
 /// may use (servers from the proxy only while they are on).
 #[allow(clippy::too_many_arguments)]
@@ -715,7 +537,6 @@ pub(crate) fn help(
     page: usize,
 ) -> Reply {
     let can = |node: &str| match node.strip_prefix("pumbo.proxy.") {
-        Some("claim") => matches!(source, Source::Player { .. }) && claim_open(proxy, rt),
         Some(n) if n.starts_with("servers") => {
             proxy.servers.get().is_some() && permitted(proxy, rt, source, node)
         }
@@ -910,10 +731,8 @@ pub fn suggest(
     line: &str,
 ) -> Option<(usize, Vec<String>)> {
     let name = root(line);
-    let open = allowed(proxy, rt, source, &name);
-    let claimable =
-        name == "prox" && matches!(source, Source::Player { .. }) && claim_open(proxy, rt);
-    if !NAMES.contains(&name.as_str()) || !(open || claimable) || !line.contains(' ') {
+    if !NAMES.contains(&name.as_str()) || !allowed(proxy, rt, source, &name) || !line.contains(' ')
+    {
         return None;
     }
     let start = line.rfind(' ').map_or(0, |i| i + 1);
@@ -954,15 +773,7 @@ pub fn suggest(
             v
         }
         ("send", 1) => servers(),
-        ("prox", 0) if !open => vec!["claim".into()],
-        ("prox", 0) => {
-            let mut v: Vec<String> = PROX_SUBS.iter().map(|s| s.to_string()).collect();
-            if claimable {
-                v.push("claim".into());
-            }
-            v
-        }
-        ("prox", _) if !open => Vec::new(),
+        ("prox", 0) => PROX_SUBS.iter().map(|s| s.to_string()).collect(),
         ("prox", n) => {
             let words = after_prox();
             let w = |i: usize| {
@@ -983,7 +794,6 @@ pub fn suggest(
                 ("plugins", 1) => vec!["reload".into(), "load".into(), "unload".into()],
                 ("plugins", 2) => plugin_ids(),
                 ("bridge", 1) => vec!["key".into()],
-                ("op" | "deop", 1) => players(),
                 ("debug", 1) => vec!["perms".into(), "services".into()],
                 ("debug", 2) if w(1) == "perms" => {
                     let mut v = vec!["list".to_string()];

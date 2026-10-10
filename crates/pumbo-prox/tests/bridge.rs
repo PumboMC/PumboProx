@@ -455,7 +455,7 @@ async fn teleports_wait_for_the_client() {
         name: "Steve".into(),
         properties: Vec::new(),
     };
-    let (_guard, _rx) = s.proxy.register_player(&profile, s.addr).unwrap();
+    let (_guard, _rx) = s.proxy.register_player(&profile).unwrap();
     let gate = s.proxy.teleport_gate(player).unwrap();
     gate.send_replace(Tp::Awaiting(3));
     let tp = |x: f64| api::Teleport {
@@ -504,7 +504,7 @@ async fn a_held_teleport_expires() {
         name: "Alex".into(),
         properties: Vec::new(),
     };
-    let (_guard, _rx) = s.proxy.register_player(&profile, s.addr).unwrap();
+    let (_guard, _rx) = s.proxy.register_player(&profile).unwrap();
     s.proxy
         .teleport_gate(player)
         .unwrap()

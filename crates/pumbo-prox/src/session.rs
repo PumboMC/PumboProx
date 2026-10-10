@@ -617,7 +617,7 @@ async fn login(
             .await
             .map_err(|t| Fail::Kick(Box::new(t)))?;
     }
-    let Some((guard, cmds)) = proxy.register_player(&profile, peer) else {
+    let Some((guard, cmds)) = proxy.register_player(&profile) else {
         return Err(kick("You are already connected to this proxy."));
     };
     Metrics::inc(if online {

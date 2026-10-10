@@ -132,44 +132,16 @@ pub fn start_with(proxy: &Arc<Proxy>, sources: Vec<Arc<dyn Source>>) -> Result<(
     .map_err(|e| format!("managed-servers: {e}"))?;
     let weak = Arc::downgrade(proxy);
     manager.on_change(move || {
-        let Some(p) = weak.upgrade() else {
-            return;
-        };
-        if let Err(e) = p.refresh() {
+        if let Some(p) = weak.upgrade()
+            && let Err(e) = p.refresh()
+        {
             warn!("server list not updated: {e}");
         }
-        first_ready(&p);
     });
     let _ = proxy.servers.set(manager.clone());
     proxy.refresh()?;
     manager.boot();
     Ok(())
-}
-
-/// With `routing.try` empty, the first server of the proxy that is ready
-/// goes there (in the file, comments stay), so players can join it.
-fn first_ready(proxy: &Proxy) {
-    let (Some(m), Some(_)) = (proxy.servers.get(), proxy.config_path()) else {
-        return;
-    };
-    // Two servers ready at once: the second sees the first in the list.
-    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if !proxy.runtime().config.try_order().is_empty() {
-        return;
-    }
-    let Some(name) = m.entries().into_keys().find(|n| m.state(n) == State::Ready) else {
-        return;
-    };
-    let order = crate::route::flow_list(std::slice::from_ref(&name));
-    match crate::route::save(proxy, |text| {
-        crate::route::set_key(text, "routing", "try", Some(&order))
-    }) {
-        Ok(()) => info!("{name} is ready: added to routing.try, players join it now"),
-        Err(e) => warn!("{name} not added to routing.try: {e}"),
-    }
 }
 
 /// The forwarding secret and the bridge for the files of new servers.

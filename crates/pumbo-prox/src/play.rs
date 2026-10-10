@@ -24,8 +24,8 @@ use pumbo_core::routing::{BackendInfo, SelectContext, SelectReason};
 use pumbo_core::translate::TranslationPlan;
 use pumbo_protocol::packets;
 use pumbo_protocol::packets::commands::{
-    Commands, FLAG_EXECUTABLE, FLAG_SUGGESTIONS, NODE_ARGUMENT, NODE_LITERAL, NODE_ROOT, Node,
-    Parser, ParserProperties,
+    Commands, FLAG_EXECUTABLE, FLAG_SUGGESTIONS, NODE_ARGUMENT, NODE_LITERAL, Node, Parser,
+    ParserProperties,
 };
 use pumbo_protocol::packets::common::{
     self as pc, ClearDialog, ClientboundCustomPayload, CustomClickAction, CustomReportDetails,
@@ -325,9 +325,6 @@ struct Play<'a> {
     enter_on_ack: Option<Enter>,
     /// The server a virtual world was entered from; release goes back there.
     return_to: Option<String>,
-    /// In the Pumbox (or on the way there) since this runtime: a newer one
-    /// lets the player try the servers again.
-    pumbox: Option<Arc<Runtime>>,
     own_keep_alive_at: Instant,
     /// Next render of the `tab` header and footer.
     next_tab: Instant,
@@ -404,7 +401,6 @@ pub(crate) async fn run(
         gate_deadline: None,
         enter_on_ack: None,
         return_to: None,
-        pumbox: None,
         own_keep_alive_at: now,
         next_tab: now,
         pending_kick: None,
@@ -446,11 +442,7 @@ pub(crate) async fn run(
         });
         play.run().await
     } else if candidates.is_empty() {
-        let text = play.no_server_text();
-        match play.wait_in_pumbox(text) {
-            Some(end) => end,
-            None => play.run().await,
-        }
+        End::Kick(Box::new(play.no_server_text()))
     } else {
         play.request = Some(Request {
             purpose: Purpose::Join,
@@ -499,7 +491,6 @@ impl Play<'_> {
         let m = self.proxy.metrics.clone();
         let idle = Duration::from_millis(self.rt.config.limits.idle_timeout_ms);
         let mut shutdown = self.proxy.shutdown_signal();
-        let mut changes = self.proxy.runtime_changes();
         loop {
             self.follow_runtime();
             if let Err(end) = self.progress() {
@@ -557,8 +548,6 @@ impl Play<'_> {
                         return end;
                     }
                 }
-                // The Pumbox waits for a new server list (`progress`).
-                _ = changes.changed(), if self.pumbox.is_some() => {}
                 () = sleep_until(deadline) => {
                     if let Some(end) = self.timers(idle) {
                         return end;
@@ -671,26 +660,6 @@ impl Play<'_> {
     /// Moves the state machine on: attaches a ready server to a client in
     /// configuration, or sends a playing client to configuration.
     fn progress(&mut self) -> Result<(), End> {
-        // A new server list: a player in the Pumbox tries the servers again.
-        if self.waiting()
-            && let Some(seen) = &self.pumbox
-            && !Arc::ptr_eq(seen, &self.rt)
-        {
-            self.pumbox = Some(self.rt.clone());
-            let candidates = self.candidates(SelectReason::InitialJoin, None);
-            if !candidates.is_empty() {
-                self.request = Some(Request {
-                    purpose: Purpose::Join,
-                    candidates,
-                    target: String::new(),
-                    refusal: None,
-                    redirects: 0,
-                });
-                if let Some(end) = self.try_next() {
-                    return Err(end);
-                }
-            }
-        }
         let ready = matches!(self.next, Next::Ready { .. });
         if self.ack_deadline.is_some() {
             return Ok(());
@@ -811,7 +780,6 @@ impl Play<'_> {
             .map(|r| r.target.clone())
             .unwrap_or_default();
         self.drop_backend();
-        self.pumbox = None;
         self.epoch += 1;
         self.own_keep_alive = None;
         let server = self.rt.config.servers.get(&name);
@@ -909,7 +877,7 @@ impl Play<'_> {
     /// "No server" text; names the versions when no server speaks the client's.
     fn no_server_text(&self) -> Component {
         let msgs = &self.rt.config.messages;
-        if self.rt.backends.is_empty() || self.rt.backends.iter().any(|b| self.reachable(b)) {
+        if self.rt.backends.iter().any(|b| self.reachable(b)) {
             return parse_text(&msgs.no_server);
         }
         let mut protocols: Vec<_> = self.rt.backends.iter().filter_map(|b| b.protocol).collect();
@@ -996,8 +964,6 @@ impl Play<'_> {
                 }
                 None
             }
-            // A player from the Pumbox goes back there.
-            _ if self.pumbox.is_some() => self.wait_in_pumbox(text),
             // The client already left its server.
             Purpose::Switch { .. } | Purpose::Reconnect => self.fallback(Some(req.target), text),
             Purpose::Join => Some(End::Kick(Box::new(text))),
@@ -1009,7 +975,7 @@ impl Play<'_> {
     fn fallback(&mut self, from: Option<String>, reason: Component) -> Option<End> {
         let candidates = self.candidates(SelectReason::Fallback, from.as_deref());
         if candidates.is_empty() {
-            return self.wait_in_pumbox(reason);
+            return Some(End::Kick(Box::new(reason)));
         }
         Metrics::inc(&self.proxy.metrics.fallbacks);
         self.request = Some(Request {
@@ -1183,7 +1149,7 @@ impl Play<'_> {
         if current.as_deref() == Some(target) {
             return Err(format!("&cYou are already connected to {target}."));
         }
-        if !self.on_server() && !self.waiting() {
+        if !self.on_server() {
             return Err("&cYou are already connecting to a server.".into());
         }
         let Some(info) = self.rt.backends.iter().find(|b| b.name == target) else {
@@ -1537,12 +1503,6 @@ impl Play<'_> {
     /// The command tree again, merged with the commands this player may use
     /// now (§5.8.4: after a permission or context change).
     fn resend_commands(&mut self) {
-        if self.waiting() && self.in_play() && self.client_phase == Phase::Play {
-            if let Err(e) = self.pumbox_tree() {
-                debug!("command tree: {e:?}");
-            }
-            return;
-        }
         if !self.on_server() {
             return;
         }
@@ -1624,8 +1584,6 @@ impl Play<'_> {
             inputs,
         } = cmd
         {
-            // Another driver takes the player out of the Pumbox.
-            self.pumbox = None;
             let enter = Enter {
                 world,
                 at,
@@ -1729,7 +1687,7 @@ impl Play<'_> {
             candidates.push_front(back);
         }
         if candidates.is_empty() {
-            return self.wait_in_pumbox(self.no_server_text());
+            return Some(End::Kick(Box::new(self.no_server_text())));
         }
         self.request = Some(Request {
             purpose: Purpose::Join,
@@ -1739,105 +1697,6 @@ impl Play<'_> {
             redirects: 0,
         });
         self.try_next()
-    }
-
-    /// No server can take the player: the Pumbox, an empty world of the
-    /// proxy, until the server list changes. A kick with `text` when the
-    /// Pumbox is off or no server speaks the client's version.
-    fn wait_in_pumbox(&mut self, text: Component) -> Option<End> {
-        let unsupported =
-            !self.rt.backends.is_empty() && !self.rt.backends.iter().any(|b| self.reachable(b));
-        if !self.rt.config.pumbox.enabled || unsupported {
-            return Some(End::Kick(Box::new(text)));
-        }
-        let was = self.pumbox.replace(self.rt.clone());
-        if was.is_none() {
-            info!(
-                "{} waits in the Pumbox: {}",
-                self.player.profile.name,
-                text.plain_text()
-            );
-        }
-        self.say(text);
-        if was.is_some() && (self.vworld.is_some() || self.enter_on_ack.is_some()) {
-            return None;
-        }
-        let e = self.pumbox_enter();
-        let fresh = self.backend.is_none()
-            && self.client_phase == Phase::Configuration
-            && self.out_phase == Phase::Configuration
-            && matches!(self.next, Next::Idle);
-        let mut out = Vec::new();
-        match self.vworld.as_mut() {
-            // From a gate's world.
-            Some(v) => {
-                v.inputs = e.inputs;
-                v.tag = e.tag;
-                if let Err(err) = v.player.change_world(e.world, e.at, e.commands, &mut out) {
-                    return Some(self.virtual_failed(&err));
-                }
-                let end = self.queue_virtual(out).err();
-                self.resend_commands();
-                end
-            }
-            None if fresh => self.enter_now(e).err(),
-            // Through configuration first (§5.2).
-            None => {
-                self.enter_on_ack = Some(e);
-                None
-            }
-        }
-    }
-
-    /// The Pumbox world with its driver (`world::pumbox`).
-    fn pumbox_enter(&self) -> Enter {
-        let id = self.player.profile.id;
-        let (tx, rx) = mpsc::channel(64);
-        let name = self.player.profile.name.clone();
-        tokio::spawn(crate::world::pumbox(self.proxy.clone(), id, name, rx));
-        let (x, y, z) = crate::world::PUMBOX_SPAWN;
-        Enter {
-            world: crate::world::pumbox_world(),
-            at: pumbo_virtual::Position::at(x, y, z),
-            // The session sends the proxy commands' tree (`pumbox_tree`).
-            commands: Vec::new(),
-            tag: 0,
-            inputs: tx,
-        }
-    }
-
-    /// The proxy commands this player may use, as on a server: the Pumbox
-    /// runs them (`world::pumbox`) and answers their Tab completion.
-    fn pumbox_tree(&mut self) -> Result<(), Fail> {
-        let source = Source::Player {
-            id: self.player.profile.id,
-            server: None,
-        };
-        let names = commands::visible(self.proxy, &self.rt, &source)
-            .into_iter()
-            .map(|n| (n.to_string(), Vec::new()))
-            .collect();
-        let mut tree = Commands {
-            nodes: vec![Node {
-                flags: NODE_ROOT,
-                children: Vec::new(),
-                redirect: None,
-                name: None,
-                parser: None,
-                suggestions: None,
-            }],
-            root: 0,
-        };
-        add_literals(&*self.module, &mut tree, 0, names)?;
-        queue_out(&mut self.client, &*self.module, Phase::Play, &tree)
-    }
-
-    /// In the Pumbox with nothing going on.
-    fn waiting(&self) -> bool {
-        self.pumbox.is_some()
-            && self.vworld.is_some()
-            && self.request.is_none()
-            && matches!(self.next, Next::Idle)
     }
 
     /// A client frame while in a virtual world.
@@ -1877,10 +1736,6 @@ impl Play<'_> {
             Some(PacketKind::CommandSuggestion) => {
                 if !self.suggestions.take(1.0) {
                     Metrics::inc(&self.proxy.metrics.dropped_suggestions);
-                } else if self.pumbox.is_some() && phase == Phase::Play {
-                    // Proxy commands complete as on a server; a gate's do not.
-                    let s: CommandSuggestion = packets::decode(&f.payload, &sb)?;
-                    self.suggest(&s)?;
                 }
                 return Ok(Step::Drop);
             }
@@ -1912,7 +1767,6 @@ impl Play<'_> {
         }
         if handled == Handled::Joined {
             debug!("{}: in the virtual world", self.player.profile.name);
-            self.resend_commands();
             self.after_join();
         }
         Ok(Step::Drop)
@@ -2078,9 +1932,7 @@ impl Play<'_> {
             }
             (Phase::Play, Some(PacketKind::ConfigurationAcknowledged)) => {
                 self.client_phase = Phase::Configuration;
-                // Or the lost server's own `start_configuration`, with the Pumbox to enter.
-                let waited = self.backend.is_none() && self.enter_on_ack.is_some();
-                if self.ack_deadline.take().is_some() || waited {
+                if self.ack_deadline.take().is_some() {
                     return Ok(match self.after_ack() {
                         Some(end) => Step::End(end),
                         None => Step::Drop,
@@ -2801,8 +2653,44 @@ impl Play<'_> {
         if let Some(b) = self.backend.as_mut() {
             b.roots = Some(roots);
         }
-        if names.is_empty() || !add_literals(m, &mut tree, root_at, names)? {
+        let string = (0..1024).find(|i| m.command_argument_type(*i) == Some("brigadier:string"));
+        let (Some(string), false) = (string, names.is_empty()) else {
             return Ok(Step::Forward);
+        };
+        // A literal with a greedy string after it that asks the server for suggestions.
+        let literal = |tree: &mut Commands, name: String, mut children: Vec<i32>| {
+            let arg = i32::try_from(tree.nodes.len()).map_err(|_| Fail::Protocol("tree".into()))?;
+            tree.nodes.push(Node {
+                flags: NODE_ARGUMENT | FLAG_EXECUTABLE | FLAG_SUGGESTIONS,
+                children: Vec::new(),
+                redirect: None,
+                name: Some(commands::arg_name(&name).into()),
+                parser: Some(Parser {
+                    id: string,
+                    properties: ParserProperties::String(2),
+                }),
+                suggestions: Some("minecraft:ask_server".into()),
+            });
+            children.insert(0, arg);
+            tree.nodes.push(Node {
+                flags: NODE_LITERAL | FLAG_EXECUTABLE,
+                children,
+                redirect: None,
+                name: Some(name),
+                parser: None,
+                suggestions: None,
+            });
+            Ok::<i32, Fail>(arg + 1)
+        };
+        for (name, subs) in names {
+            let subs = subs
+                .into_iter()
+                .map(|s| literal(&mut tree, s, Vec::new()))
+                .collect::<Result<Vec<_>, _>>()?;
+            let at = literal(&mut tree, name, subs)?;
+            if let Some(root) = tree.nodes.get_mut(root_at) {
+                root.children.push(at);
+            }
         }
         queue_out(&mut self.client, m, Phase::Play, &tree)?;
         Ok(Step::Drop)
@@ -2877,56 +2765,6 @@ fn releases(names: &[String]) -> String {
         (Some(a), _) => a.clone(),
         _ => "?".into(),
     }
-}
-
-/// Adds `names` (with their subcommands) under the root at `root_at` (§2.8):
-/// each a literal with a greedy string after it that asks the server for
-/// suggestions. False when this version has no string argument.
-fn add_literals(
-    m: &dyn VersionModule,
-    tree: &mut Commands,
-    root_at: usize,
-    names: Vec<(String, Vec<String>)>,
-) -> Result<bool, Fail> {
-    let Some(string) = (0..1024).find(|i| m.command_argument_type(*i) == Some("brigadier:string"))
-    else {
-        return Ok(false);
-    };
-    let literal = |tree: &mut Commands, name: String, mut children: Vec<i32>| {
-        let arg = i32::try_from(tree.nodes.len()).map_err(|_| Fail::Protocol("tree".into()))?;
-        tree.nodes.push(Node {
-            flags: NODE_ARGUMENT | FLAG_EXECUTABLE | FLAG_SUGGESTIONS,
-            children: Vec::new(),
-            redirect: None,
-            name: Some(commands::arg_name(&name).into()),
-            parser: Some(Parser {
-                id: string,
-                properties: ParserProperties::String(2),
-            }),
-            suggestions: Some("minecraft:ask_server".into()),
-        });
-        children.insert(0, arg);
-        tree.nodes.push(Node {
-            flags: NODE_LITERAL | FLAG_EXECUTABLE,
-            children,
-            redirect: None,
-            name: Some(name),
-            parser: None,
-            suggestions: None,
-        });
-        Ok::<i32, Fail>(arg + 1)
-    };
-    for (name, subs) in names {
-        let subs = subs
-            .into_iter()
-            .map(|s| literal(tree, s, Vec::new()))
-            .collect::<Result<Vec<_>, _>>()?;
-        let at = literal(tree, name, subs)?;
-        if let Some(root) = tree.nodes.get_mut(root_at) {
-            root.children.push(at);
-        }
-    }
-    Ok(true)
 }
 
 #[cfg(test)]

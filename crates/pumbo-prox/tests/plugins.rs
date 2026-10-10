@@ -393,25 +393,3 @@ async fn gate_messages_before_play_are_kept() {
         p.close().await;
     }
 }
-
-/// Every start makes a missing plugin directory: the host runs and
-/// `prox plugins load` has a place.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_missing_plugin_directory_is_created() {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("pumbo-e5-created-{}", std::process::id()))
-        .join("plugins");
-    assert!(!dir.exists());
-    let text = format!(
-        "listener:\n  - bind: \"127.0.0.1:0\"\nforwarding:\n  mode: none\nplugins:\n  dir: {:?}\n",
-        dir.display().to_string()
-    );
-    let (proxy, _) = start_proxy(&text).await;
-    let plugins = Plugins::start(&text, &proxy, Vec::new())
-        .await
-        .unwrap()
-        .expect("plugin host");
-    assert!(dir.is_dir());
-    assert!(plugins.host.plugins().is_empty());
-    proxy.stop();
-}

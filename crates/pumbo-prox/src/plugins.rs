@@ -244,16 +244,14 @@ pub fn connection(peer: SocketAddr, virtual_host: &str, protocol: i32) -> w::Con
 }
 
 impl Plugins {
-    /// Starts the host, creating the plugin directory if it is missing (so
-    /// `prox plugins load` has a place); `None` if it cannot be created.
+    /// Starts the host when the plugin directory exists; `None` otherwise.
     pub async fn start(
         config_text: &str,
         proxy: &Arc<Proxy>,
         natives: Vec<pumbo_host::Native>,
     ) -> Result<Option<Arc<Plugins>>, String> {
         let cfg = HostConfig::parse(config_text).map_err(|e| e.to_string())?;
-        if let Err(e) = std::fs::create_dir_all(&cfg.plugins.dir) {
-            tracing::warn!("{}: {e}", cfg.plugins.dir.display());
+        if !cfg.plugins.dir.is_dir() {
             return Ok(None);
         }
         let bridge = Arc::new(SessionBridge::default());

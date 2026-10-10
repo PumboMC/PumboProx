@@ -9,7 +9,7 @@
 Pick one:
 
 - **Download** the file for your system from [Releases](https://github.com/PumboMC/PumboProx/releases/latest): Linux (x86_64 and ARM64, also static builds), Windows (x86_64 and ARM64) or macOS. Unpack it and you have the `pumboprox` program.
-- **Docker**: an image for `linux/amd64` and `linux/arm64`, `ghcr.io/pumbomc/pumboprox:<version>` (`latest` is the newest stable release). It holds only the program and runs as a non-root user. Mount a directory as `/data`: the proxy writes its config, secrets, data and `plugins/` there on the first start.
+- **Docker**: an image for `linux/amd64` and `linux/arm64`, `ghcr.io/pumbomc/pumboprox:<version>` (`latest` is the newest stable release). It holds only the program and runs as a non-root user. Put `pumboprox.yml` into a directory and mount it as `/data`; whatever the proxy writes (secrets, data, `plugins/`) lands there too.
 
   ```sh
   mkdir pumbo && cd pumbo        # pumboprox.yml goes here
@@ -27,95 +27,31 @@ Pick one:
   cargo build --release -p pumbo-prox
   ```
 
-## 2. Start it
+## 2. Configure it
 
-On macOS, unblock the downloaded files once with `xattr -dr com.apple.quarantine .` in the unpacked folder.
-
-```sh
-./pumboprox          # Windows: pumboprox.exe; Docker starts it for you
-```
-
-On the first start the proxy writes everything it needs next to itself: `pumboprox.yml` with the default settings, `forwarding.secret` and an empty `plugins/`. The console then works right away.
-
-## 3. Become an operator
-
-A new network has no operator. The console shows a one-time code:
-
-```
-No operator yet: join and type /prox claim 482193 to become one
-```
-
-Join (`localhost`, or the machine's address) and type `/prox claim 482193`. You are added to `commands.operators` in `pumboprox.yml`. The code works only while the network has no operator and no server, and expires when the first server appears. Later, `prox op <player>` and `prox deop <player>` in the console (or the game) add and remove operators.
-
-## 4. Get a server
-
-Without a server, players wait in the **Pumbox**, an empty world on the proxy. From the game or the console:
-
-```
-/prox download pumpkin          # the releases, newest first
-/prox download pumpkin #1       # downloads one, SHA256 checked
-/prox servers new lobby         # creates and starts it
-```
-
-When `lobby` is ready, it becomes the server players join, and everyone in the Pumbox moves there. More servers: `/prox servers new arena`, then `/server arena`. All of it in [Servers from the proxy](servers.md).
-
-## 5. Add plugins
-
-Put the `.wasm` files into `plugins/` and restart the proxy. Each plugin creates its folder with a commented `config.yml` on its first start.
-
-<img src="../assets/pumbo-plugins.png" alt="/pumbo in the game: pumbo-auth, pumbo-bans, pumbo-filter and pumbo-perms 0.1.0, all running" width="100%">
-
-## The config
-
-The file written on the first start:
+`pumboprox.yml`:
 
 ```yaml
-# PumboProx, written on the first start. Change it and type `reload` in the
-# console (listeners need a restart). Every other setting has a default.
-
 listener:
   - bind: "0.0.0.0:25565"
-
-# Servers you run yourself. For example:
-#   lobby: { address: "127.0.0.1:25566" }
-servers: {}
-
-# Servers the proxy downloads and runs itself: /prox download, /prox servers.
-# The first one that is ready becomes the server players join.
-managed-servers:
-  enabled: true
-  download-from-game: true
-
-# Velocity modern forwarding; servers need the secret from this file.
+status:
+  motd: "&6My network"
+  max-players: 100
+login:
+  online-mode: per-player      # per-player | true | false
+servers:
+  lobby:    { address: "127.0.0.1:25566", protocol: 777 }
+  survival: { address: "127.0.0.1:25567", protocol: 777 }
+routing:
+  try: [lobby]
 forwarding:
-  mode: modern
+  mode: modern                 # modern | none (none: tests only)
   secret-file: forwarding.secret
-
 plugins:
   dir: plugins
-
-# Players wait in an empty world while no server is available, and join one
-# as soon as it is ready.
-pumbox:
-  enabled: true
-
-# Player UUIDs with every proxy permission. /prox op and /prox deop edit it.
-# On a new network, without operators or servers, the console shows a code:
-# the first player to type /prox claim <code> is added here.
-commands:
-  operators: []
 ```
 
-Change it and type `reload` in the console. Every command is in [Commands](commands.md), with permissions.
-
-## Your own Pumpkin servers
-
-Servers you run yourself go into `servers:`:
-
-```yaml
-servers:
-  lobby: { address: "127.0.0.1:25566", protocol: 777 }
-```
+## 3. Point your Pumpkin servers at it
 
 > [!TIP]
 > Run your servers on Pumpkin 0.2.0 (Minecraft 26.3): then players on every version from 1.21 to 26.3 can join.
@@ -131,4 +67,36 @@ enabled = true
 secret = "<contents of forwarding.secret>"
 ```
 
-On Pumpkin 0.2.0, read the [warning under Important](../README.md#important) first. Servers the proxy runs for you get all of this on their own.
+On Pumpkin 0.2.0, read the [warning under Important](../README.md#important) first.
+
+Servers the proxy runs for you get all of this on their own: see [Servers from the proxy](servers.md).
+
+## 4. Start it
+
+```sh
+./pumboprox run pumboprox.yml     # Docker starts it for you
+```
+
+## 5. Add plugins
+
+Put the `.wasm` files into `plugins/` and restart the proxy, or load them with `/prox plugins load <id>`.
+
+<img src="../assets/pumbo-plugins.png" alt="/pumbo in the game: pumbo-auth, pumbo-bans, pumbo-filter and pumbo-perms 0.1.0, all running" width="100%">
+
+## 6. Give out permissions
+
+Permissions live in `permissions.yml`, with server, group and global contexts. With PumboPerms you manage them from the game instead. Every command and its permission: [Commands](commands.md).
+
+```yaml
+groups:
+  default:
+    permissions: [pumbo.proxy.server]
+  staff:
+    inherits: [default]
+    permissions:
+      - "pumbo.proxy.*"
+      - "pumbo.bans.*"
+players:
+  Steve:
+    groups: [staff]
+```
