@@ -11,6 +11,10 @@
   <img src="https://img.shields.io/badge/plugins-WebAssembly-654FF0?logo=webassembly&logoColor=white" alt="WebAssembly plugins">
   <img src="https://img.shields.io/badge/status-beta-yellow" alt="Status: beta">
   <img src="https://img.shields.io/badge/telemetry-none-brightgreen" alt="No telemetry">
+  <a href="https://discord.gg/CNptMEDts">
+  <img src="https://img.shields.io/badge/Join%20us%20on%20Discord!-5865F2?logo=discord&logoColor=white" alt="Join us on Discord!">
+</a>
+
 </p>
 
 <p align="center">
