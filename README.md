@@ -168,6 +168,19 @@ Every change: [changelog](CHANGELOG.md).
 | 🏠<br>**PumboCore** | Everyday essentials: `/home`, `/spawn`, `/tp` and more | 🔜 | 🔜 | ![coming soon](https://img.shields.io/badge/-coming%20soon-lightgrey) |
 | 🏰<br>**PumboGuard** | Region protection, managed from the proxy | 🔜 | 🔜 | ![coming soon](https://img.shields.io/badge/-coming%20soon-lightgrey) |
 
+
+## Plugins work together
+
+You don't wire anything up. Each Pumbo plugin looks for the others when it starts and uses what it finds. Take one away and the rest keep running on their own.
+
+| When you have | What happens |
+| --- | --- |
+| **PumboFilter + PumboAuth** | A new player passes the bot check and goes straight to the login, in the same connection, with no reconnect screen. |
+| **PumboFilter + PumboBans** | Addresses that keep failing the bot check get a temporary IP ban through PumboBans (`auto-ban` in the config). |
+| **PumboBans + PumboAuth** | A ban ends the player's login sessions, so after the ban is lifted they type their password again. |
+| **PumboPerms on the proxy + PumboBridge** | Ranks you set on the proxy with `/pp` apply on every server right away. A PumboPerms that also runs on a server steps back and lets the proxy decide. |
+| **Any plugin + PumboBridge** | The plugin can teleport players within a server's world, change game modes or open inventories on any server, and read `%server_tps:lobby%` and other placeholders. |
+
 <p align="center"><sub>Want to write your own? See the <a href="docs/writing-plugins.md">plugin SDK</a> (MIT/Apache-2.0, any license for your plugin).</sub></p>
 
 ### How it fits together
