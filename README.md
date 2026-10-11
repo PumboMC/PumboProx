@@ -154,6 +154,14 @@ Every change: [changelog](CHANGELOG.md).
 
 <p align="center">Every plugin keeps its logic in one place and comes in two builds:<br>one for the proxy (the whole network) and one for a plain Pumpkin server.</p>
 
+
+> **Plugin Version Compatibility**
+
+
+> Every Pumbo plugin comes in two builds: **Proxy** (network-wide functionality) and **Standalone** (individual Pumpkin servers).
+
+> ⚠️ To run Pumbo plugins on a proxy and enable network-wide functionality, you **must download the `-proxy` version** from the latest GitHub release of the plugin's repository. Inside Pumkin you can run a standalone versions from market or use any other. 
+
 | Plugin | What it does | Proxy | Pumpkin | Status |
 | :---: | --- | :---: | :---: | --- |
 | 🛡️<br>[**PumboFilter**](https://github.com/PumboMC/PumboFilter) | Anti-bot checks in a virtual world | ✅ | ✅ | ![beta](https://img.shields.io/badge/-beta-orange) |
