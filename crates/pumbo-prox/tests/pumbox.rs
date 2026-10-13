@@ -293,6 +293,38 @@ async fn a_player_without_permissions_claims_from_the_pumbox() {
     proxy.stop();
 }
 
+/// Changes of a player's commands reach the session also when its queue is
+/// full, and a series of them is one rebuild of the tree.
+#[tokio::test]
+async fn commands_changed_survives_full_queue() {
+    let (proxy, addr) = common::start_proxy_at(BASE, Some(file("queue", BASE))).await;
+    let mut p = Player::join(addr, module(777), JoinOptions::new("Alex"))
+        .await
+        .unwrap();
+    assert!(p.pump(WAIT, |p| p.commands.is_some()).await.unwrap());
+    p.pump(Duration::from_millis(500), |_| false).await.unwrap();
+    let trees = |p: &Player| {
+        p.kinds
+            .iter()
+            .filter(|(_, k)| *k == pumbo_protocol::PacketKind::Commands)
+            .count()
+    };
+    let before = trees(&p);
+    let id = pumbo_identity::offline_uuid("Alex");
+    // One runtime thread: the session cannot drain the queue meanwhile.
+    while proxy.send_to(id, pumbo_prox::server::SessionCmd::ClearTitle) {}
+    assert!(proxy.commands_changed(id));
+    assert!(proxy.commands_changed(id));
+    assert!(
+        p.pump(WAIT, |p| trees(p) > before).await.unwrap(),
+        "no rebuild"
+    );
+    p.pump(Duration::from_secs(1), |_| false).await.unwrap();
+    assert_eq!(trees(&p), before + 1, "two changes, one rebuild");
+    p.close().await;
+    proxy.stop();
+}
+
 #[test]
 fn no_code_when_the_network_has_a_server() {
     let text = format!("{BASE}servers:\n  lobby: {{ address: \"127.0.0.1:1\" }}\n");

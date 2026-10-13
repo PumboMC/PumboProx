@@ -20,10 +20,13 @@ use crate::wit::services::{CallOptions, CallReject, ServiceError, ServiceRef};
 
 /// Payload limit of a call, both ways.
 pub const MAX_PAYLOAD: usize = 256 * 1024;
+/// Limit of a request the host sends itself: `permissions.yml` handed to the
+/// permission provider grows with the players listed in it.
+pub const MAX_HOST_PAYLOAD: usize = 16 * 1024 * 1024;
 /// Payload limit of a bus event.
 pub const MAX_EVENT: usize = 64 * 1024;
 /// Caller id of calls the host makes itself.
-pub const HOST_CALLER: &str = "proxy";
+pub use pumbo_contracts::HOST as HOST_CALLER;
 
 /// A service the host provides itself (e.g. `pumbo:bridge`, answered by the
 /// proxy's bridge module). Calls get the caller's plugin id; the host
@@ -387,6 +390,11 @@ impl HostInner {
         let Some(u) = self.uses_of(caller, &service) else {
             return Err(ServiceError::NotDeclared);
         };
+        if service == pumbo_contracts::PERMISSIONS.name
+            && pumbo_contracts::PERMISSIONS_HOST_ONLY.contains(&method.as_str())
+        {
+            return Err(ServiceError::NotDeclared);
+        }
         let (major, minor) = parse_version(&u.version).ok_or(ServiceError::Incompatible)?;
         self.call_service(&caller.id, &service, major, minor, method, payload, opts)
             .await
@@ -404,7 +412,12 @@ impl HostInner {
         payload: Vec<u8>,
         opts: CallOptions,
     ) -> Result<Vec<u8>, ServiceError> {
-        if payload.len() > MAX_PAYLOAD {
+        let limit = if caller == HOST_CALLER {
+            MAX_HOST_PAYLOAD
+        } else {
+            MAX_PAYLOAD
+        };
+        if payload.len() > limit {
             return Err(ServiceError::TooLarge);
         }
         let s = &self.services;
@@ -520,6 +533,16 @@ impl HostInner {
             Err(CallError::Overloaded) => Err(ServiceError::Overloaded),
             Err(CallError::Unavailable) => Err(ServiceError::Unavailable),
             Err(CallError::Failed(_)) => Err(ServiceError::ProviderFailed),
+        }
+    }
+
+    /// Drops cached `has-offline` answers of one player, or all of them.
+    pub(crate) fn forget_offline(&self, uuid: Option<uuid::Uuid>) {
+        if let Ok(mut cache) = self.services.offline.lock() {
+            match uuid {
+                Some(u) => cache.retain(|(k, _, _), _| *k != u),
+                None => cache.clear(),
+            }
         }
     }
 

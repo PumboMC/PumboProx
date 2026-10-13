@@ -261,6 +261,11 @@ pub struct PermSet {
     pub nodes: BTreeMap<String, bool>,
     #[serde(default)]
     pub extra: BTreeMap<String, bool>,
+    /// What the permission provider shows for the player on this server
+    /// (its own JSON, for PumboPerms the answer of its `info` IPC request
+    /// without `ok`); `None` while the proxy has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub info: Option<String>,
 }
 
 /// `perms-export` (proxy only): the proxy's permission table in this

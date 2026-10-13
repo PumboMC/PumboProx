@@ -88,6 +88,8 @@ pub trait ProxyBridge: Send + Sync + 'static {
     ) -> BoxFuture<'static, Result<(), ConnectError>>;
     /// Reconnects to the current backend (plan §3.3).
     fn reconnect(&self, player: PlayerId) -> BoxFuture<'static, Result<(), ConnectError>>;
+    /// The permission export for backends changed: PumboBridge sends it again.
+    fn permissions_export_changed(&self) {}
 }
 
 /// Bridge for tools without a proxy (`pumboprox describe`, `check-config`):

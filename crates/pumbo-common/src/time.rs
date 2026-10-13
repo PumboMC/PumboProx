@@ -68,6 +68,7 @@ impl fmt::Display for TimeError {
 impl std::error::Error for TimeError {}
 
 /// Parses `1d2h30m` style durations. Zero (`0s`) is allowed.
+#[expect(clippy::integer_division, reason = "a bound in whole seconds")]
 pub fn parse_duration(text: &str) -> Result<Duration, TimeError> {
     let text = text.trim();
     if text.is_empty() {
@@ -120,6 +121,7 @@ pub fn format_duration(d: Duration) -> String {
 
 /// Like [`format_duration`] but with at most `parts` parts, cut off (not
 /// rounded): `format_duration_coarse(1d 2h 30m, 2)` is `1d 2h`.
+#[expect(clippy::integer_division, reason = "whole units of time")]
 pub fn format_duration_coarse(d: Duration, parts: usize) -> String {
     let mut secs = d.as_secs();
     let mut out: Vec<String> = Vec::new();

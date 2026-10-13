@@ -130,14 +130,10 @@ impl Commands {
             let mut changed = false;
             for n in names {
                 let key = (short.clone(), n);
-                if inner
+                changed |= inner
                     .umbrella
-                    .get(&key)
-                    .is_none_or(|e| e.spec != entry.spec)
-                {
-                    inner.umbrella.insert(key, Arc::clone(&entry));
-                    changed = true;
-                }
+                    .insert(key, Arc::clone(&entry))
+                    .is_none_or(|e| e.spec != entry.spec);
             }
             return Ok(changed);
         }
@@ -171,19 +167,37 @@ impl Commands {
         });
         let mut changed = false;
         for n in names {
-            if inner.roots.get(&n).is_none_or(|e| e.spec != entry.spec) {
-                inner.roots.insert(n, Arc::clone(&entry));
-                changed = true;
-            }
+            changed |= inner
+                .roots
+                .insert(n, Arc::clone(&entry))
+                .is_none_or(|e| e.spec != entry.spec);
         }
         Ok(changed)
     }
 
-    /// Drops a plugin's registrations before its new instance runs `init`.
-    pub fn clear_plugin(&self, id: &str) {
+    /// A plugin's registrations before its new instance runs `init`. They
+    /// stay (so its commands never reach a backend while it restarts) until
+    /// [`Commands::retire`].
+    pub fn of_plugin(&self, id: &str) -> Vec<Arc<Entry>> {
+        let Ok(inner) = self.inner.read() else {
+            return Vec::new();
+        };
+        inner
+            .roots
+            .values()
+            .chain(inner.umbrella.values())
+            .filter(|e| e.plugin == id)
+            .cloned()
+            .collect()
+    }
+
+    /// After a successful `init`: drops the old registrations the new
+    /// instance did not make again.
+    pub fn retire(&self, old: &[Arc<Entry>]) {
+        let stale = |e: &Arc<Entry>| old.iter().any(|o| Arc::ptr_eq(o, e));
         if let Ok(mut inner) = self.inner.write() {
-            inner.roots.retain(|_, e| e.plugin != id);
-            inner.umbrella.retain(|_, e| e.plugin != id);
+            inner.roots.retain(|_, e| !stale(e));
+            inner.umbrella.retain(|_, e| !stale(e));
         }
     }
 
@@ -386,7 +400,16 @@ pub(crate) fn dispatch(host: &Arc<HostInner>, sender: CommandSender, line: &str)
         &messages.command_unavailable
     };
     if slot.status() != Status::Running {
-        return CommandOutcome::Refused(host.message(unavailable));
+        let text = match slot.status() {
+            Status::Starting
+            | Status::Restarting(_)
+            | Status::Reloading
+            | Status::InitFailed(_) => messages
+                .plugin_restarting
+                .replace("{plugin}", &pumbo_text::template::escape_mini(&slot.id)),
+            _ => unavailable.clone(),
+        };
+        return CommandOutcome::Refused(host.message(&text));
     }
     let event = CommandEvent {
         player: match sender {

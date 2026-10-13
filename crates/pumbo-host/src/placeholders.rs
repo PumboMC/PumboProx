@@ -154,8 +154,8 @@ impl Placeholders {
 fn perm_ctx(c: &Context) -> PermContext {
     match c {
         Context::Global => PermContext::Global,
-        Context::Group(g) => PermContext::Group(g.clone()),
-        Context::Server(s) => PermContext::Server(s.clone()),
+        Context::Group(g) => PermContext::group(g),
+        Context::Server(s) => PermContext::server(s),
     }
 }
 

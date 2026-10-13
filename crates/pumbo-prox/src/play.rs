@@ -40,7 +40,7 @@ use pumbo_protocol::packets::play::{
 use pumbo_protocol::types::{Reader, WriteExt};
 use pumbo_protocol::{Direction, PacketKind, Phase, RawFrame, VersionModule};
 use pumbo_text::{Component, Content, TextFormat};
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use tokio::time::{Instant, sleep_until, timeout};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -311,6 +311,7 @@ struct Play<'a> {
     deferred: Vec<SessionCmd>,
     last_reconnect: Option<Instant>,
     cmds: mpsc::Receiver<SessionCmd>,
+    commands_changed: Arc<Notify>,
     packets: TokenBucket,
     bytes: TokenBucket,
     suggestions: TokenBucket,
@@ -368,6 +369,7 @@ pub(crate) async fn run(
     let _guard = guard;
     let limits = &rt.config.limits;
     let now = Instant::now();
+    let commands_changed = proxy.commands_signal(profile.id).unwrap_or_default();
     let mut play = Play {
         proxy,
         rt: rt.clone(),
@@ -394,6 +396,7 @@ pub(crate) async fn run(
         notices: Vec::new(),
         deferred: Vec::new(),
         last_reconnect: None,
+        commands_changed,
         cmds,
         packets: TokenBucket::new(limits.client_packets_per_second),
         bytes: TokenBucket::new(limits.client_bytes_per_second),
@@ -557,6 +560,7 @@ impl Play<'_> {
                         return end;
                     }
                 }
+                () = self.commands_changed.notified() => self.on_commands_changed(),
                 // The Pumbox waits for a new server list (`progress`).
                 _ = changes.changed(), if self.pumbox.is_some() => {}
                 () = sleep_until(deadline) => {
@@ -1304,14 +1308,17 @@ impl Play<'_> {
                 props.retain(|p| p.name != name);
                 props.extend(value);
             }
-            SessionCmd::CommandsChanged => {
-                self.resend_commands();
-                if let Some(b) = self.proxy.bridge.get() {
-                    b.perms_changed(self.player.profile.id, self.current().as_deref());
-                }
-            }
         }
         None
+    }
+
+    /// Permissions, context or plugin commands changed: the command tree and
+    /// the PumboBridge permission set follow.
+    fn on_commands_changed(&mut self) {
+        self.resend_commands();
+        if let Some(b) = self.proxy.bridge.get() {
+            b.perms_changed(self.player.profile.id, self.current().as_deref());
+        }
     }
 
     /// Keeps a title, the action bar or a boss bar change for the next join

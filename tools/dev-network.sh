@@ -12,11 +12,14 @@
 #
 # Pumpkin is not downloaded: pass the binary after `up` or in PUMPKIN_BIN. It
 # runs without arguments in its own directory, with the pumpkin.toml written
-# here. Plugins: PumboBridge*.wasm in PUMBO_PLUGINS_DIR goes to both servers, every
-# other .wasm there to the proxy.
+# here. Plugins: PumboBridge*, PumboPerms* and PumboBans* .wasm files in
+# PUMBO_PLUGINS_DIR go to both servers, in the variant for PUMBO_PROTOCOL
+# (777: *-26.3.wasm, 776: *-26.2.wasm; the other variant and builds without
+# the suffix, such as Pumpkin fork builds, stay where they are); every other
+# .wasm there goes to the proxy.
 #
 # Variables: PUMBO_PORT (25565; the servers get PORT+1 and PORT+2, the bridge PORT+3),
-# PUMBO_PROTOCOL of the servers (777), PUMBO_PLUGINS_DIR (dist),
+# PUMBO_PROTOCOL of the servers (777 or 776), PUMBO_PLUGINS_DIR (dist),
 # PUMBO_NETWORK_DIR (target/dev-network).
 set -euo pipefail
 shopt -s nullglob
@@ -28,6 +31,11 @@ PLUGINS=$(abs "${PUMBO_PLUGINS_DIR:-$ROOT/dist}")
 PORT=${PUMBO_PORT:-25565}
 PROTOCOL=${PUMBO_PROTOCOL:-777}
 SERVERS="lobby survival"
+case $PROTOCOL in
+  777) VARIANT=26.3 ;;
+  776) VARIANT=26.2 ;;
+  *) echo "dev-network: PUMBO_PROTOCOL $PROTOCOL: no Pumpkin plugin variant (777 or 776)" >&2; exit 1 ;;
+esac
 BRIDGE_PORT=$((PORT + 3))
 
 die() { echo "dev-network: $*" >&2; exit 1; }
@@ -107,7 +115,6 @@ forwarding:
 plugins:
   dir: plugins
 bridge:
-  enabled: true
   listen: "127.0.0.1:$BRIDGE_PORT"
 EOF
   for s in $SERVERS; do
@@ -155,12 +162,21 @@ EOF
 }
 
 up() {
-  local bin=${1:-${PUMPKIN_BIN:-}} s f bridge=0
+  local bin=${1:-${PUMPKIN_BIN:-}} s f name bridge=0
   [ -f "$DIR/.dev-network" ] || create
   (cd "$ROOT" && cargo build --release -p pumbo-prox)
   for f in "$PLUGINS"/*.wasm; do
-    case $(basename "$f") in
-      PumboBridge*) for s in $SERVERS; do cp "$f" "$DIR/$s/plugins/"; done; bridge=1 ;;
+    name=$(basename "$f")
+    case $name in
+      PumboBridge* | PumboPerms* | PumboBans*)
+        case $name in
+          *-"$VARIANT".wasm) ;;
+          # A server must not get two plugins with the same name.
+          *) continue ;;
+        esac
+        for s in $SERVERS; do cp "$f" "$DIR/$s/plugins/"; done
+        case $name in PumboBridge*) bridge=1 ;; esac
+        ;;
       *) cp "$f" "$DIR/proxy/plugins/" ;;
     esac
   done

@@ -523,8 +523,8 @@ async fn run_instance(
             Err(e) => return InitFailed(format!("instantiate: {e:#}")),
         };
     let init_deadline = Duration::from_millis(host.cfg.plugins.init_timeout_ms);
-    // `init` registers the commands of this instance again.
-    host.commands.clear_plugin(&slot.id);
+    // `init` registers the commands of this instance again over the old ones.
+    let old_commands = host.commands.of_plugin(&slot.id);
     let result = store
         .run_concurrent(async |acc| -> Outcome {
             let g = instance.pumbo_prox_events();
@@ -541,6 +541,7 @@ async fn run_instance(
             if let Err(msg) = host.plugin_ready(slot, desc) {
                 return InitFailed(msg);
             }
+            host.commands.retire(&old_commands);
             slot.set_status(Status::Running);
             if let Some(r) = reply.take() {
                 let _ = r.send(Ok(()));

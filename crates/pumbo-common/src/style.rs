@@ -260,6 +260,7 @@ pub fn duration(lang: &Lang, d: Duration) -> String {
 }
 
 /// Like [`duration`] with at most `parts` parts (days, hours, minutes, seconds).
+#[expect(clippy::integer_division, reason = "whole units of time")]
 pub fn duration_parts(lang: &Lang, d: Duration, parts: usize) -> String {
     let mut secs = d.as_secs();
     let mut out = Vec::new();

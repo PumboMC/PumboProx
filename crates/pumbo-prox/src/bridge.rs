@@ -53,7 +53,7 @@ pub struct BridgeConfig {
 impl Default for BridgeConfig {
     fn default() -> Self {
         BridgeConfig {
-            enabled: false,
+            enabled: true,
             listen: "127.0.0.1:25578".into(),
             key_file: "bridge.key".into(),
             command_timeout_ms: 5000,
@@ -146,7 +146,7 @@ struct Link {
     catalog: Mutex<Vec<String>>,
     server: Mutex<Option<String>>,
     perms_mode: Mutex<PermsMode>,
-    perms_sent: Mutex<HashMap<Uuid, BTreeMap<String, bool>>>,
+    perms_sent: Mutex<HashMap<Uuid, SentPerms>>,
     closed: AtomicBool,
     close: Notify,
 }
@@ -168,6 +168,14 @@ impl Link {
     fn mode(&self) -> PermsMode {
         self.perms_mode.lock().map(|m| *m).unwrap_or_default()
     }
+}
+
+/// The last `perm-set` sent for a player, and the newest info request.
+#[derive(Default)]
+struct SentPerms {
+    nodes: BTreeMap<String, bool>,
+    info: Option<String>,
+    asked: u64,
 }
 
 #[derive(Default)]
@@ -679,7 +687,7 @@ impl Bridge {
         };
         for p in proxy.players() {
             if p.server.as_deref() == Some(server.as_str()) {
-                self.send_perms(link, &server, p.id);
+                self.send_perms(link, &server, p.id, false);
             }
         }
         self.send_export(link, &server);
@@ -690,7 +698,8 @@ impl Bridge {
             return;
         };
         match &ev {
-            Event::Join { player, .. } => self.send_perms(link, &server, *player),
+            // Always: a set sent before the login may have expired in the bridge.
+            Event::Join { player, .. } => self.send_perms(link, &server, *player, true),
             Event::Leave { player, .. } => {
                 if let Ok(mut s) = link.perms_sent.lock() {
                     s.remove(player);
@@ -750,32 +759,78 @@ impl Bridge {
     }
 
     /// Sends the player's decisions for `server` unless they did not change
-    /// (spec §5.2). A local PumboPerms rules there: nothing to send.
-    fn send_perms(&self, link: &Link, server: &str, player: Uuid) {
+    /// (spec §5.2; `force`: also then), then asks the permission provider
+    /// for the player's info there and sends the set again when it changed.
+    /// A local PumboPerms rules there: nothing to send.
+    fn send_perms(&self, link: &Arc<Link>, server: &str, player: Uuid, force: bool) {
         if link.mode() == PermsMode::Local {
             return;
         }
         let Some(plugins) = self.proxy().and_then(|p| p.plugins.get().cloned()) else {
             return;
         };
-        let catalog = link.catalog.lock().map(|c| c.clone()).unwrap_or_default();
-        let Some(nodes) = plugins.backend_permissions(player, server, &catalog) else {
+        let Some(asked) = self.put_perms(link, &plugins, server, player, None, force) else {
             return;
         };
-        if let Ok(mut sent) = link.perms_sent.lock() {
-            if sent.get(&player) == Some(&nodes) {
+        let (me, link, server) = (self.me.clone(), Arc::clone(link), server.to_string());
+        tokio::spawn(async move {
+            let Ok(info) = plugins.permissions_info(player, &server).await else {
                 return;
+            };
+            if let Some(me) = me.upgrade() {
+                me.put_perms(&link, &plugins, &server, player, Some((asked, info)), false);
             }
-            sent.insert(player, nodes.clone());
-        }
-        let set = api::PermSet {
-            player,
-            nodes,
-            extra: BTreeMap::new(),
+        });
+    }
+
+    /// Sends the current set with `info` (`None`: the last one sent) when it
+    /// is new, differs from the last one or `force`. Without `info` returns
+    /// the number of the info request to make; an answer to an older
+    /// request is dropped.
+    fn put_perms(
+        &self,
+        link: &Link,
+        plugins: &crate::plugins::Plugins,
+        server: &str,
+        player: Uuid,
+        info: Option<(u64, Option<String>)>,
+        force: bool,
+    ) -> Option<u64> {
+        let catalog = link.catalog.lock().map(|c| c.clone()).unwrap_or_default();
+        let nodes = plugins.backend_permissions(player, server, &catalog)?;
+        let (set, asked) = {
+            let mut sent = link.perms_sent.lock().ok()?;
+            let new = !sent.contains_key(&player);
+            let answer = info.is_some();
+            // An answer after the player left must not bring the entry back.
+            let last = if answer {
+                sent.get_mut(&player)?
+            } else {
+                sent.entry(player).or_default()
+            };
+            let info = match info {
+                Some((asked, _)) if asked != last.asked => return None,
+                Some((_, info)) => info,
+                None => last.info.clone(),
+            };
+            let send = force || new || last.nodes != nodes || last.info != info;
+            last.nodes = nodes.clone();
+            last.info = info.clone();
+            if !answer {
+                last.asked += 1;
+            }
+            let set = send.then_some(api::PermSet {
+                player,
+                nodes,
+                extra: BTreeMap::new(),
+                info,
+            });
+            (set, (!answer).then_some(last.asked))
         };
-        if let Ok(v) = wire::value(&set) {
+        if let Some(v) = set.and_then(|s| wire::value(&s).ok()) {
             self.notify(link, method::PERM_SET, v);
         }
+        asked
     }
 
     /// The table for the server (from the permission provider when it runs,
@@ -801,17 +856,34 @@ impl Bridge {
     }
 
     /// The session asks: the player is about to log in to `server` (before
-    /// forwarding), so its permission set goes first.
+    /// forwarding), so its permission set goes first, also when the bridge
+    /// had it before (a login that failed, or a set that expired there).
     pub fn connecting(&self, player: Uuid, server: &str) {
         if let Some(link) = self.link(server) {
-            self.send_perms(&link, server, player);
+            self.send_perms(&link, server, player, true);
+        }
+    }
+
+    /// The permission export changed (`permissions.yml` read again, the
+    /// permission provider started or stopped): every paired bridge gets it.
+    pub fn export_changed(&self) {
+        let links: Vec<(Arc<Link>, String)> = self
+            .lock()
+            .servers
+            .iter()
+            .filter_map(|(name, slot)| Some((slot.link.clone()?, name.clone())))
+            .collect();
+        for (link, server) in links {
+            self.send_export(&link, &server);
         }
     }
 
     /// The player's permissions or context changed.
     pub fn perms_changed(&self, player: Uuid, server: Option<&str>) {
-        if let Some(server) = server {
-            self.connecting(player, server);
+        if let Some(server) = server
+            && let Some(link) = self.link(server)
+        {
+            self.send_perms(&link, server, player, false);
         }
     }
 

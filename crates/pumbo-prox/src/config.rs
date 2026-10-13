@@ -614,11 +614,18 @@ impl Config {
                 }
             }
         }
+        let mut lower: BTreeMap<String, &str> = BTreeMap::new();
         for (name, s) in &self.servers {
             if split_host_port(&s.address).is_none() {
                 return bad(format!(
                     "server {name}: address {} is not host:port",
                     s.address
+                ));
+            }
+            // Permission contexts name servers in lower case.
+            if let Some(other) = lower.insert(name.to_ascii_lowercase(), name) {
+                return bad(format!(
+                    "servers {other} and {name} differ only in letter case; rename one"
                 ));
             }
         }

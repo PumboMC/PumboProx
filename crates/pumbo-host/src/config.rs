@@ -37,11 +37,12 @@ impl HostConfig {
         pumbo_core::yaml::from_str(text)
     }
 
-    /// Groups of a server in priority order (config order).
+    /// Groups of a server in priority order (config order), names compared
+    /// regardless of case.
     pub fn groups_of(&self, server: &str) -> Vec<String> {
         self.server_groups
             .iter()
-            .filter(|g| g.servers.iter().any(|s| s == server))
+            .filter(|g| g.servers.iter().any(|s| s.eq_ignore_ascii_case(server)))
             .map(|g| g.name.clone())
             .collect()
     }
@@ -176,6 +177,8 @@ pub struct HostMessages {
     pub no_permission: String,
     pub gate_failed: String,
     pub permissions_unavailable: String,
+    /// `{plugin}`: the plugin id.
+    pub plugin_restarting: String,
 }
 
 impl Default for HostMessages {
@@ -188,6 +191,7 @@ impl Default for HostMessages {
             gate_failed: "<err>Could not verify the connection. Please try again.".into(),
             permissions_unavailable:
                 "<err>Permissions are temporarily unavailable. Please try again in a moment.".into(),
+            plugin_restarting: "<err>{plugin} is restarting. Please try again in a moment.".into(),
         }
     }
 }

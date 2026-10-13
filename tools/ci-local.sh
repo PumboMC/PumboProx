@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 # The same steps as .github/workflows/ci.yml (job "check"), run locally.
+# Run it directly, never inside the /tmp/perms-prod-tests.lock wrapper: it takes
+# that lock itself. PERMS_TEST_LOCK_HELD=1 skips the lock for a caller that holds it.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# One test run at a time on this machine; the lock goes away on any exit.
+if [ "${PERMS_TEST_LOCK_HELD:-}" != 1 ]; then
+  until mkdir /tmp/perms-prod-tests.lock 2>/dev/null; do sleep 5; done
+  trap 'rmdir /tmp/perms-prod-tests.lock' EXIT
+fi
 
 step() { echo; echo "== $*"; }
 

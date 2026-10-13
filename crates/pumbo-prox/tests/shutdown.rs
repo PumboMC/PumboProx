@@ -22,7 +22,8 @@ fn sigterm_ends_the_process_with_the_console_open() {
         dir.join("pumboprox.yml"),
         format!(
             "listener:\n  - bind: \"{addr}\"\nforwarding:\n  mode: none\n\
-             servers:\n  lobby: {{ address: \"127.0.0.1:1\" }}\nrouting:\n  try: [lobby]\n"
+             servers:\n  lobby: {{ address: \"127.0.0.1:1\" }}\nrouting:\n  try: [lobby]\n\
+             bridge:\n  enabled: false\n"
         ),
     )
     .unwrap();
