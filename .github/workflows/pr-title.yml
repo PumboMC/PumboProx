@@ -1,0 +1,32 @@
+# Pull request titles start with FEAT:, FIX:, DOCS: or DEPS: (dependency
+# updates) and a space, and have at most 72 characters.
+name: pr-title
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  title:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check the title
+        env:
+          # Through the environment, never written into the script: the title is
+          # text anyone opening a pull request can choose.
+          TITLE: ${{ github.event.pull_request.title }}
+          LC_ALL: C.UTF-8
+        run: |
+          case $TITLE in
+            "FEAT: "* | "FIX: "* | "DOCS: "* | "DEPS: "*) ;;
+            *)
+              echo "::error::The title must start with FEAT:, FIX:, DOCS: or DEPS: and a space, e.g. \"FIX: keep comments in the config on reload\""
+              exit 1
+              ;;
+          esac
+          if [ "${#TITLE}" -gt 72 ]; then
+            echo "::error::The title has ${#TITLE} characters, at most 72 are allowed"
+            exit 1
+          fi
