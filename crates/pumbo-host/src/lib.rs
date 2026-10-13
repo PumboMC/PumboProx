@@ -78,7 +78,7 @@ pub use commands::{CommandOutcome, CommandSender, VisibleCommand};
 pub use config::HostConfig;
 pub use dispatch::{ConnectDecision, GateOutcome, KickDecision, PreLogin, StatusOutcome};
 pub use manifest::Manifest;
-pub use permissions::{Decision, Layer, levels, resolve};
+pub use permissions::{Decision, Layer, Layers, levels, resolve};
 pub use services::{Native, NativeService};
 
 use crate::manifest::EventKind;
@@ -127,6 +127,9 @@ pub(crate) struct HostInner {
     pub perm_provider: Option<String>,
     pub provider_down_logged: Mutex<Option<Instant>>,
 }
+
+/// How often players without a set from the provider are loaded again.
+const PROVIDER_RETRY: Duration = Duration::from_secs(5);
 
 /// Handle to the plugin host. Cheap to clone.
 #[derive(Clone)]
@@ -192,7 +195,7 @@ impl Host {
         let placeholders =
             placeholders::Placeholders::new(&plugins, &cfg).map_err(HostError::Config)?;
         check_failures(&cfg.plugins, &plugins, &failed)?;
-        let perm_provider = permission_provider(&cfg, &plugins);
+        let perm_provider = permission_provider(&cfg, &plugins, &failed)?;
         let blocked = services.blocked(&plugins);
         let styles = StyleSheet::new(cfg.style.iter().map(|(k, v)| (k.as_str(), v.as_str())));
         let mut http = http::Http::new(cfg.plugins.http_allow_private);
@@ -224,6 +227,18 @@ impl Host {
             cfg,
         });
         let _ = inner.me.set(Arc::downgrade(&inner));
+        if spawn && inner.perm_provider.is_some() {
+            let me = Arc::downgrade(&inner);
+            tokio::spawn(async move {
+                let mut every = tokio::time::interval(PROVIDER_RETRY);
+                every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    every.tick().await;
+                    let Some(inner) = me.upgrade() else { return };
+                    inner.retry_unloaded().await;
+                }
+            });
+        }
         if spawn {
             for (slot, rx) in receivers {
                 if let Some((_, why)) = blocked.iter().find(|(id, _)| *id == slot.id) {
@@ -439,9 +454,10 @@ impl Host {
     }
 
     /// Decisions for a player on a backend (PumboBridge `perm-set`, spec
-    /// §5.1): every node of `catalog` and every namespaced node (`ns:…`) of
-    /// the player's entries, resolved in that server's context; only nodes
-    /// with a decision. Wildcards of the table apply through the catalog.
+    /// §5.1): every node of `catalog`, every namespaced node and wildcard
+    /// (`ns:…`, `ns:*`, `ns:a.*`) and every `group.<name>` of the player's
+    /// entries, resolved in that server's context and filtered so Pumpkin
+    /// reads them the same way (`pumbo_contracts::permissions::backend_set`).
     pub fn backend_permissions(
         &self,
         id: PlayerId,
@@ -456,49 +472,24 @@ impl Host {
         let Some(p) = online.get(&id) else {
             return BTreeMap::new();
         };
-        let (file, provider) = p.layers();
-        let mut nodes: std::collections::BTreeSet<String> =
-            catalog.iter().map(|n| n.to_ascii_lowercase()).collect();
-        nodes.extend(
-            file.iter()
-                .chain(provider)
-                .filter(|e| e.node.contains(':') && !e.node.ends_with('*'))
-                .map(|e| e.node.clone()),
-        );
-        nodes
-            .into_iter()
-            .filter_map(|n| {
-                let d = permissions::resolve(file, provider, &n, &lv)?;
-                Some((n, d.value))
-            })
-            .collect()
+        pumbo_contracts::permissions::backend_set(p.layers(), catalog, &lv)
     }
 
     /// The permission table for a server behind the proxy as a PumboPerms
-    /// export (JSON text, PumboBridge `perms-export`): the provider's data
-    /// while it runs (marked `proxy-rules`), else `permissions.yml` in that
-    /// server's context.
+    /// export (JSON text, PumboBridge `perms-export`). With a permission
+    /// provider in the config it is only the flag `proxy-rules` (whatever
+    /// state the provider is in): the proxy rules that server and players get
+    /// their sets through the bridge. Without one it is `permissions.yml` in
+    /// that server's context.
     pub async fn permissions_export(&self, server: &str) -> String {
         let inner = &self.inner;
         let groups = inner.cfg.groups_of(server);
-        if inner.provider_slot().is_some() {
-            let req = pumbo_contracts::PermissionsExportRequest {
-                server: server.to_string(),
-                groups: groups.clone(),
-            };
-            match inner
-                .call_provider::<pumbo_contracts::PermissionsExport>(
-                    pumbo_contracts::METHOD_EXPORT,
-                    &req,
-                    5000,
-                )
-                .await
-            {
-                Ok(x) => return x.data,
-                Err(e) => tracing::warn!(
-                    "{server}: the permission provider has no export ({e}), permissions.yml instead"
-                ),
+        if inner.perm_provider.is_some() {
+            let mut x = permissions::FileSource::default().export(server, &groups);
+            if let Some(o) = x.as_object_mut() {
+                o.insert("proxy-rules".into(), serde_json::Value::Bool(true));
             }
+            return x.to_string();
         }
         inner
             .perms
@@ -506,6 +497,78 @@ impl Host {
             .read()
             .map(|f| f.export(server, &groups).to_string())
             .unwrap_or_default()
+    }
+
+    /// Whether `permissions.yml` reads (`/prox reload` checks it before it
+    /// applies the new config).
+    pub fn check_permissions(&self) -> Result<(), String> {
+        let inner = &self.inner;
+        permissions::FileSource::load(&inner.cfg.permissions.file, &inner.cfg).map(|_| ())
+    }
+
+    /// Reads `permissions.yml` again (`/prox reload`): players online get
+    /// the new file layer and backends a new export. A provider gets the
+    /// file at its next start (`/prox plugins reload <provider>`).
+    pub fn reload_permissions(&self) -> Result<(), String> {
+        let inner = &self.inner;
+        let (file, warnings) =
+            permissions::FileSource::load(&inner.cfg.permissions.file, &inner.cfg)?;
+        for w in warnings {
+            tracing::warn!("permissions: {w}");
+        }
+        if let Ok(mut f) = inner.perms.file.write() {
+            *f = file;
+        }
+        let online: Vec<PlayerInfo> = inner
+            .players
+            .read()
+            .map(|p| p.values().cloned().collect())
+            .unwrap_or_default();
+        for info in online {
+            inner.perms.load_file_layer(info.id, &subject(&info));
+            inner.bridge.send(info.id, PlayerCommand::CommandsChanged);
+        }
+        inner.export_changed();
+        Ok(())
+    }
+
+    /// What the permission provider shows for an online player on `server`
+    /// (PumboBridge carries it with the player's `perm-set`); `Ok(None)`
+    /// without a provider, `Err` when the provider is down or does not
+    /// answer (the last info stays).
+    pub async fn permissions_info(
+        &self,
+        id: PlayerId,
+        server: &str,
+    ) -> Result<Option<String>, String> {
+        let inner = &self.inner;
+        if inner.perm_provider.is_none() {
+            return Ok(None);
+        }
+        inner.provider_slot().ok_or("provider is down")?;
+        let Some(player) = inner.player(id) else {
+            return Ok(None);
+        };
+        let uuid = uuid_of(&player.profile.id);
+        let req = pumbo_contracts::PermissionsInfoRequest {
+            uuid: uuid.simple().to_string(),
+            server: server.to_string(),
+            groups: inner.cfg.groups_of(server),
+        };
+        match inner
+            .call_provider::<pumbo_contracts::PermissionsInfo>(
+                pumbo_contracts::METHOD_INFO,
+                &req,
+                1000,
+            )
+            .await
+        {
+            Ok(x) => Ok(x.data),
+            Err(e) => {
+                tracing::debug!(player = id, "no permission info for {server}: {e}");
+                Err(e)
+            }
+        }
     }
 
     /// Publishes a host topic (`pumbo:bridge-event`, …) to its subscribers.
@@ -823,26 +886,32 @@ impl HostInner {
     pub(crate) fn plugin_running(&self, slot: &Arc<PluginSlot>) {
         tracing::info!(plugin = %slot.id, version = %slot.manifest.version, "plugin running");
         self.services_of_changed(slot, true);
-        if self.is_permission_provider(slot)
-            && let Some(me) = self.me.get().and_then(Weak::upgrade)
-        {
-            tokio::spawn(async move { me.provider_started().await });
+        if self.is_permission_provider(slot) {
+            self.forget_offline(None);
+            self.export_changed();
+            if let Some(me) = self.me.get().and_then(Weak::upgrade) {
+                tokio::spawn(async move { me.provider_started().await });
+            }
         }
+    }
+
+    /// Backends get the permission export again (PumboBridge `perms-export`).
+    pub(crate) fn export_changed(&self) {
+        self.bridge.permissions_export_changed();
     }
 
     /// Called by the actor when an instance ends (trap, reload, stop).
     pub(crate) fn plugin_down(&self, slot: &Arc<PluginSlot>) {
         self.services_of_changed(slot, false);
         if self.is_permission_provider(slot) {
-            // The file decides until the provider loads the players again.
-            let ids = self.perms.drop_provider();
+            // Players keep the provider's last set (a down provider must not
+            // give back ranks it took away through permissions.yml).
+            self.forget_offline(None);
             if let Ok(mut last) = self.provider_down_logged.lock() {
                 *last = None;
             }
-            self.warn_file_fallback(&format!("is down ({} players online)", ids.len()));
-            for id in ids {
-                self.bridge.send(id, bridge::PlayerCommand::CommandsChanged);
-            }
+            self.warn_provider_down("is down");
+            self.export_changed();
         }
         slot.cancel_timers();
         imports::hide_all_bars(self, slot);
@@ -872,6 +941,8 @@ pub struct LoadFailure {
     /// The manifest when it reads (also an invalid one).
     pub manifest: Option<Manifest>,
     pub reason: String,
+    /// Another file has the same plugin id (D-STD-5: neither loads).
+    pub duplicate: bool,
 }
 
 /// A plugin that loads: its manifest (and the text of it) and module.
@@ -936,12 +1007,14 @@ fn load_manifests(dir: &Path) -> Result<(Vec<Loaded>, Vec<LoadFailure>), HostErr
                 reason: format!("{file}: manifest id {} does not match the file name", m.id),
                 file,
                 manifest: Some(m),
+                duplicate: false,
             }),
             Ok((m, t)) => by_id.entry(m.id.clone()).or_default().push((m, t, wasm)),
             Err((manifest, e)) => failed.push(LoadFailure {
                 reason: format!("{file}: {e}"),
                 file,
                 manifest,
+                duplicate: false,
             }),
         }
     };
@@ -1001,6 +1074,7 @@ fn load_manifests(dir: &Path) -> Result<(Vec<Loaded>, Vec<LoadFailure>), HostErr
                 file: name(&w),
                 manifest: Some(m),
                 reason: format!("duplicate plugin id {id} in {}", files.join(" and ")),
+                duplicate: true,
             });
         }
     }
@@ -1076,26 +1150,65 @@ fn check_failures(
 
 /// The permission provider (`permissions.provider`): `auto` takes the plugin
 /// with `permission-provider: true` that provides `pumbo:permissions` (of
-/// several, the one chosen in `services.providers`), `file` none. A named
-/// plugin that is not installed or no provider leaves `permissions.yml` in
-/// charge, with a warning (PumboPerms spec §16).
+/// several, the one chosen in `services.providers`, else a start error),
+/// `file` none. A named plugin that is not installed or no provider leaves
+/// `permissions.yml` in charge, with a warning (PumboPerms spec §16).
 fn permission_provider(
     cfg: &HostConfig,
     plugins: &BTreeMap<String, Arc<PluginSlot>>,
-) -> Option<String> {
+    failed: &[LoadFailure],
+) -> Result<Option<String>, HostError> {
+    let provides = |m: &Manifest| {
+        m.permission_provider
+            && m.provides
+                .iter()
+                .any(|p| p.service == pumbo_contracts::PERMISSIONS.name)
+    };
     let able: Vec<&String> = plugins
         .values()
-        .filter(|s| {
-            s.manifest.permission_provider
-                && s.manifest
-                    .provides
-                    .iter()
-                    .any(|p| p.service == pumbo_contracts::PERMISSIONS.name)
-        })
+        .filter(|s| provides(&s.manifest))
         .map(|s| &s.id)
         .collect();
+    // Starting without the provider would hand the network to the file and
+    // take the backends out of proxy-rules, so two copies stop the start.
+    let wanted = |id: &str| {
+        cfg.permissions.provider == id || (cfg.permissions.provider == "auto" && able.is_empty())
+    };
+    let twins: Vec<&LoadFailure> = failed
+        .iter()
+        .filter(|f| {
+            f.duplicate
+                && f.manifest
+                    .as_ref()
+                    .is_some_and(|m| provides(m) && wanted(&m.id))
+        })
+        .collect();
+    if let Some(m) = twins.first().and_then(|f| f.manifest.as_ref()) {
+        let files: Vec<&str> = twins.iter().map(|f| f.file.as_str()).collect();
+        return Err(HostError::Plugin {
+            id: m.id.clone(),
+            message: format!(
+                "the permission provider is in two files ({}): delete the older one, then start the proxy again",
+                files.join(" and ")
+            ),
+        });
+    }
+    let named = cfg.permissions.provider.as_str();
+    if !matches!(named, "auto" | "file")
+        && let Some(f) = failed
+            .iter()
+            .find(|f| f.manifest.as_ref().is_some_and(|m| m.id == named))
+    {
+        return Err(HostError::Plugin {
+            id: named.to_string(),
+            message: format!(
+                "the permission provider did not load ({}): fix or replace {}, then start the proxy again",
+                f.reason, f.file
+            ),
+        });
+    }
     let file = cfg.permissions.file.display();
-    match cfg.permissions.provider.as_str() {
+    Ok(match cfg.permissions.provider.as_str() {
         "file" => None,
         "auto" => match able.as_slice() {
             [] => None,
@@ -1108,9 +1221,11 @@ fn permission_provider(
                     .filter(|id| able.contains(id))
                     .cloned();
                 if chosen.is_none() {
-                    tracing::warn!(
-                        "permissions.provider: auto found several providers, using {file}; choose one in services.providers"
-                    );
+                    let ids: Vec<&str> = able.iter().map(|s| s.as_str()).collect();
+                    return Err(HostError::Config(format!(
+                        "permissions.provider: auto found several providers ({}); choose one in services.providers or permissions.provider",
+                        ids.join(", ")
+                    )));
                 }
                 chosen
             }
@@ -1122,14 +1237,24 @@ fn permission_provider(
             );
             None
         }
-    }
+    })
 }
 
 /// Start errors for names two plugins cannot share.
 fn check_unique(plugins: &BTreeMap<String, Arc<PluginSlot>>) -> Result<(), HostError> {
     let mut gates = BTreeMap::new();
     let mut short = BTreeMap::new();
+    let mut prefixes = BTreeMap::new();
     for s in plugins.values() {
+        // `bans` and `pumbo-bans` would share the `pumbo.bans.` nodes and their defaults.
+        for p in s.manifest.permission_prefixes() {
+            if let Some(other) = prefixes.insert(p.clone(), s.id.clone()) {
+                return Err(HostError::Config(format!(
+                    "permission prefix \"{p}\" claimed by {other} and {}",
+                    s.id
+                )));
+            }
+        }
         if let Some(g) = &s.manifest.gate
             && let Some(other) = gates.insert(g.name.clone(), s.id.clone())
         {

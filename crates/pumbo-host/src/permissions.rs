@@ -1,21 +1,19 @@
 //! Permissions as host data (plan §4.4 item 4, §5.8.4). A check reads the
-//! table and never calls a plugin.
-//!
-//! Resolution: levels server > group (config order) > global; the first level
-//! with a matching entry decides. Within a level: an exact node before the
-//! longest matching `a.b.*`, before `*`; on a tie the file wins over the
-//! provider (the administrator has the last word) and `false` wins over `true`.
-//! Resolution order modelled on the public LuckPerms documentation (MIT).
+//! table and never calls a plugin; resolution lives in
+//! `pumbo_contracts::permissions`.
 //!
 //! Once the permission provider (PumboPerms) has loaded a player, its set
 //! replaces the file for that player (PumboPerms spec §16: the provider took
-//! the file over at its first start). While the provider is not running, the
-//! file decides again.
+//! the file over at its first start). While the provider is down, players
+//! online keep its last set and `on-load-failure` decides new logins.
+//! Session nodes (`permissions.set`) sit on top of both until the player
+//! leaves.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::RwLock;
 
+pub use pumbo_contracts::permissions::{Decision, Layer, Layers, levels, resolve};
 use pumbo_core::permissions::{PermContext, PermissionEntry, PermissionSource, Subject};
 use serde::Deserialize;
 use uuid::Uuid;
@@ -23,114 +21,31 @@ use uuid::Uuid;
 use crate::config::HostConfig;
 use crate::wit::types::PlayerId;
 
-/// Where an entry comes from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Layer {
-    File,
-    Provider,
-}
-
-/// Levels of a query, highest priority first.
-pub fn levels(server: Option<&str>, groups: &[String]) -> Vec<PermContext> {
-    let mut out = Vec::with_capacity(groups.len() + 2);
-    if let Some(s) = server {
-        out.push(PermContext::Server(s.to_string()));
-    }
-    out.extend(groups.iter().map(|g| PermContext::Group(g.clone())));
-    out.push(PermContext::Global);
-    out
-}
-
-/// How specific an entry is for `node`; `None` if it does not match.
-fn specificity(entry: &str, node: &str) -> Option<usize> {
-    if entry == node {
-        return Some(usize::MAX);
-    }
-    if entry == "*" {
-        return Some(0);
-    }
-    // `minecraft:*`: everything in a namespace.
-    if let Some(ns) = entry.strip_suffix(":*") {
-        let rest = node.strip_prefix(ns)?;
-        return rest.starts_with(':').then_some(ns.len() + 1);
-    }
-    let prefix = entry.strip_suffix(".*")?;
-    let rest = node.strip_prefix(prefix)?;
-    rest.starts_with('.').then_some(prefix.len() + 1)
-}
-
-/// The decision and the entry that made it (for `/pumbo proxy perms check`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Decision {
-    pub value: bool,
-    pub entry: PermissionEntry,
-    pub layer: Layer,
-}
-
-pub fn resolve(
-    file: &[PermissionEntry],
-    provider: &[PermissionEntry],
-    node: &str,
-    levels: &[PermContext],
-) -> Option<Decision> {
-    let node = node.to_ascii_lowercase();
-    for level in levels {
-        let mut best: Option<(usize, Layer, &PermissionEntry)> = None;
-        let candidates = file
-            .iter()
-            .map(|e| (Layer::File, e))
-            .chain(provider.iter().map(|e| (Layer::Provider, e)));
-        for (layer, e) in candidates {
-            if e.context != *level {
-                continue;
-            }
-            let Some(spec) = specificity(&e.node, &node) else {
-                continue;
-            };
-            let better = match best {
-                None => true,
-                Some((bs, bl, be)) => {
-                    spec > bs
-                        || (spec == bs
-                            && ((layer == Layer::File && bl == Layer::Provider)
-                                || (layer == bl && !e.value && be.value)))
-                }
-            };
-            if better {
-                best = Some((spec, layer, e));
-            }
-        }
-        if let Some((_, layer, e)) = best {
-            return Some(Decision {
-                value: e.value,
-                entry: e.clone(),
-                layer,
-            });
-        }
-    }
-    None
-}
-
 /// Permissions of one online player.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PlayerPerms {
     pub file: Vec<PermissionEntry>,
     pub provider: Vec<PermissionEntry>,
+    /// Nodes from `permissions.set`, kept until the player leaves.
+    pub session: Vec<PermissionEntry>,
     /// The provider loaded this player: its set replaces the file.
     pub loaded: bool,
     /// Past the point of loading (`load-at`): loaded again when the
     /// provider comes back.
     pub eligible: bool,
+    /// Bumped by every `permissions.replace`: a load started before it is
+    /// older than the set the provider pushed since.
+    pub epoch: u64,
 }
 
 impl PlayerPerms {
-    /// The layers that decide: the provider's set alone once it is loaded,
-    /// otherwise the file (with session changes from `permissions.set`).
-    pub fn layers(&self) -> (&[PermissionEntry], &[PermissionEntry]) {
-        if self.loaded {
-            (&[], &self.provider)
-        } else {
-            (&self.file, &self.provider)
+    /// The layers that decide: session nodes, then the provider's set alone
+    /// once it is loaded, otherwise the file.
+    pub fn layers(&self) -> Layers<'_> {
+        Layers {
+            session: &self.session,
+            file: if self.loaded { &[] } else { &self.file },
+            provider: &self.provider,
         }
     }
 }
@@ -145,8 +60,7 @@ pub(crate) struct Permissions {
 impl Permissions {
     pub fn decide(&self, id: PlayerId, node: &str, levels: &[PermContext]) -> Option<Decision> {
         let online = self.online.read().ok()?;
-        let (file, provider) = online.get(&id)?.layers();
-        resolve(file, provider, node, levels)
+        resolve(online.get(&id)?.layers(), node, levels)
     }
 
     pub fn load_file_layer(&self, id: PlayerId, who: &Subject) {
@@ -160,18 +74,40 @@ impl Permissions {
         }
     }
 
+    /// The provider pushed a new set (`permissions.replace`).
     pub fn replace_provider_layer(&self, id: PlayerId, entries: Vec<PermissionEntry>) -> bool {
-        match self.online.write() {
-            Ok(mut o) => match o.get_mut(&id) {
-                Some(p) => {
-                    p.provider = entries;
-                    p.loaded = true;
-                    true
-                }
-                None => false,
-            },
-            Err(_) => false,
-        }
+        self.with(id, |p| {
+            p.epoch += 1;
+            p.provider = entries;
+            p.loaded = true;
+        })
+        .is_some()
+    }
+
+    /// The set of a load started at `epoch`; false when a newer push came
+    /// in between (or the player left).
+    pub fn load_provider_layer(
+        &self,
+        id: PlayerId,
+        epoch: u64,
+        entries: Vec<PermissionEntry>,
+    ) -> bool {
+        self.with(id, |p| {
+            if p.epoch == epoch {
+                p.provider = entries;
+                p.loaded = true;
+            }
+            p.epoch == epoch
+        })
+        .unwrap_or(false)
+    }
+
+    pub fn epoch(&self, id: PlayerId) -> Option<u64> {
+        self.online.read().ok()?.get(&id).map(|p| p.epoch)
+    }
+
+    fn with<T>(&self, id: PlayerId, f: impl FnOnce(&mut PlayerPerms) -> T) -> Option<T> {
+        self.online.write().ok()?.get_mut(&id).map(f)
     }
 
     /// One node for the session (`permissions.set`); `None` removes it.
@@ -189,9 +125,9 @@ impl Permissions {
             return false;
         };
         let node = node.to_ascii_lowercase();
-        p.provider.retain(|e| !(e.node == node && e.context == ctx));
+        p.session.retain(|e| !(e.node == node && e.context == ctx));
         if let Some(value) = value {
-            p.provider.push(PermissionEntry {
+            p.session.push(PermissionEntry {
                 node,
                 value,
                 context: ctx,
@@ -210,19 +146,24 @@ impl Permissions {
     }
 
     pub fn eligible(&self) -> Vec<PlayerId> {
+        self.players(|p| p.eligible)
+    }
+
+    /// Players past the point of loading without a set from the provider.
+    pub fn unloaded(&self) -> Vec<PlayerId> {
+        self.players(|p| p.eligible && !p.loaded)
+    }
+
+    fn players(&self, f: impl Fn(&PlayerPerms) -> bool) -> Vec<PlayerId> {
         self.online
             .read()
-            .map(|o| {
-                o.iter()
-                    .filter(|(_, p)| p.eligible)
-                    .map(|(id, _)| *id)
-                    .collect()
-            })
+            .map(|o| o.iter().filter(|(_, p)| f(p)).map(|(id, _)| *id).collect())
             .unwrap_or_default()
     }
 
-    /// The provider went down: every player is back on the file. Returns
-    /// the players whose permissions change.
+    /// Every player back on the file; only for a proxy without a provider.
+    /// Returns the players whose permissions change.
+    #[cfg(test)]
     pub fn drop_provider(&self) -> Vec<PlayerId> {
         let Ok(mut o) = self.online.write() else {
             return Vec::new();
@@ -309,16 +250,20 @@ impl FileSource {
             server_groups: cfg
                 .server_groups
                 .iter()
-                .map(|g| (g.name.clone(), g.servers.clone()))
+                .map(|g| {
+                    let servers = g.servers.iter().map(|s| s.to_ascii_lowercase()).collect();
+                    (g.name.to_ascii_lowercase(), servers)
+                })
                 .collect(),
         };
         let mut warnings = Vec::new();
         let known_groups: BTreeSet<&str> =
-            cfg.server_groups.iter().map(|g| g.name.as_str()).collect();
-        let known_servers: BTreeSet<&str> = cfg.servers.keys().map(String::as_str).collect();
+            src.server_groups.iter().map(|(g, _)| g.as_str()).collect();
+        let known_servers: BTreeSet<String> =
+            cfg.servers.keys().map(|s| s.to_ascii_lowercase()).collect();
         let mut check = |what: &str, s: &Section| {
             for (srv, sub) in &s.server {
-                if !known_servers.is_empty() && !known_servers.contains(srv.as_str()) {
+                if !known_servers.is_empty() && !known_servers.contains(&srv.to_ascii_lowercase()) {
                     warnings.push(format!("{what}: unknown server \"{srv}\""));
                 }
                 if !sub.server.is_empty() || !sub.group.is_empty() {
@@ -328,7 +273,7 @@ impl FileSource {
                 }
             }
             for g in s.group.keys() {
-                if !known_groups.contains(g.as_str()) {
+                if !known_groups.contains(g.to_ascii_lowercase().as_str()) {
                     warnings.push(format!("{what}: unknown server group \"{g}\""));
                 }
             }
@@ -411,12 +356,12 @@ impl FileSource {
         };
         push_nodes(&s.permissions, at, &mut own);
         for (srv, sub) in &s.server {
-            for ctx in self.narrow(at, &PermContext::Server(srv.clone())) {
+            for ctx in self.narrow(at, &PermContext::server(srv)) {
                 push_nodes(&sub.permissions, &ctx, &mut own);
             }
         }
         for (g, sub) in &s.group {
-            for ctx in self.narrow(at, &PermContext::Group(g.clone())) {
+            for ctx in self.narrow(at, &PermContext::group(g)) {
                 push_nodes(&sub.permissions, &ctx, &mut own);
             }
         }
@@ -428,12 +373,12 @@ impl FileSource {
             .map(|g| (g.clone(), at.clone()))
             .collect();
         for (srv, sub) in &s.server {
-            for ctx in self.narrow(at, &PermContext::Server(srv.clone())) {
+            for ctx in self.narrow(at, &PermContext::server(srv)) {
                 members.extend(sub.groups.iter().map(|g| (g.clone(), ctx.clone())));
             }
         }
         for (grp, sub) in &s.group {
-            for ctx in self.narrow(at, &PermContext::Group(grp.clone())) {
+            for ctx in self.narrow(at, &PermContext::group(grp)) {
                 members.extend(sub.groups.iter().map(|g| (g.clone(), ctx.clone())));
             }
         }
@@ -481,13 +426,9 @@ impl FileSource {
             };
             apply(s);
             for g in groups.iter().rev() {
-                if let Some(sub) = s.group.get(g) {
-                    apply(sub);
-                }
+                named(&s.group, g).for_each(&mut apply);
             }
-            if let Some(sub) = s.server.get(server) {
-                apply(sub);
-            }
+            named(&s.server, server).for_each(&mut apply);
             serde_json::json!({
                 "permissions": nodes.into_iter().map(|(node, value)| serde_json::json!({"node": node, "value": value})).collect::<Vec<_>>(),
                 "parents": parents.into_iter().map(|group| serde_json::json!({"group": group})).collect::<Vec<_>>(),
@@ -595,6 +536,13 @@ impl FileSource {
     }
 }
 
+/// Sections of a context map whose name matches regardless of case.
+fn named<'a>(m: &'a BTreeMap<String, Section>, name: &'a str) -> impl Iterator<Item = &'a Section> {
+    m.iter()
+        .filter(move |(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v)
+}
+
 /// The `file` source (the host reads it synchronously at join, through
 /// `entries_for`; the trait is the shape for further native sources).
 impl PermissionSource for FileSource {
@@ -675,9 +623,9 @@ impl crate::HostInner {
             .then(|| std::sync::Arc::clone(slot))
     }
 
-    /// Warns (at most once a minute) that the file decides while the
-    /// provider is down.
-    pub(crate) fn warn_file_fallback(&self, why: &str) {
+    /// Warns (at most once a minute) that the provider is down: players
+    /// online keep its last set, `on-load-failure` decides new logins.
+    pub(crate) fn warn_provider_down(&self, why: &str) {
         let Some(provider) = self.perm_provider.as_deref() else {
             return;
         };
@@ -685,10 +633,25 @@ impl crate::HostInner {
             && last.is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(60))
         {
             *last = Some(std::time::Instant::now());
+            let logins = match self.cfg.permissions.on_load_failure {
+                crate::config::OnLoadFailure::Deny => "new logins are refused".to_string(),
+                crate::config::OnLoadFailure::FileOnly => {
+                    format!("new logins get {}", self.cfg.permissions.file.display())
+                }
+            };
             tracing::warn!(
-                "permission provider {provider} {why}: permissions from {} until it is back",
-                self.cfg.permissions.file.display()
+                "permission provider {provider} {why}: players online keep their permissions, {logins}; fix it from the proxy console (/prox plugins reload {provider}, or permissions.provider: file)"
             );
+        }
+    }
+
+    /// `on-load-failure` for a player the provider cannot load.
+    fn load_failed(&self) -> Result<(), pumbo_text::Component> {
+        match self.cfg.permissions.on_load_failure {
+            crate::config::OnLoadFailure::Deny => {
+                Err(self.message(&self.cfg.plugins.messages.permissions_unavailable))
+            }
+            crate::config::OnLoadFailure::FileOnly => Ok(()),
         }
     }
 
@@ -748,9 +711,9 @@ impl crate::HostInner {
         }
     }
 
-    /// Loads the provider layer of a player (plan §5.8.4, `load-at`);
-    /// with `on-load-failure: deny` a failure keeps the player out. Without
-    /// a running provider the file decides.
+    /// Loads the provider layer of a player (plan §5.8.4, `load-at`). When
+    /// the provider is down or fails, `on-load-failure` decides: `deny`
+    /// keeps the player out, `file-only` lets them in on the file.
     pub(crate) async fn load_provider_permissions(
         &self,
         id: crate::wit::types::PlayerId,
@@ -760,29 +723,47 @@ impl crate::HostInner {
         };
         self.perms.mark_eligible(id);
         let Some(slot) = self.provider_slot() else {
-            self.warn_file_fallback("is not running");
-            return Ok(());
+            self.warn_provider_down("is not running");
+            return self.load_failed();
         };
-        let Some(info) = self.player(id) else {
+        let (Some(info), Some(epoch)) = (self.player(id), self.perms.epoch(id)) else {
             return Err(self.message(&self.cfg.plugins.messages.permissions_unavailable));
         };
         let who = crate::subject(&info);
         let source = PluginSource { host: self, slot };
         match source.load(&who).await {
             Ok(entries) => {
-                self.perms.replace_provider_layer(id, entries);
-                self.bridge
-                    .send(id, crate::bridge::PlayerCommand::CommandsChanged);
+                // A set pushed while this load ran is newer.
+                if self.perms.load_provider_layer(id, epoch, entries) {
+                    self.forget_offline(Some(who.uuid));
+                    self.bridge
+                        .send(id, crate::bridge::PlayerCommand::CommandsChanged);
+                }
                 Ok(())
             }
             Err(e) => {
                 tracing::warn!(player = id, provider = %provider, "permissions not loaded: {e}");
-                match self.cfg.permissions.on_load_failure {
-                    crate::config::OnLoadFailure::Deny => {
-                        Err(self.message(&self.cfg.plugins.messages.permissions_unavailable))
-                    }
-                    crate::config::OnLoadFailure::FileOnly => Ok(()),
-                }
+                self.load_failed()
+            }
+        }
+    }
+
+    /// Loads again the players past the point of loading that have no set
+    /// from the provider (it was down or failed for them), while it runs.
+    pub(crate) async fn retry_unloaded(&self) {
+        if self
+            .provider_slot()
+            .is_none_or(|s| s.status() != crate::actor::Status::Running)
+        {
+            return;
+        }
+        for id in self.perms.unloaded() {
+            if let Err(t) = self.load_provider_permissions(id).await {
+                tracing::warn!(
+                    player = id,
+                    "permissions not loaded again: {}",
+                    t.plain_text()
+                );
             }
         }
     }
@@ -811,169 +792,12 @@ mod tests {
         }
     }
 
-    fn srv(s: &str) -> PermContext {
-        PermContext::Server(s.into())
-    }
-
-    fn grp(s: &str) -> PermContext {
-        PermContext::Group(s.into())
-    }
-
     use PermContext::Global;
 
-    /// The case table from plan §5.8.4.
-    #[test]
-    fn resolution_cases() {
-        let lv = levels(Some("survival"), &["survivals".into(), "all".into()]);
-        let lobby = levels(Some("lobby"), &["all".into()]);
-        type Case<'a> = (
-            &'a str,
-            Vec<PermissionEntry>,
-            Vec<PermissionEntry>,
-            &'a str,
-            &'a [PermContext],
-            Option<bool>,
-        );
-        let cases: Vec<Case> = vec![
-            ("nothing", vec![], vec![], "a.b", &lv, None),
-            (
-                "global",
-                vec![e("a.b", true, Global)],
-                vec![],
-                "a.b",
-                &lv,
-                Some(true),
-            ),
-            (
-                "server beats global",
-                vec![e("a.b", true, Global), e("a.b", false, srv("survival"))],
-                vec![],
-                "a.b",
-                &lv,
-                Some(false),
-            ),
-            (
-                "other server ignored",
-                vec![e("a.b", false, srv("lobby")), e("a.b", true, Global)],
-                vec![],
-                "a.b",
-                &lv,
-                Some(true),
-            ),
-            (
-                "group beats global",
-                vec![e("a.b", true, Global), e("a.b", false, grp("survivals"))],
-                vec![],
-                "a.b",
-                &lv,
-                Some(false),
-            ),
-            (
-                "first group wins",
-                vec![
-                    e("a.b", true, grp("all")),
-                    e("a.b", false, grp("survivals")),
-                ],
-                vec![],
-                "a.b",
-                &lv,
-                Some(false),
-            ),
-            (
-                "server beats group",
-                vec![
-                    e("a.b", false, grp("survivals")),
-                    e("a.b", true, srv("survival")),
-                ],
-                vec![],
-                "a.b",
-                &lv,
-                Some(true),
-            ),
-            (
-                "exact beats wildcard",
-                vec![e("a.*", false, Global), e("a.b", true, Global)],
-                vec![],
-                "a.b",
-                &lv,
-                Some(true),
-            ),
-            (
-                "longest wildcard",
-                vec![e("a.*", false, Global), e("a.b.*", true, Global)],
-                vec![],
-                "a.b.c",
-                &lv,
-                Some(true),
-            ),
-            (
-                "star",
-                vec![e("*", true, Global)],
-                vec![],
-                "x.y",
-                &lv,
-                Some(true),
-            ),
-            (
-                "wildcard does not match its base",
-                vec![e("a.b.*", true, Global)],
-                vec![],
-                "a.b",
-                &lv,
-                None,
-            ),
-            (
-                "false wins a tie",
-                vec![e("a.b", true, Global), e("a.b", false, Global)],
-                vec![],
-                "a.b",
-                &lv,
-                Some(false),
-            ),
-            (
-                "file wins over provider",
-                vec![e("a.b", true, Global)],
-                vec![e("a.b", false, Global)],
-                "a.b",
-                &lv,
-                Some(true),
-            ),
-            (
-                "provider fills in",
-                vec![],
-                vec![e("a.b", true, srv("survival"))],
-                "a.b",
-                &lv,
-                Some(true),
-            ),
-            (
-                "level before layer",
-                vec![e("a.b", true, Global)],
-                vec![e("a.b", false, srv("survival"))],
-                "a.b",
-                &lv,
-                Some(false),
-            ),
-            (
-                "lobby sees global",
-                vec![e("a.b", true, Global)],
-                vec![e("a.b", false, srv("survival"))],
-                "a.b",
-                &lobby,
-                Some(true),
-            ),
-            (
-                "case-insensitive",
-                vec![e("a.b", true, Global)],
-                vec![],
-                "A.B",
-                &lv,
-                Some(true),
-            ),
-        ];
-        for (name, file, provider, node, levels, want) in cases {
-            let got = resolve(&file, &provider, node, levels).map(|d| d.value);
-            assert_eq!(got, want, "{name}");
+    fn file_layer(entries: &[PermissionEntry]) -> Layers<'_> {
+        Layers {
+            file: entries,
+            ..Layers::default()
         }
     }
 
@@ -1027,7 +851,7 @@ server-group:
         let entries = src.entries_for(&notch);
         let has = |node: &str, server: &str, groups: &[&str]| {
             let groups: Vec<String> = groups.iter().map(|g| g.to_string()).collect();
-            resolve(&entries, &[], node, &levels(Some(server), &groups)).map(|d| d.value)
+            resolve(file_layer(&entries), node, &levels(Some(server), &groups)).map(|d| d.value)
         };
         assert_eq!(has("pumbo.proxy.server", "lobby", &[]), Some(true));
         assert_eq!(
@@ -1048,9 +872,19 @@ server-group:
             name: "Jeb_".into(),
         };
         let entries = src.entries_for(&jeb);
-        let r = resolve(&entries, &[], "pumbo.proxy.alert", &levels(None, &[])).map(|d| d.value);
+        let r = resolve(
+            file_layer(&entries),
+            "pumbo.proxy.alert",
+            &levels(None, &[]),
+        )
+        .map(|d| d.value);
         assert_eq!(r, Some(true));
-        let r = resolve(&entries, &[], "pumbo.proxy.server", &levels(None, &[])).map(|d| d.value);
+        let r = resolve(
+            file_layer(&entries),
+            "pumbo.proxy.server",
+            &levels(None, &[]),
+        )
+        .map(|d| d.value);
         assert_eq!(r, Some(true));
 
         // Unlisted players get the default group.
@@ -1059,19 +893,17 @@ server-group:
             name: "someone".into(),
         };
         let entries = src.entries_for(&other);
-        let r = resolve(&entries, &[], "pumbo.proxy.server", &levels(None, &[])).map(|d| d.value);
+        let r = resolve(
+            file_layer(&entries),
+            "pumbo.proxy.server",
+            &levels(None, &[]),
+        )
+        .map(|d| d.value);
         assert_eq!(r, Some(true));
     }
 
     #[test]
-    fn namespace_wildcard_and_bridge_export() {
-        let all = [e("minecraft:*", true, PermContext::Global)];
-        let lv = levels(Some("survival"), &[]);
-        assert_eq!(
-            resolve(&all, &[], "minecraft:command.gamemode", &lv).map(|d| d.value),
-            Some(true)
-        );
-        assert_eq!(resolve(&all, &[], "minecraftx:a", &lv), None);
+    fn file_export_for_the_bridge() {
         let text = r#"
 groups:
   default:
@@ -1119,34 +951,6 @@ players:
         );
     }
 
-    /// A provider set of PumboPerms size (100 nodes in global and in three
-    /// server contexts): a check is a scan of the player's set in memory, no
-    /// plugin call.
-    #[test]
-    fn checks_from_a_provider_set_are_fast() {
-        let mut set = Vec::new();
-        for ctx in [Global, srv("lobby"), srv("survival"), srv("arena")] {
-            for i in 0..100 {
-                set.push(e(&format!("pumbo.node{i}.sub"), i % 2 == 0, ctx.clone()));
-            }
-            set.push(e("pumbo.*", true, ctx.clone()));
-        }
-        let lv = levels(Some("survival"), &["games".into()]);
-        let t = std::time::Instant::now();
-        let mut yes = 0;
-        for i in 0..100_000 {
-            let node = format!("pumbo.node{}.sub", i % 150);
-            yes += usize::from(resolve(&[], &set, &node, &lv).is_some_and(|d| d.value));
-        }
-        let took = t.elapsed();
-        eprintln!(
-            "[measure] 100000 checks, set of {} entries: {took:?}",
-            set.len()
-        );
-        assert!(yes > 0);
-        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
-    }
-
     #[test]
     fn snapshot_for_the_provider_keeps_contexts_and_names() {
         let (src, _) = FileSource::parse(FILE, &cfg()).unwrap();
@@ -1176,6 +980,86 @@ players:
         assert_eq!(x["by-name"][0]["data"]["parents"][0]["group"], "mod");
         assert_eq!(fnv_hex("a"), fnv_hex("a"));
         assert_ne!(fnv_hex("a"), fnv_hex("b"));
+    }
+
+    fn one_online(id: PlayerId) -> Permissions {
+        let p = Permissions::default();
+        p.online.write().unwrap().insert(id, PlayerPerms::default());
+        p
+    }
+
+    fn value(p: &Permissions, id: PlayerId, node: &str) -> Option<bool> {
+        p.decide(id, node, &levels(None, &[])).map(|d| d.value)
+    }
+
+    #[test]
+    fn session_node_survives_provider_replace() {
+        let p = one_online(1);
+        p.set_node(1, "minigame.spectate", Some(true), Global);
+        p.replace_provider_layer(1, vec![e("pumbo.proxy.server", true, Global)]);
+        assert_eq!(value(&p, 1, "minigame.spectate"), Some(true));
+    }
+
+    #[test]
+    fn session_node_survives_provider_drop() {
+        let p = one_online(1);
+        p.replace_provider_layer(1, vec![e("pumbo.proxy.server", true, Global)]);
+        p.set_node(1, "minigame.spectate", Some(true), Global);
+        p.drop_provider();
+        assert_eq!(value(&p, 1, "minigame.spectate"), Some(true));
+    }
+
+    #[test]
+    fn clearing_session_node_keeps_provider_entry() {
+        let p = one_online(1);
+        p.replace_provider_layer(1, vec![e("minigame.spectate", false, Global)]);
+        p.set_node(1, "minigame.spectate", Some(true), Global);
+        p.set_node(1, "minigame.spectate", None, Global);
+        assert_eq!(value(&p, 1, "minigame.spectate"), Some(false));
+    }
+
+    #[test]
+    fn server_context_ignores_case() {
+        let cfg = HostConfig::parse(
+            "servers:\n  Survival: { address: x }\nserver-group:\n  - name: Games\n    servers: [Arena]\n",
+        )
+        .unwrap();
+        let text = r#"
+players:
+  069a79f4-44e9-4726-a5be-fca90e38aaf5:
+    server:
+      survival: { permissions: [pumbo.proxy.glist, "minecraft:command.help"] }
+    group:
+      GAMES: { permissions: ["-pumbo.proxy.server"] }
+"#;
+        let (src, warnings) = FileSource::parse(text, &cfg).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let notch = Subject {
+            uuid: Uuid::parse_str("069a79f4-44e9-4726-a5be-fca90e38aaf5").unwrap(),
+            name: "Notch".into(),
+        };
+        let entries = src.entries_for(&notch);
+        let at = |server: &str| levels(Some(server), &cfg.groups_of(server));
+        let has = |node: &str, server: &str| {
+            resolve(file_layer(&entries), node, &at(server)).map(|d| d.value)
+        };
+        assert_eq!(has("pumbo.proxy.glist", "Survival"), Some(true));
+        assert_eq!(has("pumbo.proxy.server", "arena"), Some(false));
+        let x = src.export("Survival", &[]);
+        assert_eq!(
+            x["users"][0]["data"]["permissions"][0]["node"],
+            "minecraft:command.help"
+        );
+
+        let p = one_online(1);
+        let ctx =
+            crate::imports::perm_context(&crate::wit::types::Context::Server("SURVIVAL".into()));
+        p.replace_provider_layer(1, vec![e("pumbo.proxy.alert", true, ctx)]);
+        assert_eq!(
+            p.decide(1, "pumbo.proxy.alert", &at("Survival"))
+                .map(|d| d.value),
+            Some(true)
+        );
     }
 
     #[test]

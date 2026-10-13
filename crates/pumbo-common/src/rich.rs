@@ -420,6 +420,7 @@ pub fn text_width(text: &str, bold: bool) -> u32 {
 
 /// Spaces `px` pixels wide: normal spaces are 4 px, bold ones 5 px, so every
 /// width from 12 px up is exact. Smaller widths are rounded down.
+#[expect(clippy::integer_division, reason = "whole spaces of whole pixels")]
 pub fn pad(px: u32) -> Line {
     // (normal, bold) with 4 * normal + 5 * bold == width; from 12 px up the
     // first try succeeds.

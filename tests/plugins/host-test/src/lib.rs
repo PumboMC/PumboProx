@@ -1,8 +1,9 @@
 //! Plugin for pumbo-host tests. Behaviour comes from the command, the player
 //! name and `config.yml` of the plugin, so one module covers many cases:
 //!
-//! - commands (with `prefix` from the config): `/spin` (endless loop), `/panic`, `/reg <name>` (registers a
-//!   command), `/http <url>`, `/call <service> <method> <n>`, `/flood <n>`,
+//! - commands (with `prefix` from the config): `/spin` (endless loop),
+//!   `/panic`, `/reg <name> [umbrella] [virtual]` (registers a command),
+//!   `/http <url>`, `/call <service> <method> <n>`, `/flood <n>`,
 //!   `/sleep <ms>`, `/echo <text>`, `/alloc <mb>`,
 //! - gate by name prefix: `deny_`, `hold_` (released after 50 ms), `slow_`,
 //!   `never_` (hold without release), `locale_` (deny with the locale the
@@ -23,7 +24,10 @@
 //!   [label]`, `/avail <service> <on|off>`, `/lookup <service>`, `/hasoff
 //!   <uuid> <node>`; pull placeholders answer `pull:<key>:<arg>:<server>`
 //!   (`slow` after 300 ms); bus events and service changes are reported to
-//!   player `report`; a permission provider with `perms` from the config.
+//!   player `report`; a permission provider with `perms` from the config
+//!   (loads of `slowload_` players take 500 ms, the first load of a
+//!   `flaky_` player fails; `check-offline` calls are reported; `info`
+//!   answers `info <server>`).
 
 #![allow(clippy::panic)]
 
@@ -79,6 +83,7 @@ struct Cfg {
 struct TestPlugin {
     config: Config<Cfg>,
     calls: Cell<u64>,
+    flaky_failed: Cell<bool>,
 }
 
 fn arg(e: &CommandEvent, i: usize) -> String {
@@ -228,6 +233,12 @@ impl pumbo_sdk::Plugin for TestPlugin {
         if c.fail_load {
             return Err("provider database down".into());
         }
+        if p.profile.name.starts_with("flaky_") && !self.flaky_failed.replace(true) {
+            return Err("provider database busy".into());
+        }
+        if p.profile.name.starts_with("slowload_") {
+            pumbo_sdk::scheduler::sleep(500).await;
+        }
         Ok(PermissionSet {
             entries: c
                 .perms
@@ -297,7 +308,15 @@ impl pumbo_sdk::Plugin for TestPlugin {
             }
             "panic" => panic!("deliberate panic"),
             "reg" => {
-                let r = Command::new(&arg(&e, 0)).register();
+                let mut c = Command::new(&arg(&e, 0));
+                for flag in e.args.iter().skip(1) {
+                    c = match flag.as_str() {
+                        "umbrella" => c.umbrella(),
+                        "virtual" => c.virtual_only(),
+                        _ => c,
+                    };
+                }
+                let r = c.register();
                 reply(&e, format!("reg {r:?}"));
             }
             "http" => {
@@ -679,9 +698,20 @@ impl pumbo_sdk::Plugin for TestPlugin {
             pumbo_sdk::players::send_message(report, plain(format!("file {}", f.data.len())));
             return pumbo_sdk::service::to_cbor(&true).map_err(CallReject::Rejected);
         }
+        if c.service == pumbo_sdk::contracts::PERMISSIONS.name
+            && c.method == pumbo_sdk::contracts::METHOD_INFO
+        {
+            let req: pumbo_sdk::contracts::PermissionsInfoRequest =
+                pumbo_sdk::service::from_cbor(&c.payload).map_err(CallReject::Rejected)?;
+            let data = Some(format!("info {}", req.server));
+            return pumbo_sdk::service::to_cbor(&pumbo_sdk::contracts::PermissionsInfo { data })
+                .map_err(CallReject::Rejected);
+        }
         if c.service == pumbo_sdk::contracts::PERMISSIONS.name {
             let req: pumbo_sdk::contracts::CheckOffline =
                 pumbo_sdk::service::from_cbor(&c.payload).map_err(CallReject::Rejected)?;
+            let report = self.config.get().report;
+            pumbo_sdk::players::send_message(report, plain(format!("offline {}", req.node)));
             let value = self
                 .config
                 .get()

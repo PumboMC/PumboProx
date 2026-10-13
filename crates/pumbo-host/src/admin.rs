@@ -652,9 +652,11 @@ pub(crate) fn umbrella(
         return Some(admin_action(host, &slot, sender, &sub, named));
     }
     if let Some(entry) = host.commands.umbrella(&short, &sub) {
-        if let Err(commands::Denied::NoPermission) = commands::allowed(host, &slot, &entry, sender)
-        {
-            return Some(denied());
+        match commands::allowed(host, &slot, &entry, sender) {
+            Ok(()) => {}
+            Err(commands::Denied::NoPermission) => return Some(denied()),
+            // Like a command that does not exist for this sender.
+            Err(commands::Denied::Hidden) => return Some(unknown_subcommand(host, &sub)),
         }
         let event = CommandEvent {
             player: match sender {
@@ -676,10 +678,14 @@ pub(crate) fn umbrella(
             ),
         });
     }
-    Some(reply(
+    Some(unknown_subcommand(host, &sub))
+}
+
+fn unknown_subcommand(host: &HostInner, sub: &str) -> CommandOutcome {
+    reply(
         host,
-        vec![format!("<red>Unknown subcommand {}", escape_mini(&sub))],
-    ))
+        vec![format!("<red>Unknown subcommand {}", escape_mini(sub))],
+    )
 }
 
 /// Runs an admin action; the answer goes to the sender when it arrives.

@@ -13,7 +13,7 @@ use pumbo_core::routing::BackendInfo;
 use pumbo_protocol::crypto::ServerKey;
 use pumbo_protocol::{ProtocolVersion, VersionModule, VersionRegistry};
 use pumbo_text::Component;
-use tokio::sync::{Semaphore, mpsc, watch};
+use tokio::sync::{Notify, Semaphore, mpsc, watch};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -168,8 +168,6 @@ pub enum SessionCmd {
         name: String,
         value: Option<pumbo_core::profile::Property>,
     },
-    /// Permissions, context or plugin commands changed: rebuild the command tree.
-    CommandsChanged,
 }
 
 /// One online player in the registry.
@@ -181,6 +179,9 @@ pub struct PlayerEntry {
     pub server: Option<String>,
     pub address: SocketAddr,
     tx: mpsc::Sender<SessionCmd>,
+    /// Permissions, context or plugin commands changed: the session rebuilds
+    /// the command tree once for a series of changes, also with a full queue.
+    commands_changed: Arc<Notify>,
     /// Teleports the client has not confirmed (PumboBridge holds its own).
     tp: crate::bridge::TpGate,
 }
@@ -330,11 +331,15 @@ impl Proxy {
         if binds(&config) != binds(&old.config) {
             warn!("listener changes take effect after a restart");
         }
+        if let Some(p) = self.plugins.get() {
+            p.host.check_permissions()?;
+        }
         self.replace(config)?;
-        if let Some(p) = self.plugins.get()
-            && let Ok(host) = pumbo_host::HostConfig::parse(&text)
-        {
-            p.host.set_required_gates(host.plugins.required_gates);
+        if let Some(p) = self.plugins.get() {
+            if let Ok(host) = pumbo_host::HostConfig::parse(&text) {
+                p.host.set_required_gates(host.plugins.required_gates);
+            }
+            p.host.reload_permissions()?;
         }
         Ok(())
     }
@@ -356,15 +361,24 @@ impl Proxy {
     }
 
     /// A new runtime from `config` plus the servers of `managed-servers`
-    /// (a server in the config file wins over one of the same name).
+    /// (a server in the config file wins over one of the same name in any
+    /// letter case).
     fn replace(&self, mut config: Config) -> Result<(), String> {
         let mut managed = Vec::new();
         if let Some(m) = self.servers.get() {
             for (name, s) in crate::servers::backends(self, m) {
-                if !config.servers.contains_key(&name) {
-                    config.servers.insert(name.clone(), s);
-                    managed.push(name);
+                if let Some(own) = config
+                    .servers
+                    .keys()
+                    .find(|k| k.eq_ignore_ascii_case(&name))
+                {
+                    if *own != name {
+                        warn!("server {name} of managed-servers is left out: the config has {own}");
+                    }
+                    continue;
                 }
+                config.servers.insert(name.clone(), s);
+                managed.push(name);
             }
         }
         // A server the proxy has not created yet is skipped until it exists.
@@ -416,6 +430,7 @@ impl Proxy {
                 server: None,
                 address,
                 tx,
+                commands_changed: Arc::new(Notify::new()),
                 tp: crate::bridge::new_gate(),
             },
         );
@@ -475,6 +490,20 @@ impl Proxy {
             .ok()
             .and_then(|p| p.get(&id).map(|e| e.tx.clone()));
         tx.is_some_and(|tx| tx.try_send(cmd).is_ok())
+    }
+
+    /// The player's visible commands changed; `false` if the player is gone.
+    pub fn commands_changed(&self, id: Uuid) -> bool {
+        self.commands_signal(id).map(|n| n.notify_one()).is_some()
+    }
+
+    /// What the session of this player waits on for [`Proxy::commands_changed`].
+    pub fn commands_signal(&self, id: Uuid) -> Option<Arc<Notify>> {
+        self.players
+            .lock()
+            .ok()?
+            .get(&id)
+            .map(|e| e.commands_changed.clone())
     }
 
     /// Reconnects a player to the current server (§3.3).

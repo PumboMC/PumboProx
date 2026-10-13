@@ -88,6 +88,10 @@ impl ProxyBridge for SessionBridge {
             return;
         };
         let cmd = match cmd {
+            PlayerCommand::CommandsChanged => {
+                proxy.commands_changed(uuid);
+                return;
+            }
             PlayerCommand::Message(c) => SessionCmd::Message(Box::new(c)),
             PlayerCommand::ActionBar(c) => SessionCmd::ActionBar(Box::new(c)),
             PlayerCommand::Title {
@@ -139,7 +143,6 @@ impl ProxyBridge for SessionBridge {
                 to_backend,
             },
             PlayerCommand::Bossbar(b) => bossbar(b),
-            PlayerCommand::CommandsChanged => SessionCmd::CommandsChanged,
             PlayerCommand::Virtual(v) => SessionCmd::Virtual(Box::new(v)),
         };
         proxy.send_to(uuid, cmd);
@@ -168,6 +171,17 @@ impl ProxyBridge for SessionBridge {
                 Err(ConnectError::Cancelled)
             }
         })
+    }
+
+    fn permissions_export_changed(&self) {
+        if let Some(b) = self
+            .proxy
+            .get()
+            .and_then(Weak::upgrade)
+            .and_then(|p| p.bridge.get().cloned())
+        {
+            b.export_changed();
+        }
     }
 
     fn reconnect(&self, player: PlayerId) -> BoxFuture<'static, Result<(), ConnectError>> {
@@ -585,6 +599,19 @@ impl Plugins {
             self.host
                 .backend_permissions(self.id(uuid)?, server, catalog),
         )
+    }
+
+    /// What the permission provider shows for an online player on `server`
+    /// (PumboBridge `perm-set` info); `Err`: no answer, keep the last one.
+    pub async fn permissions_info(
+        &self,
+        uuid: Uuid,
+        server: &str,
+    ) -> Result<Option<String>, String> {
+        let Some(id) = self.id(uuid) else {
+            return Ok(None);
+        };
+        self.host.permissions_info(id, server).await
     }
 
     pub fn set_player_value(&self, uuid: Uuid, key: &str, value: String) {

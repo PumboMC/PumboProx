@@ -39,7 +39,8 @@
 //! YAML is read as YAML 1.2: only `true` and `false` are booleans, so `no`,
 //! `off` or `on` stay text. A file that is not valid YAML gives a
 //! [`Warning::fatal`] with the line and column; a reload then keeps the
-//! settings it had.
+//! settings it had, and a start uses the last copy that loaded
+//! ([`load_with_last_good`]).
 
 use std::fmt;
 
@@ -177,6 +178,65 @@ pub fn read_or_create(path: &str, template: &str) -> (String, Option<Warning>) {
         }
         Err(e) => (template.to_string(), Some(Warning::new(None, format!("cannot read {path}: {e}; using defaults")))),
     }
+}
+
+/// The copy of the last `config.yml` that loaded, in the data folder.
+pub const LAST_GOOD: &str = "config.last-good.yml";
+
+/// Loads `config.yml` from `config_dir` at start (missing: the defaults). A
+/// file that loads is copied to [`LAST_GOOD`] in `data_dir`. A file that is not
+/// valid YAML (or cannot be read) loads that copy instead, with a fatal warning
+/// for the log; without a copy the error is returned and the plugin must not
+/// start, since the defaults may give rights the admin took away.
+pub fn load_with_last_good<T: Settings>(config_dir: &str, data_dir: &str) -> Result<(T, Vec<Warning>), String> {
+    let path = format!("{config_dir}/config.yml");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => Ok(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(format!("cannot read {path}: {e}")),
+    };
+    let broken = match text {
+        Ok(text) => {
+            let (cfg, mut warnings) = load::<T>(&text);
+            match warnings.iter().find(|w| w.fatal) {
+                None => {
+                    warnings.extend(keep_last_good(config_dir, data_dir));
+                    return Ok((cfg, warnings));
+                }
+                Some(w) => w.message.clone(),
+            }
+        }
+        Err(e) => e,
+    };
+    let copy = format!("{data_dir}/{LAST_GOOD}");
+    let Ok(text) = std::fs::read_to_string(&copy) else {
+        return Err(format!("{broken}; there is no {LAST_GOOD} to start from, fix config.yml"));
+    };
+    let (cfg, mut warnings) = load::<T>(&text);
+    if warnings.iter().any(|w| w.fatal) {
+        return Err(format!("{broken}; {LAST_GOOD} cannot be read either, fix config.yml"));
+    }
+    warnings.insert(0, Warning::fatal(format!("{broken}; started with the last good copy {LAST_GOOD}")));
+    Ok((cfg, warnings))
+}
+
+/// Copies `config.yml` of `config_dir` to [`LAST_GOOD`] in `data_dir` (after a
+/// load or reload that worked). Nothing to copy when the file is missing.
+pub fn keep_last_good(config_dir: &str, data_dir: &str) -> Option<Warning> {
+    let text = std::fs::read_to_string(format!("{config_dir}/config.yml")).ok()?;
+    write_atomic(&format!("{data_dir}/{LAST_GOOD}"), text.as_bytes())
+        .err()
+        .map(|e| Warning::new(None, format!("cannot save {LAST_GOOD}: {e}")))
+}
+
+/// Writes through `<path>.tmp`, so a crash leaves the old file or the new one.
+fn write_atomic(path: &str, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let tmp = format!("{path}.tmp");
+    let mut f = std::fs::File::create(&tmp)?;
+    f.write_all(data)?;
+    f.sync_all()?;
+    std::fs::rename(&tmp, path)
 }
 
 /// Collects corrections made by [`Settings::validate`].
@@ -320,6 +380,7 @@ impl Merge<'_> {
 /// fewer for short names),
 /// anywhere in `table`: a typo, or a line indented under the wrong section.
 fn closest(table: &Table, path: &str, key: &str) -> Option<String> {
+    #[expect(clippy::integer_division, reason = "a third of the key length, rounded down")]
     fn walk(table: &Table, path: &str, key: &str, best: &mut Option<(usize, String)>) {
         for (name, value) in table {
             let full = if path.is_empty() { name.clone() } else { format!("{path}.{name}") };
@@ -607,5 +668,42 @@ mod tests {
         }
         let _ = std::fs::remove_dir(dir.join("lang"));
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    fn start_dirs(name: &str) -> (std::path::PathBuf, String) {
+        let dir = std::env::temp_dir().join(format!("pumbo-common-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = dir.to_str().unwrap().to_string();
+        (dir, d)
+    }
+
+    #[test]
+    fn fatal_config_at_start_uses_last_good_copy() {
+        let (dir, d) = start_dirs("last-good");
+        std::fs::write(dir.join("config.yml"), "language: pl\n").unwrap();
+        let (c, w) = load_with_last_good::<Cfg>(&d, &d).unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(c.language, "pl");
+        assert_eq!(std::fs::read_to_string(dir.join(LAST_GOOD)).unwrap(), "language: pl\n");
+        std::fs::write(dir.join("config.yml"), "language: [pl\n").unwrap();
+        let (c, w) = load_with_last_good::<Cfg>(&d, &d).unwrap();
+        assert_eq!(c.language, "pl", "the copy, not the defaults");
+        assert!(w.first().is_some_and(|w| w.fatal && w.message.contains(LAST_GOOD)), "{w:?}");
+        assert_eq!(std::fs::read_to_string(dir.join(LAST_GOOD)).unwrap(), "language: pl\n", "copy kept");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fatal_config_without_copy_refuses_start() {
+        let (dir, d) = start_dirs("no-copy");
+        std::fs::write(dir.join("config.yml"), "language: [pl\n").unwrap();
+        let err = load_with_last_good::<Cfg>(&d, &d).unwrap_err();
+        assert!(err.contains("not valid YAML") && err.contains(LAST_GOOD), "{err}");
+        // No file at all is the defaults, not an error.
+        std::fs::remove_file(dir.join("config.yml")).unwrap();
+        let (c, w) = load_with_last_good::<Cfg>(&d, &d).unwrap();
+        assert!(w.is_empty() && c == Cfg::default(), "{w:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

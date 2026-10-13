@@ -7,6 +7,8 @@
 //!
 //! License: MIT OR Apache-2.0.
 
+pub mod permissions;
+
 use serde::{Deserialize, Serialize};
 
 /// A topic or service name with its version (`name@major.minor`).
@@ -212,10 +214,34 @@ pub struct PermissionsExport {
     pub data: String,
 }
 
+/// `pumbo:permissions@1.0` method `info`: what the provider shows for an
+/// online player on a server behind the proxy (PumboBridge carries it with
+/// the player's `perm-set`); answer: [`PermissionsInfo`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionsInfoRequest {
+    pub uuid: UuidHex,
+    pub server: String,
+    /// Server groups of `server`, config order.
+    #[serde(default)]
+    pub groups: Vec<String>,
+}
+
+/// Answer of `info`: the provider's own JSON (for PumboPerms the answer of
+/// its `info` IPC request without `ok`); `None` for an unknown player.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionsInfo {
+    #[serde(default)]
+    pub data: Option<String>,
+}
+
 /// Method names of `pumbo:permissions@1.0`.
 pub const METHOD_CHECK_OFFLINE: &str = "check-offline";
 pub const METHOD_FILE: &str = "file";
 pub const METHOD_EXPORT: &str = "export";
+pub const METHOD_INFO: &str = "info";
+/// Methods of `pumbo:permissions@1.0` only the host may call: they hand the
+/// provider a whole permission file or read out its data.
+pub const PERMISSIONS_HOST_ONLY: &[&str] = &[METHOD_FILE, METHOD_EXPORT, METHOD_INFO];
 
 #[cfg(test)]
 mod tests {

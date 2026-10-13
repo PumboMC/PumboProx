@@ -287,6 +287,8 @@ interface permissions {
   /// service. `current` means global.
   has-offline: async func(id: uuid, node: string, at: query-context) -> result<bool, service-error>;
   /// Plugins with `permissions-write` only: change one node for the session.
+  /// It lasts until the player leaves and wins a tie with the file and the
+  /// provider; `replace` keeps it.
   set: func(id: player-id, node: string, value: option<bool>, ctx: context) -> result<_, string>;
   /// Permission provider only: replace the whole set of an online player.
   replace: func(id: player-id, entries: permission-set) -> result<_, string>;

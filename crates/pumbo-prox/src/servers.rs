@@ -125,7 +125,7 @@ pub fn start_with(proxy: &Arc<Proxy>, sources: Vec<Arc<dyn Source>>) -> Result<(
     }
     let manager = Manager::new(
         config.managed_servers.clone(),
-        network(&config)?,
+        network(&config, proxy.bridge.get().is_some())?,
         sources,
         Arc::new(ProcessRunner::default()),
     )
@@ -172,8 +172,9 @@ fn first_ready(proxy: &Proxy) {
     }
 }
 
-/// The forwarding secret and the bridge for the files of new servers.
-fn network(config: &Config) -> Result<Network, String> {
+/// The forwarding secret and, when the proxy runs one, the bridge for the
+/// files of new servers.
+fn network(config: &Config, bridge_runs: bool) -> Result<Network, String> {
     let velocity_secret = if config.forwarding.mode == "modern" {
         let get = |k: &str| config.forwarding.rest.get(k).and_then(|v| v.as_str());
         let secret = match get("secret-env") {
@@ -189,7 +190,7 @@ fn network(config: &Config) -> Result<Network, String> {
     } else {
         None
     };
-    let bridge = if config.bridge.enabled {
+    let bridge = if bridge_runs {
         let path = &config.bridge.key_file;
         let key = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
         Some((config.bridge.listen.clone(), key.trim().to_string()))
@@ -198,6 +199,9 @@ fn network(config: &Config) -> Result<Network, String> {
     };
     Ok(Network {
         velocity_secret,
+        bridge_releases: bridge
+            .is_some()
+            .then(|| pumbo_servers::versions::PUMBOBRIDGE_API.to_string()),
         bridge,
     })
 }

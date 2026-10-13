@@ -642,6 +642,30 @@ async fn the_route_is_shown_and_changed_in_the_config_file() {
     m.shutdown().await;
 }
 
+/// A server in the config file wins over a server of the proxy whose name
+/// differs only in letter case: both would share one permission context.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_config_server_wins_over_a_proxy_server_in_any_case() {
+    let (proxy, _, dir, lobby) = proxy("case", 25900, "Admin").await;
+    let file = dir.join("../pumboprox.yml");
+    let m = proxy.servers.get().unwrap().clone();
+    let _cleanup = Cleanup(m.clone());
+    new_server(&proxy, &dir, "arena", &lobby).await;
+    let text = std::fs::read_to_string(&file).unwrap();
+    let own = format!("  Arena: {{ address: \"{lobby}\" }}\n  lobby: {{");
+    std::fs::write(&file, text.replace("  lobby: {", &own)).unwrap();
+    proxy.reload().unwrap();
+    let names: Vec<String> = proxy
+        .runtime()
+        .backends
+        .iter()
+        .map(|b| b.name.clone())
+        .collect();
+    assert!(names.contains(&"Arena".to_string()), "{names:?}");
+    assert!(!names.contains(&"arena".to_string()), "{names:?}");
+    m.shutdown().await;
+}
+
 // ------------------------------------------------------------------ arguments
 
 /// Every command with no, too few, wrong and right arguments, and Tab at every

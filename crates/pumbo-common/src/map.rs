@@ -42,6 +42,7 @@ pub fn base_rgb(base: u8) -> (u8, u8, u8) {
 }
 
 /// Approximate RGB of a colour index.
+#[expect(clippy::integer_division, reason = "colour scaling, rounded down")]
 pub fn rgb(index: u8) -> (u8, u8, u8) {
     let (r, g, b) = base_rgb(index / 4);
     let mult: u32 = match index % 4 {
