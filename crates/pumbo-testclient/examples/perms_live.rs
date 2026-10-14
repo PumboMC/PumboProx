@@ -13,6 +13,13 @@
 //! Network steps: N1 N2 N3 N4 N5 N5b N6 N7 N8 N14 by default; N10 checks the
 //! data after a restart (the script runs it after `down` and `up`), N11 the
 //! same and the time PumboPerms took to open its database after the SIGKILL.
+//! N12 (load, `PERMS_LIVE_N12_SECS`, 300) and N13 (long run with
+//! `<network dir>/footprint.log`, `PERMS_LIVE_N13_SECS`, 3600) run only when
+//! named. Their bots (`PpOp7x`, `PpPlain7x`, `PpPend7x`, `PpSlow7x`) must be
+//! ops on survival: Pumpkin kicks anyone else who sends more than about one
+//! command a second.
+//! `soak` is the long run of `tools/perms-soak.sh` (its variables are on
+//! the step).
 //! Solo steps: J1-J6; J8a and J8b are the two halves of J8 (data made by the
 //! released 0.1.2-beta, then read by this build), the script swaps the file
 //! between them. Logs are `<dir>/<proxy|lobby|survival>/console.log` and
@@ -44,6 +51,17 @@ const PENDING: &str = "PpPend7x";
 const PLAIN: &str = "PpPlain7x";
 const SLOW: &str = "PpSlow7x";
 const STRANGER: &str = "PpNew7x";
+/// Bots of N12 and N13: four, because the proxy lets five connections in
+/// per address by default and the admin takes one.
+const LOAD: [&str; 4] = [OP, PLAIN, PENDING, SLOW];
+const LOGS: [&str; 3] = ["proxy", "lobby", "survival"];
+
+fn env_secs(var: &str, default: u64) -> u64 {
+    std::env::var(var)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
+}
 
 struct Live {
     addr: SocketAddr,
@@ -101,6 +119,35 @@ impl Live {
             false => Ok(()),
         }
     }
+
+    /// Lengths of the network logs now, to read only what comes after.
+    fn log_ends(&self) -> Vec<usize> {
+        LOGS.iter().map(|w| self.log(w).len()).collect()
+    }
+
+    /// No trapped plugin call on the proxy and no failed Wasm call on the
+    /// servers since `ends`.
+    fn no_plugin_errors(&self, ends: &[usize]) -> Step {
+        for (who, from) in LOGS.iter().zip(ends) {
+            let log = self.log(who);
+            let new = log.get(*from..).unwrap_or(&log);
+            let bad = |l: &&str| {
+                l.contains("time budget exceeded") || (l.contains("Wasm") && l.contains("failed"))
+            };
+            if let Some(line) = new.lines().find(bad) {
+                return Err(format!("the {who} log has: {line}"));
+            }
+        }
+        Ok(())
+    }
+
+    fn pid(&self, who: &str) -> Result<String, String> {
+        let path = self.dir.join(who).join("pid");
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| s.split_whitespace().next().map(str::to_string))
+            .ok_or_else(|| format!("no pid in {}", path.display()))
+    }
 }
 
 async fn pump(p: &mut Player, ms: u64, until: impl FnMut(&Player) -> bool) -> Result<bool, String> {
@@ -128,6 +175,27 @@ async fn ask(p: &mut Player, line: &str) -> Result<Vec<String>, String> {
         .map_err(|e| format!("{}: /{line}: {e}", p.opts.name))?;
     pump(p, 5000, |p| p.messages.len() > before).await?;
     pump(p, 400, |_| false).await?;
+    Ok(p.messages.get(before..).unwrap_or_default().to_vec())
+}
+
+/// Sends a command and waits up to `secs` for a system message with
+/// `needle`; returns every message that came in meanwhile.
+async fn ask_for(
+    p: &mut Player,
+    line: &str,
+    needle: &str,
+    secs: u64,
+) -> Result<Vec<String>, String> {
+    let before = p.messages.len();
+    p.command(line.trim_start_matches('/'))
+        .await
+        .map_err(|e| format!("{}: /{line}: {e}", p.opts.name))?;
+    let has = |p: &Player| {
+        p.messages
+            .get(before..)
+            .is_some_and(|m| m.iter().any(|m| m.contains(needle)))
+    };
+    pump(p, secs * 1000, has).await?;
     Ok(p.messages.get(before..).unwrap_or_default().to_vec())
 }
 
@@ -280,8 +348,9 @@ async fn n4(l: &Live) -> Step {
 async fn n5(l: &Live) -> Step {
     let mut admin = l.bot(ADMIN).await?;
     let mut moderator = l.on_survival(MODERATOR).await?;
-    let lines = ask(&mut admin, "prox plugins reload pumbo-perms").await?;
-    if !lines.iter().any(|m| m.contains("pumbo-perms reloaded")) {
+    let done = "pumbo-perms reloaded";
+    let lines = ask_for(&mut admin, "prox plugins reload pumbo-perms", done, 30).await?;
+    if !lines.iter().any(|m| m.contains(done)) {
         return Err(format!("the reload was not confirmed: {lines:?}"));
     }
     // Online through the restart: the tree never offers /ban.
@@ -401,10 +470,17 @@ async fn n7(l: &Live) -> Step {
     std::fs::write(&file, changed).map_err(|e| e.to_string())?;
     // The host reads the file again; PumboPerms gets it at its next start.
     ask(&mut admin, "prox reload").await?;
-    ask(&mut admin, "prox plugins reload pumbo-perms").await?;
+    ask_for(
+        &mut admin,
+        "prox plugins reload pumbo-perms",
+        "pumbo-perms reloaded",
+        30,
+    )
+    .await?;
     l.wait_log("proxy", "changed since it was imported", 30)
         .await?;
-    let lines = ask(&mut admin, "pp import run file").await?;
+    // The answer to a large import comes after the import finishes.
+    let lines = ask_for(&mut admin, "pp import run file", "Imported file", 60).await?;
     if !lines.iter().any(|m| m.contains("Imported file")) {
         return Err(format!("the re-import did not run: {lines:?}"));
     }
@@ -471,6 +547,333 @@ async fn n10(l: &Live) -> Step {
     moderator.close().await;
     admin.close().await;
     Ok(())
+}
+
+/// Load: the four bots send 100 commands a second each on survival (the 400
+/// of eight bots at 50 in the plan) and the admin 20 `/pp` changes a second
+/// in `default`. Nobody is disconnected, no plugin call traps or fails, and
+/// the last change holds afterwards.
+async fn n12(l: &Live) -> Step {
+    let secs = env_secs("PERMS_LIVE_N12_SECS", 300);
+    let ends = l.log_ends();
+    // The proxy lets 3 connections a second in from one address, and the step before just joined some.
+    let pace = || tokio::time::sleep(Duration::from_millis(400));
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let mut admin = l.bot(ADMIN).await?;
+    let mut load = Vec::new();
+    for name in LOAD {
+        pace().await;
+        load.push(l.on_survival(name).await?);
+    }
+    let node = "pumbo.load.node";
+    let tick = Duration::from_millis(10);
+    let started = tokio::time::Instant::now();
+    let until = started + Duration::from_secs(secs);
+    let mut next = started;
+    let (mut ticks, mut commands, mut changes, mut answers) = (0u64, 0u64, 0u64, 0usize);
+    while tokio::time::Instant::now() < until {
+        for p in &mut load {
+            p.command("gamemode survival")
+                .await
+                .map_err(|e| format!("{}: {e}", p.opts.name))?;
+            commands += 1;
+        }
+        if ticks % 5 == 0 {
+            let line = match changes % 2 {
+                0 => format!("pp group default permission set {node} true"),
+                _ => format!("pp group default permission unset {node}"),
+            };
+            admin
+                .command(&line)
+                .await
+                .map_err(|e| format!("{ADMIN}: {e}"))?;
+            changes += 1;
+        }
+        ticks += 1;
+        // Behind schedule: drop the missed ticks instead of a burst.
+        next = (next + tick).max(tokio::time::Instant::now());
+        loop {
+            for p in load.iter_mut().chain(std::iter::once(&mut admin)) {
+                pump(p, 1, |_| false).await?;
+            }
+            if tokio::time::Instant::now() >= next {
+                break;
+            }
+        }
+        if let Some(p) = load.iter().chain([&admin]).find(|p| p.disconnect.is_some()) {
+            let hint = match p.disconnect.as_deref() {
+                Some(d) if d.contains("spam") => " (make it an op on survival)",
+                _ => "",
+            };
+            return Err(format!(
+                "{} was disconnected under load: {:?}{hint}",
+                p.opts.name, p.disconnect
+            ));
+        }
+        answers += admin.messages.len();
+        for p in load.iter_mut().chain(std::iter::once(&mut admin)) {
+            p.messages.clear();
+            p.kinds.clear();
+        }
+    }
+    let took = started.elapsed().as_secs_f64();
+    println!(
+        "N12: {commands} commands on survival ({:.0}/s), {changes} /pp changes ({:.1}/s), {answers} answers to the admin",
+        commands as f64 / took,
+        changes as f64 / took,
+    );
+    {
+        let mut all: Vec<&mut Player> = load.iter_mut().collect();
+        all.push(&mut admin);
+        idle(&mut all, 3).await?;
+    }
+    if answers.saturating_mul(2) < usize::try_from(changes).unwrap_or(usize::MAX) {
+        return Err(format!("the proxy answered {answers} of {changes} changes"));
+    }
+    ask(
+        &mut admin,
+        &format!("pp group default permission unset {node}"),
+    )
+    .await?;
+    if check_true(&mut admin, PLAIN, node).await? {
+        return Err(format!("{node} is still set after the last change"));
+    }
+    l.no_plugin_errors(&ends)?;
+    for p in load {
+        p.close().await;
+    }
+    admin.close().await;
+    Ok(())
+}
+
+/// RSS of a process from `ps` and its footprint from `footprint`, in KB.
+fn memory(pid: &str) -> (Option<u64>, Option<u64>) {
+    let run = |cmd: &str, args: &[&str]| {
+        std::process::Command::new(cmd)
+            .args(args)
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default()
+    };
+    let rss = run("ps", &["-o", "rss=", "-p", pid]).trim().parse().ok();
+    // "Footprint: 58 MB (16384 bytes per page)"
+    let footprint = run("footprint", &[pid]).lines().find_map(|l| {
+        let (_, r) = l.split_once("Footprint: ")?;
+        let mut w = r.split_whitespace();
+        let n: f64 = w.next()?.parse().ok()?;
+        let kb = match w.next()? {
+            "B" => n / 1024.0,
+            "KB" => n,
+            "MB" => n * 1024.0,
+            "GB" => n * 1024.0 * 1024.0,
+            _ => return None,
+        };
+        Some(kb as u64)
+    });
+    (rss, footprint)
+}
+
+/// Long run: a bot joins survival and leaves every 10 s, the admin makes one
+/// `/pp` change every 10 s (a new node in `default`, then its removal), and
+/// the memory of the proxy and survival goes to `footprint.log` 60 times.
+/// After the first sixth (the 10 min warm-up of an hour) the footprint of
+/// the proxy grows by at most 5%: macOS compresses idle pages, so RSS
+/// falls while the memory a process holds still grows.
+async fn n13(l: &Live) -> Step {
+    let secs = env_secs("PERMS_LIVE_N13_SECS", 3600);
+    let ends = l.log_ends();
+    let path = l.dir.join("footprint.log");
+    let mut out = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let (proxy, survival) = (l.pid("proxy")?, l.pid("survival")?);
+    let started = tokio::time::Instant::now();
+    let length = Duration::from_secs(secs);
+    let every = length / 60;
+    let mut next_sample = started;
+    // Proxy footprint after the warm-up and the last one; the same for survival.
+    let mut held: [(Option<u64>, u64); 2] = [(None, 0); 2];
+    let mut admin = l.bot(ADMIN).await?;
+    let mut bot: Option<Player> = None;
+    let mut cycle: u32 = 0;
+    while started.elapsed() < length {
+        if let Some(p) = bot.take() {
+            p.close().await;
+        }
+        let name = LOAD.get(cycle as usize % LOAD.len()).copied().unwrap_or(OP);
+        bot = Some(l.on_survival(name).await?);
+        let line = match cycle % 2 {
+            0 => format!(
+                "pp group default permission set pumbo.soak.n{} true",
+                cycle / 2
+            ),
+            _ => format!(
+                "pp group default permission unset pumbo.soak.n{}",
+                cycle / 2
+            ),
+        };
+        must_run(&mut admin, &line).await?;
+        cycle += 1;
+        let cycle_end = started + Duration::from_secs(10) * cycle;
+        while tokio::time::Instant::now() < cycle_end {
+            pump(&mut admin, 100, |_| false).await?;
+            if let Some(p) = bot.as_mut() {
+                pump(p, 100, |_| false).await?;
+            }
+            if tokio::time::Instant::now() < next_sample {
+                continue;
+            }
+            next_sample += every;
+            let at = started.elapsed();
+            let mut row = format!("{}", at.as_secs());
+            for (i, (who, pid)) in [("proxy", &proxy), ("survival", &survival)]
+                .into_iter()
+                .enumerate()
+            {
+                let (rss, footprint) = memory(pid);
+                let kb = |v: Option<u64>| v.map_or("?".into(), |k| k.to_string());
+                row.push_str(&format!(
+                    " {who} pid={pid} rss_kb={} footprint_kb={}",
+                    kb(rss),
+                    kb(footprint)
+                ));
+                if let (Some(kb), Some(slot)) = (footprint, held.get_mut(i)) {
+                    if at >= length / 6 {
+                        slot.0.get_or_insert(kb);
+                    }
+                    slot.1 = kb;
+                }
+            }
+            use std::io::Write as _;
+            writeln!(out, "{row}").map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        for p in [Some(&admin), bot.as_ref()].into_iter().flatten() {
+            if p.disconnect.is_some() {
+                return Err(format!(
+                    "{} was disconnected: {:?}",
+                    p.opts.name, p.disconnect
+                ));
+            }
+        }
+        admin.messages.clear();
+        admin.kinds.clear();
+    }
+    if cycle % 2 == 1 {
+        must_run(
+            &mut admin,
+            &format!(
+                "pp group default permission unset pumbo.soak.n{}",
+                cycle / 2
+            ),
+        )
+        .await?;
+    }
+    if let Some(p) = bot {
+        p.close().await;
+    }
+    admin.close().await;
+    l.no_plugin_errors(&ends)?;
+    let growth = |(base, last): (Option<u64>, u64)| {
+        base.filter(|b| *b > 0)
+            .map(|b| (b, last, (last as f64 / b as f64 - 1.0) * 100.0))
+    };
+    let [p, s] = held;
+    if let Some((b, last, pct)) = growth(s) {
+        println!(
+            "N13: survival footprint {b} KB after the warm-up, {last} KB at the end ({pct:+.1}%)"
+        );
+    }
+    let Some((b, last, pct)) = growth(p) else {
+        return Err(format!(
+            "no proxy footprint after the warm-up in {}",
+            path.display()
+        ));
+    };
+    println!("N13: proxy footprint {b} KB after the warm-up, {last} KB at the end ({pct:+.1}%)");
+    match pct <= 5.0 {
+        true => Ok(()),
+        false => Err(format!(
+            "the proxy footprint grew by {pct:.1}% after the warm-up"
+        )),
+    }
+}
+
+/// The run of `tools/perms-soak.sh` in pumbo-plugins: a bot joins and leaves
+/// every `PERMS_SOAK_JOIN_SECS` (5), the admin makes a `/pp` change every
+/// `PERMS_SOAK_CHANGE_SECS` (10) and every `PERMS_SOAK_TEMP_SECS` (60) gives
+/// itself a node that ends 30 s later, for `PERMS_SOAK_SECS` (14400). The
+/// bots stay on lobby, so the script can restart survival meanwhile; a bot
+/// that cannot join tries again at its next turn. The script measures memory.
+async fn soak(l: &Live) -> Step {
+    let length = Duration::from_secs(env_secs("PERMS_SOAK_SECS", 14_400));
+    let join_every = Duration::from_secs(env_secs("PERMS_SOAK_JOIN_SECS", 5).max(1));
+    let change_every = Duration::from_secs(env_secs("PERMS_SOAK_CHANGE_SECS", 10).max(1));
+    let temp_every = Duration::from_secs(env_secs("PERMS_SOAK_TEMP_SECS", 60).max(31));
+    let ends = l.log_ends();
+    let mut admin = l.bot(ADMIN).await?;
+    let started = tokio::time::Instant::now();
+    let (mut next_join, mut next_change, mut next_temp) = (started, started, started);
+    let mut bot: Option<Player> = None;
+    let (mut joins, mut failed, mut changes, mut temps) = (0u32, 0u32, 0u32, 0u32);
+    while started.elapsed() < length {
+        let now = tokio::time::Instant::now();
+        if now >= next_join {
+            next_join += join_every;
+            if let Some(p) = bot.take() {
+                p.close().await;
+            }
+            let name = LOAD.get(joins as usize % LOAD.len()).copied().unwrap_or(OP);
+            match l.bot(name).await {
+                Ok(p) => bot = Some(p),
+                Err(e) => {
+                    failed += 1;
+                    println!("RETRY {name}: {e}");
+                }
+            }
+            joins += 1;
+        }
+        if now >= next_change {
+            next_change += change_every;
+            let line = match changes % 2 {
+                0 => "pp group default permission set pumbo.soak.node true",
+                _ => "pp group default permission unset pumbo.soak.node",
+            };
+            must_run(&mut admin, line).await?;
+            changes += 1;
+        }
+        if now >= next_temp {
+            next_temp += temp_every;
+            must_run(
+                &mut admin,
+                &format!("pp user {ADMIN} permission settemp pumbo.soak.temp true 30s"),
+            )
+            .await?;
+            temps += 1;
+        }
+        pump(&mut admin, 100, |_| false).await?;
+        if let Some(p) = bot.as_mut() {
+            pump(p, 100, |_| false).await?;
+        }
+        if let Some(d) = &admin.disconnect {
+            return Err(format!("{ADMIN} was disconnected: {d}"));
+        }
+        admin.messages.clear();
+        admin.kinds.clear();
+    }
+    if let Some(p) = bot {
+        p.close().await;
+    }
+    admin.close().await;
+    println!(
+        "soak: {joins} joins ({failed} refused), {changes} /pp changes, {temps} temporary nodes in {} s",
+        length.as_secs()
+    );
+    if failed.saturating_mul(10) > joins {
+        return Err(format!("{failed} of {joins} joins were refused"));
+    }
+    l.no_plugin_errors(&ends)
 }
 
 async fn n14(l: &Live) -> Step {
@@ -732,7 +1135,10 @@ async fn run(l: &Live, step: &str) -> Step {
         "N8" => n8(l).await,
         "N10" => n10(l).await,
         "N11" => n11(l).await,
+        "N12" => n12(l).await,
+        "N13" => n13(l).await,
         "N14" => n14(l).await,
+        "soak" => soak(l).await,
         "J1" => j1(l).await,
         "J2" => j2(l).await,
         "J3" => j3(l).await,
