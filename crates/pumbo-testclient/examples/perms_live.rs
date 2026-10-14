@@ -10,11 +10,14 @@
 //! perms_live solo <server ip:port> <server dir> [step...]
 //! ```
 //!
-//! Network steps: N1 N2 N3 N4 N5 N5b N6 N8 N14 by default; N10 checks the
-//! data after a restart (the script runs it after `down` and `up`, and after
-//! the SIGKILL of N11). Solo steps: J1-J6. Logs are `<dir>/<proxy|lobby|
-//! survival>/console.log` and `<server dir>/console.log`. Each step prints
-//! `PASS <step>` or `FAIL <step>: <why>`; any failure exits with 1.
+//! Network steps: N1 N2 N3 N4 N5 N5b N6 N7 N8 N14 by default; N10 checks the
+//! data after a restart (the script runs it after `down` and `up`), N11 the
+//! same and the time PumboPerms took to open its database after the SIGKILL.
+//! Solo steps: J1-J6; J8a and J8b are the two halves of J8 (data made by the
+//! released 0.1.2-beta, then read by this build), the script swaps the file
+//! between them. Logs are `<dir>/<proxy|lobby|survival>/console.log` and
+//! `<server dir>/console.log`. Each step prints `PASS <step>` or
+//! `FAIL <step>: <why>`; any failure exits with 1.
 //! `PUMBO_PROTOCOL` (777) is the protocol of the bots. Bans go through `/pb`:
 //! on Pumpkin 0.2.0 the `/ban` shortcut of PumboBans keeps the vanilla
 //! permission (`minecraft:command.ban`) in the command tree.
@@ -52,9 +55,16 @@ struct Live {
 
 impl Live {
     async fn bot(&self, name: &str) -> Result<Player, String> {
-        Player::join(self.addr, self.module.clone(), JoinOptions::new(name))
-            .await
-            .map_err(|e| format!("{name} cannot join: {e}"))
+        let join = || Player::join(self.addr, self.module.clone(), JoinOptions::new(name));
+        match join().await {
+            // The proxy asks Mojang about every name; a slow answer refuses the login.
+            Err(e) if e.to_string().contains("Could not check your account") => {
+                println!("RETRY {name}: the proxy could not check the account");
+                join().await
+            }
+            other => other,
+        }
+        .map_err(|e| format!("{name} cannot join: {e}"))
     }
 
     /// A bot on `survival` (behind the proxy) or on the lone server.
@@ -354,7 +364,100 @@ async fn n8(l: &Live) -> Step {
     Ok(())
 }
 
-/// After a restart or a SIGKILL: the changes of N3 and N4 are still there.
+/// Re-import of a changed `permissions.yml` after an admin built a track,
+/// an inheritance and a weight on its groups: all three stay.
+async fn n7(l: &Live) -> Step {
+    let mut admin = l.bot(ADMIN).await?;
+    let mut slowest = Duration::ZERO;
+    for line in [
+        "pp createtrack ranks",
+        "pp track ranks append helper",
+        "pp track ranks append builder",
+        "pp track ranks append mod",
+        "pp creategroup trial",
+        "pp group trial parent add builder",
+        "pp group builder setweight 20",
+    ] {
+        let started = tokio::time::Instant::now();
+        must_run(&mut admin, line).await?;
+        slowest = slowest.max(started.elapsed());
+    }
+    // `ask` waits 400 ms after the answer; the rest is the change and the round trip.
+    let answer = slowest.saturating_sub(Duration::from_millis(400));
+    println!(
+        "N7: the slowest /pp change was answered in {} ms",
+        answer.as_millis()
+    );
+    let file = l.dir.join("proxy/permissions.yml");
+    let text = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let changed = text.replacen(
+        "  builder: {}",
+        "  builder: { permissions: [\"minecraft:command.list\"] }",
+        1,
+    );
+    if changed == text {
+        return Err("permissions.yml has no \"  builder: {}\" line".into());
+    }
+    std::fs::write(&file, changed).map_err(|e| e.to_string())?;
+    // The host reads the file again; PumboPerms gets it at its next start.
+    ask(&mut admin, "prox reload").await?;
+    ask(&mut admin, "prox plugins reload pumbo-perms").await?;
+    l.wait_log("proxy", "changed since it was imported", 30)
+        .await?;
+    let lines = ask(&mut admin, "pp import run file").await?;
+    if !lines.iter().any(|m| m.contains("Imported file")) {
+        return Err(format!("the re-import did not run: {lines:?}"));
+    }
+    ranks_kept(&mut admin).await?;
+    admin.close().await;
+    Ok(())
+}
+
+/// The track, inheritance and weight of N7.
+async fn ranks_kept(admin: &mut Player) -> Step {
+    let text = |lines: Vec<String>| lines.join("\n");
+    let track = text(ask(admin, "pp track ranks info").await?);
+    if !["1. helper", "2. builder", "3. mod"]
+        .iter()
+        .all(|g| track.contains(g))
+    {
+        return Err(format!("the track ranks changed: {track}"));
+    }
+    let parents = text(ask(admin, "pp group trial parent info").await?);
+    if !parents.contains("builder") {
+        return Err(format!("trial no longer inherits builder: {parents}"));
+    }
+    let builder = text(ask(admin, "pp group builder info").await?);
+    if !builder
+        .lines()
+        .any(|l| l.contains("Weight") && l.contains("20"))
+    {
+        return Err(format!("builder lost its weight: {builder}"));
+    }
+    Ok(())
+}
+
+/// After a SIGKILL: PumboPerms on the proxy opened its database (3000
+/// players) in under a second, and the data is there (N10).
+async fn n11(l: &Live) -> Step {
+    l.wait_log("proxy", "loaded:", 60).await?;
+    let log = l.log("proxy");
+    let ms: u64 = log
+        .lines()
+        .rev()
+        .find_map(|line| {
+            let (_, after) = line.split_once("database opened in ")?;
+            after.split_whitespace().next()?.parse().ok()
+        })
+        .ok_or("the proxy log does not say how long opening the database took")?;
+    println!("N11: PumboPerms opened its database in {ms} ms after the SIGKILL");
+    if ms >= 1000 {
+        return Err(format!("opening the database took {ms} ms"));
+    }
+    n10(l).await
+}
+
+/// After a restart or a SIGKILL: the changes of N3, N4 and N7 are still there.
 async fn n10(l: &Live) -> Step {
     let mut admin = l.bot(ADMIN).await?;
     let moderator = l.on_survival(MODERATOR).await?;
@@ -364,6 +467,7 @@ async fn n10(l: &Live) -> Step {
     if !check_true(&mut admin, VICTIM, "group.mod").await? {
         return Err(format!("{VICTIM} lost mod"));
     }
+    ranks_kept(&mut admin).await?;
     moderator.close().await;
     admin.close().await;
     Ok(())
@@ -544,6 +648,70 @@ async fn j6(l: &Live) -> Step {
     Ok(())
 }
 
+/// J8, first half on the released 0.1.2-beta: groups with weight, prefix,
+/// inheritance and a node, a track, and a player with a rank, a temporary
+/// rank and meta.
+async fn j8a(l: &Live) -> Step {
+    let mut admin = l.bot(ADMIN).await?;
+    // `/pp user <nick>` finds only players who joined once.
+    let moderator = l.bot(MODERATOR).await?;
+    for line in [
+        "pp creategroup helper".to_string(),
+        "pp creategroup mod".into(),
+        "pp group mod setweight 20".into(),
+        "pp group mod permission set pumbo.bans.* true".into(),
+        "pp group mod parent add helper".into(),
+        "pp group mod meta setprefix 50 &c[Mod]".into(),
+        "pp createtrack staff".into(),
+        "pp track staff append helper".into(),
+        "pp track staff append mod".into(),
+        format!("pp user {MODERATOR} parent add mod"),
+        format!("pp user {MODERATOR} parent addtemp helper 30d"),
+        format!("pp user {MODERATOR} meta set color red"),
+    ] {
+        must_run(&mut admin, &line).await?;
+    }
+    j8_same(&mut admin).await?;
+    moderator.close().await;
+    admin.close().await;
+    Ok(())
+}
+
+/// J8, second half on this build with the same database: everything is there.
+async fn j8b(l: &Live) -> Step {
+    l.wait_log("", "schema 1 -> 2", 30).await?;
+    let mut admin = l.bot(ADMIN).await?;
+    j8_same(&mut admin).await?;
+    admin.close().await;
+    Ok(())
+}
+
+async fn j8_same(admin: &mut Player) -> Step {
+    for node in ["group.mod", "group.helper", "pumbo.bans.ban"] {
+        if !check_true(admin, MODERATOR, node).await? {
+            return Err(format!("{MODERATOR} has no {node}"));
+        }
+    }
+    let text = |lines: Vec<String>| lines.join("\n");
+    let track = text(ask(admin, "pp track staff info").await?);
+    if !(track.contains("1. helper") && track.contains("2. mod")) {
+        return Err(format!("the track staff is not helper, mod: {track}"));
+    }
+    let group = text(ask(admin, "pp group mod info").await?);
+    if !(group
+        .lines()
+        .any(|l| l.contains("Weight") && l.contains("20"))
+        && group.contains("[Mod]"))
+    {
+        return Err(format!("mod lost its weight or prefix: {group}"));
+    }
+    let user = text(ask(admin, &format!("pp user {MODERATOR} meta info")).await?);
+    if !(user.contains("color") && user.contains("red")) {
+        return Err(format!("{MODERATOR} lost the meta color: {user}"));
+    }
+    Ok(())
+}
+
 // ------------------------------------------------------------------ main
 
 fn solo_uuid(nick: &str) -> Option<Uuid> {
@@ -560,8 +728,10 @@ async fn run(l: &Live, step: &str) -> Step {
         "N5" => n5(l).await,
         "N5b" => n5b(l).await,
         "N6" => n6(l).await,
+        "N7" => n7(l).await,
         "N8" => n8(l).await,
-        "N10" | "N11" => n10(l).await,
+        "N10" => n10(l).await,
+        "N11" => n11(l).await,
         "N14" => n14(l).await,
         "J1" => j1(l).await,
         "J2" => j2(l).await,
@@ -569,6 +739,8 @@ async fn run(l: &Live, step: &str) -> Step {
         "J4" => j4(l).await,
         "J5" => j5(l).await,
         "J6" => j6(l).await,
+        "J8a" => j8a(l).await,
+        "J8b" => j8b(l).await,
         other => Err(format!("unknown step {other}")),
     }
 }
@@ -617,7 +789,7 @@ async fn main() -> std::process::ExitCode {
     };
     let defaults: &[&str] = match live.solo {
         true => &["J1", "J2", "J3", "J4", "J5", "J6"],
-        false => &["N1", "N2", "N3", "N4", "N5", "N5b", "N6", "N8", "N14"],
+        false => &["N1", "N2", "N3", "N4", "N5", "N5b", "N6", "N7", "N8", "N14"],
     };
     let steps: Vec<&str> = match args.get(3..) {
         Some(s) if !s.is_empty() => s.iter().map(String::as_str).collect(),

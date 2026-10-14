@@ -1368,6 +1368,18 @@ fn on_provider_set(host: &Host, id: u64) -> bool {
         && !host.has_permission(id, "pumbo.test.base", None)
 }
 
+/// Waits until the provider's set reaches the player: on a slow machine the
+/// provider may still be starting at the login, and the retry loads it later.
+async fn until_provider_set(host: &Host, id: u64) {
+    for _ in 0..400 {
+        if on_provider_set(host, id) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("the provider's set never reached player {id}");
+}
+
 /// A restart that fails to load the players again keeps their last set from
 /// the provider; the file does not give back what the provider took away.
 #[tokio::test(flavor = "multi_thread")]
@@ -1600,6 +1612,8 @@ async fn offline_cache_cleared_on_replace() {
     // Its UUID has the same high and low half, as `/qhasoff` builds them.
     let id = 0xabcd;
     assert_eq!(login(&host, id, "steve").await, GateOutcome::Pass);
+    // A load of the player clears its cached answers, so it must be done first.
+    until_provider_set(&host, id).await;
     let asked = |b: &FakeBridge| {
         b.messages(99)
             .iter()

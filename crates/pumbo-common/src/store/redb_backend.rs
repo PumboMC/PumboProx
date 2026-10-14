@@ -2,13 +2,16 @@
 
 use std::path::Path;
 
-use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition, TableError};
+use redb::{Builder, Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition, TableError};
 
 use super::{Backend, Durability, ReadOps, Result, StoreError, WriteOps};
 
 fn def(name: &str) -> TableDefinition<'_, &'static str, &'static [u8]> {
     TableDefinition::new(name)
 }
+
+/// Page cache of one database: redb's default is 1 GiB, and WebAssembly memory never shrinks.
+const CACHE_BYTES: usize = 16 * 1024 * 1024;
 
 fn err(e: impl std::fmt::Display) -> StoreError {
     StoreError::new(e.to_string())
@@ -22,7 +25,7 @@ pub struct RedbBackend {
 impl RedbBackend {
     /// Opens the file, creating it when it does not exist.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        Database::create(path).map(|db| Self { db }).map_err(err)
+        Builder::new().set_cache_size(CACHE_BYTES).create(path).map(|db| Self { db }).map_err(err)
     }
 }
 
@@ -36,6 +39,9 @@ impl Backend for RedbBackend {
         let mut tx = self.db.begin_write().map_err(err)?;
         if durability == Durability::Eventual {
             tx.set_durability(redb::Durability::None).map_err(err)?;
+        } else {
+            // A crash (a trap) leaves the file unclean; with the allocator state saved, opening it is quick.
+            tx.set_quick_repair(true);
         }
         let mut w = Write(tx);
         match f(&mut w) {

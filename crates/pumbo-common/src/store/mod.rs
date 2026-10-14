@@ -16,6 +16,7 @@
 //! backend refuses it with an error, redb would wait forever.
 
 mod faulty;
+mod lock;
 mod memory;
 mod redb_backend;
 
@@ -25,6 +26,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 pub use faulty::FaultyBackend;
+pub use lock::DbLock;
 pub use memory::MemoryBackend;
 pub use redb_backend::RedbBackend;
 
