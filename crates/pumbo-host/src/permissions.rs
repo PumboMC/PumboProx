@@ -1075,4 +1075,76 @@ players:
         let err = FileSource::parse("groups:\n  x:\n    permissions: [a\n", &cfg()).unwrap_err();
         assert!(err.contains("line"), "{err}");
     }
+
+    /// The host side of a change at network scale: 20 groups of 50 nodes
+    /// with entries on 10 servers in each player's set, 300 players online,
+    /// 3000 players in `permissions.yml`.
+    #[test]
+    #[ignore = "release benchmark"]
+    fn host_lookups_at_scale() {
+        use std::time::{Duration, Instant};
+        let mut set = Vec::new();
+        for g in 0..20 {
+            set.push(e(&format!("group.g{g}"), true, Global));
+            for i in 0..50 {
+                let ctx = match i % 5 {
+                    0 => PermContext::server(&format!("s{}", (g + i) % 10)),
+                    _ => Global,
+                };
+                set.push(e(&format!("pumbo.g{g}.n{i}"), i % 3 != 0, ctx));
+            }
+            set.push(e(&format!("pumbog{g}:*"), true, Global));
+        }
+        let p = Permissions::default();
+        for id in 0..300 {
+            p.online.write().unwrap().insert(id, PlayerPerms::default());
+            p.replace_provider_layer(id, set.clone());
+        }
+        let at = levels(Some("s3"), &["games".into()]);
+
+        // Worst case: no entry anywhere, every level scans the whole set.
+        let t = Instant::now();
+        for i in 0..10_000u64 {
+            assert!(p.decide(i % 300, "pumbo.none.here", &at).is_none());
+        }
+        let check = t.elapsed() / 10_000;
+
+        let catalog: Vec<String> = (0..200)
+            .map(|i| format!("pumbog{}:node{i}", i % 20))
+            .collect();
+        let t = Instant::now();
+        let online = p.online.read().unwrap();
+        for id in 0..300 {
+            let set =
+                pumbo_contracts::permissions::backend_set(online[&id].layers(), &catalog, &at);
+            assert!(!set.is_empty());
+        }
+        drop(online);
+        let sets = t.elapsed();
+
+        let mut yaml =
+            String::from("groups:\n  vip: { permissions: [pumbo.proxy.glist] }\nplayers:\n");
+        for i in 0..3000u128 {
+            yaml.push_str(&format!("  {}: {{ groups: [vip] }}\n", Uuid::from_u128(i)));
+        }
+        let (src, _) = FileSource::parse(&yaml, &cfg()).unwrap();
+        let who = Subject {
+            uuid: Uuid::from_u128(2999),
+            name: "Last".into(),
+        };
+        let t = Instant::now();
+        for _ in 0..100 {
+            assert!(!src.entries_for(&who).is_empty());
+        }
+        let join = t.elapsed() / 100;
+
+        eprintln!(
+            "[measure] set of {} entries: check {check:?} (no entry), backend sets for 300 players {sets:?}, file layer at join {join:?}",
+            set.len()
+        );
+        assert!(check < Duration::from_micros(50), "{check:?}");
+        // The budget of one push to 300 players.
+        assert!(sets < Duration::from_millis(50), "{sets:?}");
+        assert!(join < Duration::from_millis(1), "{join:?}");
+    }
 }

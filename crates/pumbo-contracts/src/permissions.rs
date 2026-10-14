@@ -164,12 +164,36 @@ pub fn backend_set(
     let wildcards = entries()
         .filter(|e| e.node.ends_with(":*") || e.node.ends_with(".*"))
         .map(|e| e.node.clone());
+    // Only these entries can match an `ns:` or `group.` node; scanning the
+    // whole set for each node made a large set cost milliseconds per player.
+    let narrow = |s: &[PermissionEntry]| -> Vec<PermissionEntry> {
+        s.iter()
+            .filter(|e| {
+                e.node.contains(':') || e.node.starts_with("group.") || e.node.ends_with('*')
+            })
+            .cloned()
+            .collect()
+    };
+    let (session, file, provider) = (
+        narrow(layers.session),
+        narrow(layers.file),
+        narrow(layers.provider),
+    );
+    let few = Layers {
+        session: &session,
+        file: &file,
+        provider: &provider,
+    };
     let mut set: BTreeMap<String, bool> = exact
         .iter()
         .cloned()
         .chain(wildcards)
         .filter_map(|n| {
-            let d = resolve(layers, &n, levels)?;
+            let from = match n.contains(':') || n.starts_with("group.") {
+                true => few,
+                false => layers,
+            };
+            let d = resolve(from, &n, levels)?;
             Some((n, d.value))
         })
         .collect();
@@ -472,6 +496,26 @@ mod tests {
         );
         assert!(yes > 0);
         assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+    }
+
+    /// `*` and a dotted wildcard without a namespace still decide catalog
+    /// nodes; plain nodes in between change nothing.
+    #[test]
+    fn backend_set_keeps_every_entry_that_can_match() {
+        let mut file = vec![
+            e("*", true, Global),
+            e("ns.sub.*", false, Global),
+            e("group.vip", true, Global),
+        ];
+        file.extend((0..50).map(|i| e(&format!("pumbo.plain{i}"), false, Global)));
+        let set = backend_set(
+            file_layer(&file),
+            &["ns.sub.x:y".into(), "other:node".into()],
+            &levels(Some("survival"), &[]),
+        );
+        assert_eq!(set.get("ns.sub.x:y"), Some(&false));
+        assert_eq!(set.get("other:node"), Some(&true));
+        assert_eq!(set.get("group.vip"), Some(&true));
     }
 
     #[test]

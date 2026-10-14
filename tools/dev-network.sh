@@ -4,8 +4,9 @@
 #
 # Usage: tools/dev-network.sh up [path/to/pumpkin] | down | reset | logs [proxy|lobby|survival]
 #
-#   up      builds the proxy, writes the configs on the first run, copies the
-#           plugins from PUMBO_PLUGINS_DIR and starts whatever is not running
+#   up      builds the proxy when a source is newer than its binary, writes
+#           the configs on the first run, copies the plugins from
+#           PUMBO_PLUGINS_DIR and starts whatever is not running
 #   down    stops the proxy and the servers (SIGTERM, a kill after 30 s)
 #   reset   down, then deletes the network directory (worlds, configs, data)
 #   logs    follows the logs
@@ -37,6 +38,7 @@ case $PROTOCOL in
   *) echo "dev-network: PUMBO_PROTOCOL $PROTOCOL: no Pumpkin plugin variant (777 or 776)" >&2; exit 1 ;;
 esac
 BRIDGE_PORT=$((PORT + 3))
+PROXY_BIN=${CARGO_TARGET_DIR:-$ROOT/target}/release/pumboprox
 
 die() { echo "dev-network: $*" >&2; exit 1; }
 rand_hex() { od -An -tx1 -N32 /dev/urandom | tr -d ' \n'; }
@@ -164,7 +166,14 @@ EOF
 up() {
   local bin=${1:-${PUMPKIN_BIN:-}} s f name bridge=0
   [ -f "$DIR/.dev-network" ] || create
-  (cd "$ROOT" && cargo build --release -p pumbo-prox)
+  # Cargo itself rebuilds pumbo-data every time (its build script watches
+  # files that may not exist), which takes minutes.
+  local sources=("$ROOT/crates" "$ROOT/wit" "$ROOT/Cargo.toml" "$ROOT/Cargo.lock")
+  local full=${PUMBO_DATA_FULL:-$ROOT/target/pumbo-data-full}
+  [ -e "$full" ] && sources+=("$full")
+  if [ ! -x "$PROXY_BIN" ] || [ -n "$(find "${sources[@]}" -newer "$PROXY_BIN" -print -quit)" ]; then
+    (cd "$ROOT" && cargo build --release -p pumbo-prox)
+  fi
   for f in "$PLUGINS"/*.wasm; do
     name=$(basename "$f")
     case $name in
@@ -183,7 +192,7 @@ up() {
   [ "$bridge" = 1 ] || echo "no PumboBridge*.wasm in $PLUGINS: the servers run without the bridge"
   if ! running proxy; then
     port_open "$PORT" && die "port $PORT is in use"
-    start proxy "${CARGO_TARGET_DIR:-$ROOT/target}/release/pumboprox" run pumboprox.yml
+    start proxy "$PROXY_BIN" run pumboprox.yml
   fi
   wait_up proxy "$PORT"
   for s in $SERVERS; do
