@@ -295,3 +295,28 @@ pub async fn fail_by(host: &Host, id: &str, sender: CommandSender, line: &str) -
 pub fn exists(p: &Path) -> bool {
     p.exists()
 }
+
+/// The log of this test binary so far (the host logs from its own threads).
+pub fn logs() -> String {
+    struct Buf(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Buf {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    static LOG: OnceLock<Arc<Mutex<Vec<u8>>>> = OnceLock::new();
+    let log = LOG.get_or_init(|| {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let w = Arc::clone(&log);
+        tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || Buf(Arc::clone(&w)))
+            .init();
+        log
+    });
+    String::from_utf8_lossy(&log.lock().unwrap()).into_owned()
+}

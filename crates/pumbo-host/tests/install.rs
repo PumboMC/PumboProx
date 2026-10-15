@@ -9,7 +9,7 @@
 mod common;
 
 use common::*;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 use pumbo_host::{CommandOutcome, CommandSender, Host, NoProxy, Status};
 
@@ -19,31 +19,6 @@ const LANG_PL: &str = include_str!("../../../plugins/example/lang/pl.yml");
 /// Only `pumbo-example.wasm` in `plugins/`.
 fn example_alone(env: &Env) {
     std::fs::copy(wasm("example"), env.plugins().join("pumbo-example.wasm")).unwrap();
-}
-
-/// The log of this test binary so far (the host logs from its own threads).
-fn logs() -> String {
-    struct Buf(Arc<Mutex<Vec<u8>>>);
-    impl std::io::Write for Buf {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(b);
-            Ok(b.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    static LOG: OnceLock<Arc<Mutex<Vec<u8>>>> = OnceLock::new();
-    let log = LOG.get_or_init(|| {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let w = Arc::clone(&log);
-        tracing_subscriber::fmt()
-            .with_ansi(false)
-            .with_writer(move || Buf(Arc::clone(&w)))
-            .init();
-        log
-    });
-    String::from_utf8_lossy(&log.lock().unwrap()).into_owned()
 }
 
 /// Replaces text in a module, keeping the lengths (a "newer version").

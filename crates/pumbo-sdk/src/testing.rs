@@ -28,6 +28,7 @@ use crate::bindings::pumbo::prox::types::{
     QueryContext, Route, Text, TitleTimes, Uuid,
 };
 use crate::bindings::pumbo::prox::virtual_::{BlockPos, GameMode, Hand, Position, WorldOptions};
+use pumbo_contracts::permissions as perms;
 
 /// What the plugin sent to a player.
 #[derive(Debug, Clone, PartialEq)]
@@ -78,6 +79,9 @@ pub struct MockHost {
     /// (player, node) → value; other nodes are false.
     pub permissions: BTreeMap<(PlayerId, String), bool>,
     pub replaced: Vec<(PlayerId, PermissionSet)>,
+    /// The last set from `permissions::replace` per player; `has` resolves
+    /// nodes missing from `permissions` on it.
+    pub permission_sets: BTreeMap<PlayerId, PermissionSet>,
     services: BTreeMap<String, (ServiceRef, ServiceHandler)>,
     pub service_calls: Vec<(String, String)>,
     pub unavailable: BTreeSet<String>,
@@ -270,6 +274,41 @@ pub fn service_call(service: &str, major: u16, method: &str, payload: Vec<u8>) -
 
 fn record(id: PlayerId, s: Sent) {
     with(|h| h.sent.push((id, s)));
+}
+
+/// Levels of a query, as the host builds them.
+fn query_levels(h: &MockHost, id: PlayerId, at: &QueryContext) -> Vec<perms::PermContext> {
+    match at {
+        QueryContext::Current => match h.players.get(&id) {
+            Some(p) if !p.in_virtual => {
+                perms::levels(p.context.server.as_deref(), &p.context.groups)
+            }
+            _ => perms::levels(None, &[]),
+        },
+        QueryContext::Global => perms::levels(None, &[]),
+        QueryContext::Group(g) => vec![perms::PermContext::group(g), perms::PermContext::Global],
+        QueryContext::Server(s) => {
+            let groups = h
+                .servers
+                .iter()
+                .find(|i| i.name.eq_ignore_ascii_case(s))
+                .map(|i| i.groups.clone())
+                .unwrap_or_default();
+            perms::levels(Some(s), &groups)
+        }
+    }
+}
+
+fn perm_entry(e: &crate::PermissionEntry) -> perms::PermissionEntry {
+    perms::PermissionEntry {
+        node: e.node.clone(),
+        value: e.value,
+        context: match &e.context {
+            Context::Global => perms::PermContext::Global,
+            Context::Group(g) => perms::PermContext::group(g),
+            Context::Server(s) => perms::PermContext::server(s),
+        },
+    }
 }
 
 fn ctx_key(c: &Context) -> String {
@@ -596,12 +635,20 @@ pub mod backend {
     pub mod permissions {
         use super::*;
 
-        pub fn has(id: PlayerId, node: &str, _: &QueryContext) -> bool {
+        pub fn has(id: PlayerId, node: &str, at: &QueryContext) -> bool {
             with(|h| {
-                h.permissions
-                    .get(&(id, node.to_string()))
-                    .copied()
-                    .unwrap_or(false)
+                if let Some(v) = h.permissions.get(&(id, node.to_string())) {
+                    return *v;
+                }
+                let Some(set) = h.permission_sets.get(&id) else {
+                    return false;
+                };
+                let entries: Vec<_> = set.entries.iter().map(perm_entry).collect();
+                let layers = perms::Layers {
+                    provider: &entries,
+                    ..perms::Layers::default()
+                };
+                perms::resolve(layers, node, &query_levels(h, id, at)).is_some_and(|d| d.value)
             })
         }
 
@@ -635,7 +682,10 @@ pub mod backend {
         }
 
         pub fn replace(id: PlayerId, entries: &PermissionSet) -> Result<(), String> {
-            with(|h| h.replaced.push((id, entries.clone())));
+            with(|h| {
+                h.replaced.push((id, entries.clone()));
+                h.permission_sets.insert(id, entries.clone());
+            });
             Ok(())
         }
     }
@@ -803,6 +853,31 @@ pub fn unknown_method() -> CallReject {
 mod tests {
     use super::*;
     use crate::virtual_world as v;
+
+    #[test]
+    fn replace_feeds_has() {
+        use crate::{PermissionEntry, PermissionSet};
+        use backend::permissions::{has, replace, set};
+        reset();
+        let id = add_player("Steve", Some("survival"));
+        let entry = |node: &str, value: bool, context: Context| PermissionEntry {
+            node: node.into(),
+            value,
+            context,
+        };
+        let entries = vec![
+            entry("pumbo.bans.*", true, Context::Global),
+            entry("pumbo.bans.ban", false, Context::Server("survival".into())),
+        ];
+        replace(id, &PermissionSet { entries }).unwrap();
+        assert!(has(id, "pumbo.bans.kick", &QueryContext::Current));
+        assert!(!has(id, "pumbo.bans.ban", &QueryContext::Current));
+        assert!(has(id, "pumbo.bans.ban", &QueryContext::Global));
+        assert!(!has(id, "pumbo.perms.user", &QueryContext::Current));
+        set(id, "pumbo.bans.ban", Some(true), &Context::Global).unwrap();
+        assert!(has(id, "pumbo.bans.ban", &QueryContext::Current));
+        assert_eq!(with(|h| h.replaced.len()), 1);
+    }
 
     /// A gate written as for the host, run against the fake virtual world.
     #[test]

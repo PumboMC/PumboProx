@@ -22,6 +22,15 @@ forwarding:
 plugins:
   dir: plugins
 
+# PumboBridge: the plugin on your Pumpkin servers connects here, so ranks and
+# commands of the proxy reach them. Servers from /prox servers new get it
+# installed and set up; on servers you run yourself put PumboBridge into
+# plugins/ and copy the key from /prox bridge key.
+# bridge:
+#   enabled: true
+#   listen: "127.0.0.1:25578"
+#   key-file: bridge.key
+
 # Players wait in an empty world while no server is available, and join one
 # as soon as it is ready.
 pumbox:

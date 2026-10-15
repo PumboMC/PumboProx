@@ -462,12 +462,11 @@ fn prox(
                 rest.first().map(|r| r.to_ascii_lowercase()).as_deref(),
             ) {
                 ("plugins", None) => {
-                    let lines = match player {
-                        Some(id) => p.command(id, "pumbo"),
-                        None => p.console("pumbo"),
-                    };
+                    if !permitted(proxy, rt, source, "pumbo.proxy.plugins") {
+                        return denied();
+                    }
                     return Reply {
-                        lines: lines.unwrap_or_default(),
+                        lines: p.console("pumbo").unwrap_or_default(),
                         connect: None,
                     };
                 }
@@ -497,7 +496,9 @@ fn prox(
                 }
             };
             Reply {
-                lines: p.admin(player, &host_args),
+                lines: p.admin(player, &host_args, &|node| {
+                    permitted(proxy, rt, source, node)
+                }),
                 connect: None,
             }
         }

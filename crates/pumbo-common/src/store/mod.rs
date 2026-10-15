@@ -4,6 +4,7 @@
 //! [`Store::write`] call commits together or not at all. Backends:
 //! - [`RedbBackend`]: a single redb file (the default for plugins)
 //! - [`MemoryBackend`]: in memory, for tests and throwaway data
+//! - [`FaultyBackend`]: in memory, failing on demand (tests of storage errors)
 //!
 //! Core crates build their typed storage (accounts, bans, ...) on [`Store`] and
 //! never see the backend, so another backend (SQL) can be added later without
@@ -14,6 +15,8 @@
 //! A write transaction must not be opened inside another one: the memory
 //! backend refuses it with an error, redb would wait forever.
 
+mod faulty;
+mod lock;
 mod memory;
 mod redb_backend;
 
@@ -22,6 +25,8 @@ use std::fmt;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+pub use faulty::FaultyBackend;
+pub use lock::DbLock;
 pub use memory::MemoryBackend;
 pub use redb_backend::RedbBackend;
 

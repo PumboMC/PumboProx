@@ -9,21 +9,7 @@ use uuid::Uuid;
 
 use crate::BoxFuture;
 
-/// Context of an entry. Resolution: server > group (config order) > global.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum PermContext {
-    Global,
-    Group(String),
-    Server(String),
-}
-
-/// One permission node in one context. `node` may end with `.*` or be `*`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PermissionEntry {
-    pub node: String,
-    pub value: bool,
-    pub context: PermContext,
-}
+pub use pumbo_contracts::permissions::{PermContext, PermissionEntry};
 
 /// Who the entries are for.
 #[derive(Debug, Clone, PartialEq, Eq)]

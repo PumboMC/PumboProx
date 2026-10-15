@@ -3,19 +3,22 @@
 //! one `select!`.
 
 use std::collections::VecDeque;
-use std::pin::Pin;
+use std::future::{Future, poll_fn};
+use std::pin::{Pin, pin};
+use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
-use bytes::{Bytes, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 use pumbo_core::listener::Transport;
 use pumbo_core::translate::{PacketTranslator, Translated};
 use pumbo_protocol::RawFrame;
 use pumbo_protocol::crypto::{Cfb8Decrypt, Cfb8Encrypt, CryptoError, cfb8_pair};
 use pumbo_protocol::frame::{self, FrameConfig, FrameError};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::time::Instant;
 
 /// A write that takes longer than this means the peer stopped reading.
-const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 const READ_CHUNK: usize = 32 * 1024;
 
 #[derive(Debug, thiserror::Error)]
@@ -33,7 +36,12 @@ pub enum ConnError {
 pub struct Conn {
     stream: Pin<Box<dyn Transport>>,
     rbuf: BytesMut,
+    /// Queued frames, not encrypted yet.
     wbuf: BytesMut,
+    /// Encrypted bytes the socket has not taken yet.
+    obuf: BytesMut,
+    /// Since when bytes wait for the peer, and how many it took meanwhile.
+    stalled: Option<(Instant, usize)>,
     pub inbound: FrameConfig,
     pub outbound: FrameConfig,
     decrypt: Option<Cfb8Decrypt>,
@@ -69,6 +77,8 @@ impl Conn {
             stream,
             rbuf: BytesMut::with_capacity(READ_CHUNK),
             wbuf: BytesMut::new(),
+            obuf: BytesMut::new(),
+            stalled: None,
             inbound,
             outbound,
             decrypt: None,
@@ -93,16 +103,95 @@ impl Conn {
     /// Reads what is available (at least one byte). Cancel-safe: if the
     /// future is dropped, nothing was read.
     pub async fn fill(&mut self) -> Result<usize, ConnError> {
+        poll_fn(|cx| self.poll_fill(cx)).await
+    }
+
+    /// [`Conn::fill`] that meanwhile writes the queued bytes as the peer takes
+    /// them, so a peer that reads slowly does not stop the reading. With
+    /// `room`, it also resolves (`None`) once fewer bytes than that wait.
+    /// Cancel-safe like `fill`: written bytes are gone from the queue at once.
+    pub async fn fill_writing(&mut self, room: Option<usize>) -> Result<Option<usize>, ConnError> {
+        poll_fn(|cx| {
+            if let Poll::Ready(Err(e)) = self.poll_write_queued(cx) {
+                return Poll::Ready(Err(e));
+            }
+            if room.is_some_and(|r| self.pending() < r) {
+                return Poll::Ready(Ok(None));
+            }
+            self.poll_fill(cx).map_ok(Some)
+        })
+        .await
+    }
+
+    fn poll_fill(&mut self, cx: &mut Context<'_>) -> Poll<Result<usize, ConnError>> {
         let start = self.rbuf.len();
         self.rbuf.reserve(READ_CHUNK);
-        let n = self.stream.read_buf(&mut self.rbuf).await?;
+        let n = ready!(pin!(self.stream.read_buf(&mut self.rbuf)).poll(cx))?;
         if n == 0 {
-            return Err(ConnError::Closed);
+            return Poll::Ready(Err(ConnError::Closed));
         }
         if let (Some(dec), Some(fresh)) = (&mut self.decrypt, self.rbuf.get_mut(start..)) {
             dec.apply(fresh);
         }
-        Ok(n)
+        Poll::Ready(Ok(n))
+    }
+
+    /// Bytes queued that the socket has not taken yet.
+    pub fn pending(&self) -> usize {
+        self.wbuf.len() + self.obuf.len()
+    }
+
+    /// Since when the peer has taken less than one read's worth (32 KiB)
+    /// while bytes wait for it. [`WRITE_TIMEOUT`] later it counts as no
+    /// longer reading (as a blocking write of one read found out before):
+    /// the next write fails with [`ConnError::WriteTimeout`].
+    pub fn stalled_since(&self) -> Option<Instant> {
+        self.stalled.map(|(since, _)| since)
+    }
+
+    /// Writes queued bytes until none are left (`Ready`) or the socket takes
+    /// no more (`Pending`). Each byte is encrypted once, when it leaves `wbuf`.
+    fn poll_write_queued(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), ConnError>> {
+        if self
+            .stalled
+            .is_some_and(|(since, _)| since.elapsed() >= WRITE_TIMEOUT)
+        {
+            // What waits is dropped, like the buffer of a write that timed out.
+            self.wbuf.clear();
+            self.obuf.clear();
+            self.stalled = None;
+            return Poll::Ready(Err(ConnError::WriteTimeout));
+        }
+        if !self.wbuf.is_empty() {
+            let mut fresh = self.wbuf.split();
+            if let Some(enc) = &mut self.encrypt {
+                enc.apply(&mut fresh);
+            }
+            self.obuf.unsplit(fresh);
+        }
+        while !self.obuf.is_empty() {
+            match self.stream.as_mut().poll_write(cx, &self.obuf) {
+                Poll::Ready(Ok(0)) => {
+                    return Poll::Ready(Err(
+                        std::io::Error::from(std::io::ErrorKind::WriteZero).into()
+                    ));
+                }
+                Poll::Ready(Ok(n)) => {
+                    self.obuf.advance(n);
+                    match &mut self.stalled {
+                        Some((_, took)) if *took + n < READ_CHUNK => *took += n,
+                        s => *s = None,
+                    }
+                }
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
+                Poll::Pending => {
+                    self.stalled.get_or_insert_with(|| (Instant::now(), 0));
+                    return Poll::Pending;
+                }
+            }
+        }
+        self.stalled = None;
+        Poll::Ready(Ok(()))
     }
 
     /// Bytes received but not yet decoded.
@@ -178,17 +267,12 @@ impl Conn {
     }
 
     pub async fn flush(&mut self) -> Result<(), ConnError> {
-        if self.wbuf.is_empty() {
+        if self.pending() == 0 {
             return Ok(());
         }
-        if let Some(enc) = &mut self.encrypt {
-            enc.apply(&mut self.wbuf);
-        }
-        let out = self.wbuf.split();
-        tokio::time::timeout(WRITE_TIMEOUT, self.stream.write_all(&out))
+        tokio::time::timeout(WRITE_TIMEOUT, poll_fn(|cx| self.poll_write_queued(cx)))
             .await
-            .map_err(|_| ConnError::WriteTimeout)??;
-        Ok(())
+            .map_err(|_| ConnError::WriteTimeout)?
     }
 
     pub async fn send(&mut self, id: i32, payload: &[u8]) -> Result<(), ConnError> {
@@ -223,5 +307,49 @@ impl Conn {
     pub async fn shutdown(&mut self) {
         let _ = self.flush().await;
         let _ = tokio::time::timeout(Duration::from_secs(1), self.stream.shutdown()).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Writes for a moment, as a session waiting for the client's packets does.
+    async fn write_a_moment(c: &mut Conn) {
+        let _ = tokio::time::timeout(Duration::from_millis(50), c.fill_writing(None)).await;
+    }
+
+    /// A peer that takes less than one read's worth stays stalled since the
+    /// first wait; one that takes more is reading; one stalled for the write
+    /// timeout gets an error and its bytes are dropped.
+    #[tokio::test]
+    async fn a_stall_ends_with_a_read_worth_or_the_timeout() {
+        let (a, mut peer) = tokio::io::duplex(1024);
+        let mut c = Conn::new(
+            Box::pin(a),
+            FrameConfig::from_client(),
+            FrameConfig::from_backend(),
+        );
+        c.queue(0, &[7; 100_000]).unwrap();
+        write_a_moment(&mut c).await;
+        let since = c.stalled_since().unwrap();
+        let mut took = vec![0; 8 * 1024];
+        let (_, r) = tokio::join!(write_a_moment(&mut c), peer.read_exact(&mut took));
+        r.unwrap();
+        assert_eq!(c.stalled_since(), Some(since));
+        let mut took = vec![0; 40 * 1024];
+        let (_, r) = tokio::join!(write_a_moment(&mut c), peer.read_exact(&mut took));
+        r.unwrap();
+        let since = c.stalled_since().unwrap();
+        // 30 s on: the next write gives up.
+        c.stalled = Some((since.checked_sub(WRITE_TIMEOUT).unwrap(), 0));
+        let r = c.fill_writing(None).await;
+        assert!(matches!(r, Err(ConnError::WriteTimeout)), "{r:?}");
+        assert_eq!((c.pending(), c.stalled_since()), (0, None));
+        // Everything taken: no stall.
+        c.queue(0, &[7; 10_000]).unwrap();
+        tokio::spawn(async move { tokio::io::copy(&mut peer, &mut tokio::io::sink()).await });
+        c.flush().await.unwrap();
+        assert_eq!((c.pending(), c.stalled_since()), (0, None));
     }
 }

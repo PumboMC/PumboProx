@@ -109,7 +109,7 @@ pub(crate) fn query_levels(
             None => permissions::levels(None, &[]),
         },
         QueryContext::Global => permissions::levels(None, &[]),
-        QueryContext::Group(g) => vec![PermContext::Group(g.clone()), PermContext::Global],
+        QueryContext::Group(g) => vec![PermContext::group(g), PermContext::Global],
         QueryContext::Server(s) => permissions::levels(Some(s), &host.cfg.groups_of(s)),
     }
 }
@@ -117,8 +117,8 @@ pub(crate) fn query_levels(
 pub(crate) fn perm_context(c: &Context) -> PermContext {
     match c {
         Context::Global => PermContext::Global,
-        Context::Group(g) => PermContext::Group(g.clone()),
-        Context::Server(s) => PermContext::Server(s.clone()),
+        Context::Group(g) => PermContext::group(g),
+        Context::Server(s) => PermContext::server(s),
     }
 }
 
@@ -800,6 +800,10 @@ impl wperm::Host for PluginState {
         if !self.host.perms.replace_provider_layer(id, entries) {
             return Err("unknown player".into());
         }
+        if let Some(info) = self.host.player(id) {
+            self.host
+                .forget_offline(Some(crate::uuid_of(&info.profile.id)));
+        }
         self.send(id, PlayerCommand::CommandsChanged);
         Ok(())
     }
@@ -821,12 +825,17 @@ impl wperm::HostWithStore<PluginState> for HasSelf<PluginState> {
             QueryContext::Current => QueryContext::Global,
             other => other,
         };
-        // The provider decides while it runs (it took the file over); the
-        // file when it is not there or does not answer.
-        if host.provider_slot().is_some() {
-            match host.offline_from_provider(&slot, id, &node, &at).await {
-                Ok(v) => return Ok(v.unwrap_or_else(|| host.declared_default(&node))),
-                Err(e) => host.warn_file_fallback(&format!("does not answer ({e:?})")),
+        // The provider decides (it took the file over); while it is down the
+        // file only with `on-load-failure: file-only`.
+        if host.perm_provider.is_some() {
+            if host.provider_slot().is_some() {
+                match host.offline_from_provider(&slot, id, &node, &at).await {
+                    Ok(v) => return Ok(v.unwrap_or_else(|| host.declared_default(&node))),
+                    Err(e) => host.warn_provider_down(&format!("does not answer ({e:?})")),
+                }
+            }
+            if host.cfg.permissions.on_load_failure == crate::config::OnLoadFailure::Deny {
+                return Ok(host.declared_default(&node));
             }
         }
         let lv = query_levels(&host, None, &at);
@@ -840,7 +849,11 @@ impl wperm::HostWithStore<PluginState> for HasSelf<PluginState> {
             .read()
             .map(|f| f.entries_for(&who))
             .unwrap_or_default();
-        match permissions::resolve(&file, &[], &node, &lv) {
+        let layers = permissions::Layers {
+            file: &file,
+            ..permissions::Layers::default()
+        };
+        match permissions::resolve(layers, &node, &lv) {
             Some(d) => Ok(d.value),
             None => Ok(host.declared_default(&node)),
         }

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
+use wasmtime::component::{Component, HasSelf, Linker, ResourceTable, TypedFunc};
 use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, UpdateDeadline};
 use wasmtime_wasi::{FsPerms, WasiCtx, WasiCtxView, WasiView};
 
@@ -16,6 +16,9 @@ use crate::wit_bindings::Plugin;
 /// How often (ms) the engine epoch advances (D-E0-2).
 pub const EPOCH_TICK_MS: u64 = 10;
 
+/// The optional `suggest` export: (player, command name, arguments).
+pub(crate) type SuggestFn = TypedFunc<(u64, String, String), (Option<Vec<String>>,)>;
+
 /// Store data of one plugin instance.
 pub struct PluginState {
     wasi: WasiCtx,
@@ -25,6 +28,8 @@ pub struct PluginState {
     budget_ticks: u32,
     pub(crate) host: Arc<HostInner>,
     pub(crate) slot: Arc<PluginSlot>,
+    /// Set when the instance has the `suggest` export.
+    pub(crate) suggest: Option<SuggestFn>,
 }
 
 impl PluginState {
@@ -127,6 +132,7 @@ impl Runtime {
                 .div_ceil(u32::try_from(EPOCH_TICK_MS).unwrap_or(10)),
             host: Arc::clone(host),
             slot: Arc::clone(slot),
+            suggest: None,
         };
         let mut store = Store::new(&self.engine, state);
         store.limiter(|s| &mut s.limits);

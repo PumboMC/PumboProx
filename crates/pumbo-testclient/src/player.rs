@@ -24,8 +24,8 @@ use pumbo_protocol::packets::login::{
 };
 use pumbo_protocol::packets::play::{
     ArgumentSignature, BossAction, BossEvent, Chat, ChatCommand, ChatCommandSigned,
-    ChatSessionUpdate, CommandSuggestions, ConfigurationAcknowledged, LastSeen, Login,
-    SetTitleText, SystemChat, TabList,
+    ChatSessionUpdate, CommandSuggestion, CommandSuggestions, ConfigurationAcknowledged, LastSeen,
+    Login, SetTitleText, SystemChat, TabList,
 };
 use pumbo_protocol::packets::status::Intention;
 use pumbo_protocol::packets::world::{
@@ -233,6 +233,11 @@ pub struct Player {
     pub disconnect: Option<String>,
     /// Wait this long before acknowledging `start_configuration`.
     pub ack_delay: Duration,
+    /// Wait this long before acknowledging `finish_configuration`.
+    hold: Duration,
+    /// When the held `finish_configuration` is acknowledged.
+    finish_at: Option<tokio::time::Instant>,
+    suggestion_id: i32,
     signer: Option<Signer>,
     /// Last absolute position from `player_position` (confirmed at once,
     /// like the vanilla client) or from our own movement.
@@ -335,6 +340,9 @@ impl Player {
             kinds: Vec::new(),
             disconnect: None,
             ack_delay: Duration::ZERO,
+            hold: Duration::ZERO,
+            finish_at: None,
+            suggestion_id: 0,
             signer: None,
             position: None,
             teleports: 0,
@@ -377,12 +385,22 @@ impl Player {
             if self.disconnect.is_some() {
                 return Ok(false);
             }
-            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let now = tokio::time::Instant::now();
+            if self.finish_at.is_some_and(|at| at <= now) {
+                self.finish_at = None;
+                self.finish_configuration().await?;
+                continue;
+            }
+            let left = deadline.saturating_duration_since(now);
             if left.is_zero() {
                 return Ok(false);
             }
-            let (kind, f) = match self.c.recv_within(left).await {
+            let wait = self
+                .finish_at
+                .map_or(left, |at| left.min(at.saturating_duration_since(now)));
+            let (kind, f) = match self.c.recv_within(wait).await {
                 Ok(x) => x,
+                Err(ClientError::Timeout) if self.finish_at.is_some() => continue,
                 Err(ClientError::Timeout) => return Ok(until(self)),
                 Err(ClientError::Closed) => {
                     self.disconnect = Some("connection closed".into());
@@ -469,8 +487,11 @@ impl Player {
                 self.c.send(&AcceptCodeOfConduct).await?;
             }
             (Phase::Configuration, Some(PacketKind::FinishConfiguration)) => {
-                self.c.send(&FinishConfiguration).await?;
-                self.c.phase = Phase::Play;
+                if self.hold.is_zero() {
+                    self.finish_configuration().await?;
+                } else {
+                    self.finish_at = Some(tokio::time::Instant::now() + self.hold);
+                }
             }
             (Phase::Play, Some(PacketKind::StartConfiguration)) => {
                 tokio::time::sleep(self.ack_delay).await;
@@ -699,6 +720,31 @@ impl Player {
 
     pub fn module(&self) -> &Arc<dyn VersionModule> {
         self.c.module()
+    }
+
+    async fn finish_configuration(&mut self) -> Result<(), ClientError> {
+        self.c.send(&FinishConfiguration).await?;
+        self.c.phase = Phase::Play;
+        Ok(())
+    }
+
+    /// From now on, acknowledges the end of each configuration phase only
+    /// after `duration`, still answering keep-alives meanwhile.
+    pub fn hold_configuration(&mut self, duration: Duration) {
+        self.hold = duration;
+    }
+
+    /// Asks for tab completions of `text` (with the slash for a command);
+    /// the answer lands in `suggestions` under the returned id.
+    pub async fn request_suggestions(&mut self, text: &str) -> Result<i32, ClientError> {
+        self.suggestion_id = self.suggestion_id.wrapping_add(1);
+        self.c
+            .send(&CommandSuggestion {
+                id: self.suggestion_id,
+                text: text.into(),
+            })
+            .await?;
+        Ok(self.suggestion_id)
     }
 
     /// An unsigned command (no slash).

@@ -1,7 +1,8 @@
 //! PumboBridge, proxy side, against a fake bridge and fake backends: the
 //! handshake, pairing by status ping, the `pumbo:bridge` service (access,
 //! `no-bridge`, `unsupported`, `timeout`, `disconnected`), held teleports,
-//! and attacks (wrong key, replayed frame).
+//! attacks (wrong key, replayed frame), and permission sets and exports
+//! from the plugin host.
 
 #![allow(
     clippy::unwrap_used,
@@ -14,7 +15,7 @@ mod common;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use pumbo_bridge_proto::api::{self, GameMode};
@@ -24,6 +25,7 @@ use pumbo_core::profile::GameProfile;
 use pumbo_host::wit::services::ServiceError;
 use pumbo_prox::bridge::{Bridge, Tp};
 use pumbo_prox::config::Config;
+use pumbo_prox::plugins::Plugins;
 use pumbo_prox::server::Proxy;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -177,6 +179,53 @@ impl FakeBridge {
         }
     }
 
+    /// The next `perm-set` or `perms-export` (`method`), skipping the rest;
+    /// `None` when none comes within `ms`.
+    async fn next_of(&mut self, method: &str, ms: u64) -> Option<ciborium::Value> {
+        let wait = async {
+            loop {
+                match self.recv().await? {
+                    Msg::Cmd {
+                        method: m, args, ..
+                    } if m == method => return Some(args),
+                    _ => {}
+                }
+            }
+        };
+        tokio::time::timeout(Duration::from_millis(ms), wait)
+            .await
+            .ok()
+            .flatten()
+    }
+
+    async fn perm_set(&mut self) -> Option<api::PermSet> {
+        let v = self.next_of(method::PERM_SET, 2000).await?;
+        Some(v.deserialized().unwrap())
+    }
+
+    async fn export(&mut self) -> Option<String> {
+        let v = self.next_of(method::PERMS_EXPORT, 5000).await?;
+        Some(v.deserialized::<api::PermsExport>().unwrap().data)
+    }
+
+    async fn join(&mut self, player: Uuid) {
+        self.send(&Msg::Ev {
+            ev: wire::Event::Join {
+                player,
+                name: "Steve".into(),
+                pos: api::Pos {
+                    world: "minecraft:overworld".into(),
+                    x: 0.0,
+                    y: 64.0,
+                    z: 0.0,
+                    yaw: None,
+                    pitch: None,
+                },
+            },
+        })
+        .await;
+    }
+
     async fn ok(&mut self, id: u64) {
         self.send(&Msg::Res {
             id,
@@ -198,6 +247,12 @@ struct Setup {
 }
 
 async fn setup(tag: &str, timeout_ms: u64) -> Setup {
+    setup_with(tag, timeout_ms, None).await
+}
+
+/// `setup` with the plugin host started from the same config, as the proxy
+/// does: `extra` adds to the config (`plugins:`, `permissions:`).
+async fn setup_with(tag: &str, timeout_ms: u64, extra: Option<&str>) -> Setup {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("pumbo-bridge-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -223,11 +278,20 @@ bridge:
   command-timeout-ms: {timeout_ms}
 "#,
         key = key_file.display().to_string()
-    );
+    ) + extra.unwrap_or_default();
+    let path = dir.join("pumboprox.yml");
+    std::fs::write(&path, &text).unwrap();
     let cfg = Config::parse(&text).unwrap();
-    let proxy = Proxy::new(cfg.clone(), None).unwrap();
+    let proxy = Proxy::new(cfg.clone(), Some(path)).unwrap();
     let bridge = Bridge::new(&proxy, cfg.bridge.clone()).unwrap();
     proxy.bridge.set(bridge.clone()).unwrap();
+    if extra.is_some() {
+        let plugins = Plugins::start(&text, &proxy, vec![bridge.native()])
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(proxy.plugins.set(plugins).is_ok());
+    }
     let addr = bridge.start().await.unwrap();
     let key = wire::parse_key(&std::fs::read_to_string(&key_file).unwrap()).unwrap();
     Setup {
@@ -259,6 +323,42 @@ fn rejected(r: &Result<Vec<u8>, ServiceError>) -> String {
         Err(ServiceError::Rejected(c)) => c.clone(),
         other => format!("{other:?}"),
     }
+}
+
+/// The log of this test binary so far.
+fn logs() -> String {
+    struct Buf(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Buf {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    static LOG: OnceLock<Arc<Mutex<Vec<u8>>>> = OnceLock::new();
+    let log = LOG.get_or_init(|| {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let w = Arc::clone(&log);
+        tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || Buf(Arc::clone(&w)))
+            .init();
+        log
+    });
+    String::from_utf8_lossy(&log.lock().unwrap()).into_owned()
+}
+
+/// Waits up to 2 s for a line containing `text` in the log.
+async fn logged(text: &str) -> bool {
+    for _ in 0..100 {
+        if logs().contains(text) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    false
 }
 
 fn gamemode(server: &str) -> api::SetGamemode {
@@ -444,6 +544,26 @@ async fn timeout_disconnect_and_reconnect() {
     assert!(task.await.unwrap().is_ok());
 }
 
+/// A bridge that stops answering (its server froze) is closed after 15 s,
+/// and the log says why. Takes 15 to 20 s.
+#[tokio::test]
+async fn silent_bridge_is_closed_with_the_reason() {
+    logs();
+    let mut s = setup("silent", 5000).await;
+    let mut fb = FakeBridge::connect(s.addr, &s.key).await.unwrap();
+    assert_eq!(fb.pair(&mut s.survival).await, "survival");
+    // From here on the bridge reads nothing and sends nothing.
+    let mut rest = Vec::new();
+    let end = tokio::time::timeout(Duration::from_secs(25), fb.sock.read_to_end(&mut rest)).await;
+    assert!(end.is_ok(), "the proxy closes a silent bridge");
+    assert!(
+        logged("bridge on survival closed: silent for 15 s").await,
+        "{}",
+        logs()
+    );
+    assert_eq!(s.bridge.status(Some("survival"))[0].state, api::State::Lost);
+}
+
 #[tokio::test]
 async fn teleports_wait_for_the_client() {
     let mut s = setup("tp", 5000).await;
@@ -556,4 +676,261 @@ async fn status_table() {
     let key = s.bridge.admin(&["key".into()], true, true);
     assert!(key.concat().contains(&wire::key_hex(&s.key)));
     drop((lobby, survival));
+}
+
+// ------------------------------------------------------------ permissions
+
+const STEVE: Uuid = Uuid::from_u128(0x5e7e);
+
+/// A folder with `permissions.yml` (Steve may change his game mode) and a
+/// plugin folder, with the test plugin of pumbo-host as the permission
+/// provider when `provider`; returns the config lines for them.
+fn host_files(tag: &str, provider: bool) -> (PathBuf, String) {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("pumbo-bridge-host-{tag}-{}", std::process::id()));
+    let plugins = dir.join("plugins");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&plugins).unwrap();
+    std::fs::write(
+        dir.join("permissions.yml"),
+        format!("players:\n  {STEVE}:\n    permissions: [\"minecraft:command.gamemode\"]\n"),
+    )
+    .unwrap();
+    if provider {
+        std::fs::write(
+            plugins.join("perm.yml"),
+            "id: perm\nversion: 0.1.0\napi: \"0.1\"\npermission-provider: true\nprovides:\n  - { service: \"pumbo:permissions\", version: \"1.0\" }\n",
+        )
+        .unwrap();
+        std::fs::copy(test_plugin(), plugins.join("perm.wasm")).unwrap();
+    }
+    let extra = format!(
+        "plugins:\n  dir: {:?}\npermissions:\n  file: {:?}\n  on-load-failure: file-only\n",
+        plugins.display().to_string(),
+        dir.join("permissions.yml").display().to_string()
+    );
+    (dir, extra)
+}
+
+/// The test plugin of pumbo-host, built once for wasm32-wasip2.
+fn test_plugin() -> PathBuf {
+    static PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let target = root.join("target/wasm-plugins");
+        let ok = std::process::Command::new(env!("CARGO"))
+            .current_dir(&root)
+            .args(["build", "--locked", "-p", "pumbo-host-test-plugin"])
+            .args([
+                "--target",
+                "wasm32-wasip2",
+                "--profile",
+                "plugin",
+                "--target-dir",
+            ])
+            .arg(&target)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "cargo build of the test plugin");
+        target.join("wasm32-wasip2/plugin/pumbo_host_test_plugin.wasm")
+    })
+    .clone()
+}
+
+/// Steve logged in to the proxy (the host knows him).
+async fn steve(s: &Setup) -> pumbo_prox::server::PlayerGuard {
+    let profile = GameProfile {
+        id: STEVE,
+        name: "Steve".into(),
+        properties: Vec::new(),
+    };
+    let (guard, _rx) = s.proxy.register_player(&profile, s.addr).unwrap();
+    let conn = pumbo_prox::plugins::connection(s.addr, "localhost", 777);
+    s.proxy
+        .plugins
+        .get()
+        .unwrap()
+        .joined(profile, false, conn)
+        .await
+        .unwrap();
+    guard
+}
+
+fn gamemode_set() -> std::collections::BTreeMap<String, bool> {
+    [("minecraft:command.gamemode".to_string(), true)].into()
+}
+
+/// The bridge keeps a set that came before the player at most 30 s; a login
+/// that takes longer finds none. The proxy cannot see that, so the join
+/// reported by the bridge always brings the set again.
+#[tokio::test]
+async fn join_after_pending_expiry_resends_set() {
+    let (_dir, extra) = host_files("join", false);
+    let mut s = setup_with("join", 5000, Some(&extra)).await;
+    let mut fb = FakeBridge::connect(s.addr, &s.key).await.unwrap();
+    fb.pair(&mut s.lobby).await;
+    let _guard = steve(&s).await;
+    s.bridge.connecting(STEVE, "lobby");
+    let first = fb.perm_set().await.unwrap();
+    assert_eq!(first.nodes, gamemode_set());
+    fb.join(STEVE).await;
+    let again = fb.perm_set().await.expect("a set on join");
+    assert_eq!(again.nodes, gamemode_set());
+    // A change of nothing sends nothing.
+    s.bridge.perms_changed(STEVE, Some("lobby"));
+    assert!(fb.perm_set().await.is_none());
+}
+
+/// A login to the backend that failed (no join, no leave), then another
+/// attempt: each one sends the set, and so does the join.
+#[tokio::test]
+async fn reconnect_after_failed_login_resends_set() {
+    let (_dir, extra) = host_files("relogin", false);
+    let mut s = setup_with("relogin", 5000, Some(&extra)).await;
+    let mut fb = FakeBridge::connect(s.addr, &s.key).await.unwrap();
+    fb.pair(&mut s.lobby).await;
+    let _guard = steve(&s).await;
+    s.bridge.connecting(STEVE, "lobby");
+    assert_eq!(fb.perm_set().await.unwrap().nodes, gamemode_set());
+    s.bridge.connecting(STEVE, "lobby");
+    assert_eq!(
+        fb.perm_set()
+            .await
+            .expect("a set for the second attempt")
+            .nodes,
+        gamemode_set()
+    );
+    fb.join(STEVE).await;
+    assert!(fb.perm_set().await.is_some());
+}
+
+/// A provider that is down or does not answer leaves the info the bridge
+/// has: a set sent meanwhile carries the last one.
+#[tokio::test(flavor = "multi_thread")]
+async fn provider_down_keeps_last_info() {
+    let (_dir, extra) = host_files("info-down", true);
+    let mut s = setup_with("info-down", 5000, Some(&extra)).await;
+    let mut fb = FakeBridge::connect(s.addr, &s.key).await.unwrap();
+    fb.pair(&mut s.lobby).await;
+    let _guard = steve(&s).await;
+    s.bridge.connecting(STEVE, "lobby");
+    let info = loop {
+        let set = fb.perm_set().await.expect("a set with the info");
+        if set.info.is_some() {
+            break set.info;
+        }
+    };
+    assert_eq!(info.as_deref(), Some("info lobby"));
+    let host = s.proxy.plugins.get().unwrap().host.clone();
+    host.plugin("perm").unwrap().unload().await.unwrap();
+    s.bridge.connecting(STEVE, "lobby");
+    assert_eq!(fb.perm_set().await.expect("the forced set").info, info);
+    assert!(fb.perm_set().await.is_none(), "the info was dropped");
+}
+
+/// `permissions.yml` read again (`reload` without a permission provider):
+/// every bridge gets the new export.
+#[tokio::test]
+async fn export_resent_after_file_reload() {
+    let (dir, extra) = host_files("file-reload", false);
+    let mut s = setup_with("file-reload", 5000, Some(&extra)).await;
+    let mut fb = FakeBridge::connect(s.addr, &s.key).await.unwrap();
+    fb.pair(&mut s.lobby).await;
+    let first = fb.export().await.unwrap();
+    assert!(
+        first.contains("minecraft:command.gamemode") && !first.contains("minecraft:command.kick")
+    );
+    std::fs::write(
+        dir.join("permissions.yml"),
+        format!("players:\n  {STEVE}:\n    permissions: [\"minecraft:command.kick\"]\n"),
+    )
+    .unwrap();
+    s.proxy.reload().unwrap();
+    let second = fb.export().await.expect("an export after the reload");
+    assert!(second.contains("minecraft:command.kick"), "{second}");
+}
+
+/// The permission provider stops and starts: every bridge gets the export
+/// again, and it stays `proxy-rules` while the provider is down.
+#[tokio::test(flavor = "multi_thread")]
+async fn export_resent_on_provider_state_change() {
+    let (_dir, extra) = host_files("provider-state", true);
+    let mut s = setup_with("provider-state", 5000, Some(&extra)).await;
+    let mut fb = FakeBridge::connect(s.addr, &s.key).await.unwrap();
+    fb.pair(&mut s.lobby).await;
+    let rules = |x: &str| {
+        let v: serde_json::Value = serde_json::from_str(x).unwrap();
+        v["proxy-rules"] == serde_json::json!(true)
+    };
+    assert!(rules(&fb.export().await.unwrap()));
+    let host = s.proxy.plugins.get().unwrap().host.clone();
+    host.plugin("perm").unwrap().unload().await.unwrap();
+    assert!(rules(&fb.export().await.expect("an export when it stops")));
+    host.reload_plugin("perm").await.unwrap();
+    assert!(rules(
+        &fb.export().await.expect("an export when it runs again")
+    ));
+}
+
+/// The permission provider reloads while Steve is on lobby: the bridge stays
+/// connected and gets Steve's new set, and a bridge that comes back gets it
+/// with `sync`.
+#[tokio::test(flavor = "multi_thread")]
+async fn provider_reload_with_a_player_keeps_the_bridge() {
+    let (dir, extra) = host_files("reload-player", true);
+    let provider_gives = |node: &str| {
+        let d = dir.join("plugins/perm");
+        std::fs::create_dir_all(&d).unwrap();
+        let cfg = format!("perms:\n  - {{ node: \"{node}\", value: true, ctx: global }}\n");
+        std::fs::write(d.join("config.yml"), cfg).unwrap();
+    };
+    let only = |node: &str| std::collections::BTreeMap::from([(node.to_string(), true)]);
+    provider_gives("minecraft:command.kick");
+    let mut s = setup_with("reload-player", 5000, Some(&extra)).await;
+    let mut fb = FakeBridge::connect(s.addr, &s.key).await.unwrap();
+    fb.pair(&mut s.lobby).await;
+    let _guard = steve(&s).await;
+    let plugins = s.proxy.plugins.get().unwrap().clone();
+    s.proxy.set_server(STEVE, Some("lobby"));
+    assert!(plugins.gates(STEVE).await.is_ok());
+    // What the play session does when the player's permissions change.
+    let signal = s.proxy.commands_signal(STEVE).unwrap();
+    let (proxy, bridge) = (s.proxy.clone(), s.bridge.clone());
+    tokio::spawn(async move {
+        loop {
+            signal.notified().await;
+            bridge.perms_changed(STEVE, proxy.server_of(STEVE).as_deref());
+        }
+    });
+    s.bridge.connecting(STEVE, "lobby");
+    fb.join(STEVE).await;
+    loop {
+        let set = fb.perm_set().await.expect("Steve's set from the provider");
+        if set.nodes == only("minecraft:command.kick") {
+            break;
+        }
+    }
+
+    provider_gives("minecraft:command.ban");
+    plugins.host.reload_plugin("perm").await.unwrap();
+    loop {
+        let set = fb.perm_set().await.expect("the new set after the reload");
+        if set.nodes == only("minecraft:command.ban") {
+            break;
+        }
+    }
+    // A ping round trip later the session is still up.
+    let _ = fb.next_of(method::PERM_SET, 6000).await;
+    assert_eq!(
+        s.bridge.status(Some("lobby"))[0].state,
+        api::State::Connected
+    );
+
+    drop(fb);
+    while s.lobby.try_recv().is_ok() {}
+    let mut back = FakeBridge::connect(s.addr, &s.key).await.unwrap();
+    back.pair(&mut s.lobby).await;
+    let set = back.perm_set().await.expect("Steve's set with sync");
+    assert_eq!(set.nodes, only("minecraft:command.ban"));
 }

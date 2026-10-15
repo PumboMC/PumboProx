@@ -601,6 +601,24 @@ impl Manifest {
                 }
             }
         }
+        let own = self.permission_prefixes();
+        for p in &self.permissions {
+            // The host matches declared nodes without case.
+            let node = p.node.to_ascii_lowercase();
+            if !own.iter().any(|o| node.starts_with(o.as_str())) {
+                return bad(format!(
+                    "permission node \"{}\" must start with {}",
+                    p.node,
+                    own.join(" or ")
+                ));
+            }
+            if p.default && (node.starts_with("pumbo.proxy.") || node.starts_with("minecraft:")) {
+                return bad(format!(
+                    "permission node \"{}\": nodes under pumbo.proxy. or minecraft: cannot be on by default",
+                    p.node
+                ));
+            }
+        }
         if let Some(s) = &self.short_name
             && (!is_id(s) || s == "proxy")
         {
@@ -617,6 +635,20 @@ impl Manifest {
             ));
         }
         Ok(())
+    }
+
+    /// Node prefixes this plugin may declare permissions under.
+    pub fn permission_prefixes(&self) -> Vec<String> {
+        let mut own = vec![
+            format!(
+                "pumbo.{}.",
+                self.id.strip_prefix("pumbo-").unwrap_or(&self.id)
+            ),
+            format!("pumbo.{}.", self.id),
+            format!("{}:", self.id),
+        ];
+        own.dedup();
+        own
     }
 
     pub fn listens(&self, kind: EventKind) -> bool {
@@ -729,6 +761,50 @@ placeholders:
         }
         let no_gate_event = AUTH.replace("gate, ", "");
         assert!(Manifest::parse(&no_gate_event).is_err());
+    }
+
+    #[test]
+    fn manifest_permissions_need_own_prefix() {
+        let with = |id: &str, node: &str| {
+            let text = AUTH.replace("id: pumbo-auth", &format!("id: {id}"))
+                + &format!("permissions:\n  - {{ node: \"{node}\" }}\n");
+            Manifest::parse(&text)
+        };
+        for (id, node) in [
+            ("pumbo-auth", "pumbo.auth.login"),
+            ("pumbo-auth", "pumbo.pumbo-auth.login"),
+            ("pumbo-auth", "pumbo-auth:login"),
+            ("kits", "pumbo.kits.use"),
+            ("kits", "kits:use"),
+        ] {
+            assert!(with(id, node).is_ok(), "{id} {node}");
+        }
+        for (id, node) in [
+            ("kits", "pumbo.proxy.server"),
+            ("kits", "pumbo.perms.user.set"),
+            ("kits", "pumbo.kitsx.use"),
+            ("kits", "pumbo.kits"),
+            ("kits", "minecraft:command.op"),
+            ("kits", "*"),
+            ("pumbo-auth", "pumbo.bans.ban"),
+        ] {
+            let err = with(id, node).unwrap_err().to_string();
+            assert!(err.contains("must start with"), "{id} {node}: {err}");
+        }
+    }
+
+    #[test]
+    fn manifest_cannot_default_proxy_nodes() {
+        let text = AUTH.replace("id: pumbo-auth", "id: pumbo-proxy")
+            + "permissions:\n  - { node: PUMBO.PROXY.server, default: true }\n";
+        let err = Manifest::parse(&text).unwrap_err().to_string();
+        assert!(err.contains("cannot be on by default"), "{err}");
+        let off = text.replace(", default: true", "");
+        assert!(Manifest::parse(&off).is_ok());
+        let vanilla = AUTH.replace("id: pumbo-auth", "id: minecraft")
+            + "permissions:\n  - { node: minecraft:command.op, default: true }\n";
+        let err = Manifest::parse(&vanilla).unwrap_err().to_string();
+        assert!(err.contains("cannot be on by default"), "{err}");
     }
 
     #[test]

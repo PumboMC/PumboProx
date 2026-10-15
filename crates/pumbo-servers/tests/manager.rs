@@ -84,6 +84,7 @@ fn manager(cfg: Config) -> Arc<Manager> {
     let network = Network {
         velocity_secret: Some("s3cret".into()),
         bridge: Some(("127.0.0.1:25578".into(), "ab".repeat(32))),
+        bridge_releases: None,
     };
     Manager::new(cfg, network, sources, Arc::new(ProcessRunner::default())).unwrap()
 }
@@ -574,4 +575,106 @@ async fn downloads_can_be_cancelled() {
     assert!(s.downloads().is_empty());
     assert!(!dir.join("pumpkin").join(TAG).exists());
     assert!(!dir.join("pumpkin").join(FLAKY).exists());
+}
+
+/// GitHub's answer for the latest PumboBridge release: one file per
+/// Minecraft release and `SHA256SUMS`, whose sum for 26.3 is `sum`.
+async fn fake_bridge_releases(file: &'static [u8], sum: String) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let b = base.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let (base, sum) = (b.clone(), sum.clone());
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 4096];
+                let n = s.read(&mut buf).await.unwrap_or(0);
+                let head = String::from_utf8_lossy(&buf[..n]).to_string();
+                let path = head.split(' ').nth(1).unwrap_or("").to_string();
+                let names = [
+                    "PumboBridge-Pumpkin-26.3-0.1.2-beta.wasm",
+                    "PumboBridge-Pumpkin-26.2-0.1.2-beta.wasm",
+                    "SHA256SUMS",
+                ];
+                let body: Vec<u8> = if path == "/releases/latest" {
+                    let assets: Vec<String> = names
+                        .iter()
+                        .map(|n| {
+                            format!(r#"{{"name":"{n}","browser_download_url":"{base}/dl/{n}"}}"#)
+                        })
+                        .collect();
+                    format!(
+                        r#"{{"tag_name":"v0.1.2-beta","assets":[{}]}}"#,
+                        assets.join(",")
+                    )
+                    .into_bytes()
+                } else if path.ends_with("SHA256SUMS") {
+                    format!("{sum}  {}\n{}  {}\n", names[0], "1".repeat(64), names[1]).into_bytes()
+                } else if path.ends_with(names[0]) {
+                    file.to_vec()
+                } else {
+                    Vec::new()
+                };
+                let status = if body.is_empty() {
+                    "404 Not Found"
+                } else {
+                    "200 OK"
+                };
+                let _ = s
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await;
+                let _ = s.write_all(&body).await;
+            });
+        }
+    });
+    base
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn new_server_gets_bridge_plugin_and_config() {
+    const FILE: &[u8] = b"\0asm bridge";
+    let good = pumbo_servers::versions::hex(
+        aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, FILE).as_ref(),
+    );
+    let with = |base: String, first: u16| {
+        let sources: Vec<Arc<dyn Source>> = vec![Arc::new(Pumpkin::default())];
+        let network = Network {
+            velocity_secret: None,
+            bridge: Some(("127.0.0.1:25578".into(), "ab".repeat(32))),
+            bridge_releases: Some(base),
+        };
+        Manager::new(
+            config("bridge", first),
+            network,
+            sources,
+            Arc::new(ProcessRunner::default()),
+        )
+        .unwrap()
+    };
+    let m = with(fake_bridge_releases(FILE, good).await, 25760);
+    m.create("arena", None, None, &[]).await.unwrap();
+    let dir = m.config.dir.join("arena");
+    assert_eq!(
+        std::fs::read(dir.join("plugins/PumboBridge-26.3.wasm")).unwrap(),
+        FILE
+    );
+    let cfg = std::fs::read_to_string(dir.join("plugins/data/pumbobridge/config.yml")).unwrap();
+    assert!(
+        cfg.contains("127.0.0.1:25578") && cfg.contains(&"ab".repeat(32)),
+        "{cfg}"
+    );
+
+    // A file that does not match SHA256SUMS never reaches a server.
+    let m = with(fake_bridge_releases(FILE, "0".repeat(64)).await, 25770);
+    m.create("arena", None, None, &[]).await.unwrap();
+    let plugins = m.config.dir.join("arena/plugins");
+    assert!(!plugins.join("PumboBridge-26.3.wasm").exists());
+    assert!(plugins.join("data/pumbobridge/config.yml").is_file());
 }

@@ -287,6 +287,8 @@ interface permissions {
   /// service. `current` means global.
   has-offline: async func(id: uuid, node: string, at: query-context) -> result<bool, service-error>;
   /// Plugins with `permissions-write` only: change one node for the session.
+  /// It lasts until the player leaves and wins a tie with the file and the
+  /// provider; `replace` keeps it.
   set: func(id: player-id, node: string, value: option<bool>, ctx: context) -> result<_, string>;
   /// Permission provider only: replace the whole set of an online player.
   replace: func(id: player-id, entries: permission-set) -> result<_, string>;
@@ -483,6 +485,18 @@ interface events {
   on-virtual-input: async func(batch: list<input>);
 }
 
+/// Optional export: tab completion for the plugin's own commands. The host
+/// looks for it when it creates the instance, so a plugin without it loads
+/// as before and its arguments complete to online player names.
+interface suggest {
+  use types.{player-id};
+
+  /// `name` as in `command-event`, `args` the rest of the line as typed (the
+  /// last word may be empty). The answers replace the last word, the text
+  /// after the last space; none: online player names.
+  suggest: async func(player: player-id, name: string, args: string) -> option<list<string>>;
+}
+
 world plugin {
   import players;
   import bossbar;
@@ -501,4 +515,10 @@ world plugin {
   import log;
   import http;
   export events;
+}
+
+/// The `suggest` export on its own; a plugin that has it exports both worlds
+/// (the SDK: `plugin!(T, suggest)`).
+world suggester {
+  export suggest;
 }
