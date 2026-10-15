@@ -15,8 +15,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::future::BoxFuture;
@@ -147,7 +147,8 @@ struct Link {
     server: Mutex<Option<String>>,
     perms_mode: Mutex<PermsMode>,
     perms_sent: Mutex<HashMap<Uuid, SentPerms>>,
-    closed: AtomicBool,
+    /// Why the proxy closes the session (set once).
+    closed: OnceLock<String>,
     close: Notify,
 }
 
@@ -156,8 +157,8 @@ impl Link {
         self.out.try_send(m).is_ok()
     }
 
-    fn close(&self) {
-        self.closed.store(true, Ordering::Relaxed);
+    fn close(&self, why: String) {
+        let _ = self.closed.set(why);
         self.close.notify_one();
     }
 
@@ -396,14 +397,14 @@ impl Bridge {
             server: Mutex::new(None),
             perms_mode: Mutex::new(PermsMode::Bridge),
             perms_sent: Mutex::new(HashMap::new()),
-            closed: AtomicBool::new(false),
+            closed: OnceLock::new(),
             close: Notify::new(),
         });
         debug!("bridge from {peer} authenticated, pairing");
         self.lock().unpaired.insert(link.id, (link.clone(), 0));
         self.wake.notify_one();
-        self.run(&link, sock, codec, buf, rx).await;
-        self.dropped(&link);
+        let why = self.run(&link, sock, codec, buf, rx).await;
+        self.dropped(&link, &why);
     }
 
     fn reject(&self, ip: IpAddr, why: String) {
@@ -461,6 +462,7 @@ impl Bridge {
         Ok(((bridge, pumpkin, mc), proto, codec, buf))
     }
 
+    /// The session until it ends; returns why it ended.
     async fn run(
         &self,
         link: &Arc<Link>,
@@ -468,12 +470,12 @@ impl Bridge {
         mut codec: Codec,
         mut buf: Vec<u8>,
         mut out: mpsc::Receiver<Msg>,
-    ) {
+    ) -> String {
         let (mut rd, mut wr) = sock.into_split();
         let mut tx = codec.clone();
         let mut last_rx = Instant::now();
         let mut ping = tokio::time::interval(PING_EVERY);
-        let why = 'session: loop {
+        'session: loop {
             loop {
                 match codec.decode(&buf) {
                     Ok(Some((m, n))) => {
@@ -485,49 +487,47 @@ impl Bridge {
                     Err(e) => break 'session e.to_string(),
                 }
             }
-            if link.closed.load(Ordering::Relaxed) {
-                break "closed by the proxy".into();
+            if let Some(why) = link.closed.get() {
+                break why.clone();
             }
             tokio::select! {
                 r = rd.read_buf(&mut buf) => match r {
-                    Ok(0) => break "closed by the bridge".into(),
+                    Ok(0) => break "the bridge closed the connection".into(),
                     Ok(_) => {}
-                    Err(e) => break e.to_string(),
+                    Err(e) => break format!("read: {e}"),
                 },
                 Some(m) = out.recv() => {
                     let mut bytes = match tx.encode(&m) {
                         Ok(b) => b,
-                        Err(e) => break e.to_string(),
+                        Err(e) => break format!("cannot send: {e}"),
                     };
                     while let Ok(m) = out.try_recv() {
                         match tx.encode(&m) {
                             Ok(b) => bytes.extend(b),
-                            Err(e) => break 'session e.to_string(),
+                            Err(e) => break 'session format!("cannot send: {e}"),
                         }
                     }
                     if let Err(e) = wr.write_all(&bytes).await {
-                        break e.to_string();
+                        break format!("write: {e}");
                     }
                 }
                 _ = ping.tick() => {
                     if last_rx.elapsed() > SILENCE {
-                        break "silent for 15 s".into();
+                        break "silent for 15 s (no answer to pings)".into();
                     }
                     if let Ok(mut p) = link.ping_at.lock() {
                         p.get_or_insert_with(Instant::now);
                     }
                     link.send(Msg::Ping);
                 }
-                () = link.close.notified() => break "closed by the proxy".into(),
+                () = link.close.notified() => break link.closed.get().cloned().unwrap_or_default(),
             }
-        };
-        let server = link.server().unwrap_or_else(|| "?".into());
-        debug!("bridge session {} ({server}) ended: {why}", link.peer);
+        }
     }
 
-    /// A session ended: its server loses the bridge, calls in flight end
-    /// with `disconnected`.
-    fn dropped(&self, link: &Arc<Link>) {
+    /// A session ended: one line says why, its server loses the bridge,
+    /// calls in flight end with `disconnected`.
+    fn dropped(&self, link: &Arc<Link>, why: &str) {
         let mut lost = None;
         {
             let mut st = self.lock();
@@ -546,8 +546,11 @@ impl Bridge {
                 let _ = tx.send(Err((err::DISCONNECTED.into(), None)));
             }
         }
+        match link.server() {
+            Some(server) => info!("bridge on {server} closed: {why}"),
+            None => warn!("bridge from {} closed before pairing: {why}", link.peer),
+        }
         if let Some(server) = lost {
-            info!("bridge on {server} disconnected");
             if let Some(p) = self.proxy().and_then(|p| p.plugins.get().cloned()) {
                 p.host.set_server_value(&server, "tps", None);
                 p.host.set_server_value(&server, "mspt", None);
@@ -656,8 +659,7 @@ impl Bridge {
             (server, old)
         };
         if let Some(old) = old {
-            info!("a newer bridge session replaces the old one on {server}");
-            old.close();
+            old.close(format!("replaced by a newer session from {}", link.peer));
         }
         if let Ok(mut s) = link.server.lock() {
             *s = Some(server.clone());
@@ -934,12 +936,8 @@ impl Bridge {
                 (targets, give_up)
             };
             for l in give_up {
-                warn!(
-                    "bridge from {} does not match any server in servers:, closing it",
-                    l.peer
-                );
                 self.reject(l.peer.ip(), "matches no server in servers:".into());
-                l.close();
+                l.close("it matches no server in servers:".into());
             }
             for (address, nonce) in targets {
                 tokio::spawn(async move {

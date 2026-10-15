@@ -485,6 +485,18 @@ interface events {
   on-virtual-input: async func(batch: list<input>);
 }
 
+/// Optional export: tab completion for the plugin's own commands. The host
+/// looks for it when it creates the instance, so a plugin without it loads
+/// as before and its arguments complete to online player names.
+interface suggest {
+  use types.{player-id};
+
+  /// `name` as in `command-event`, `args` the rest of the line as typed (the
+  /// last word may be empty). The answers replace the last word, the text
+  /// after the last space; none: online player names.
+  suggest: async func(player: player-id, name: string, args: string) -> option<list<string>>;
+}
+
 world plugin {
   import players;
   import bossbar;
@@ -503,4 +515,10 @@ world plugin {
   import log;
   import http;
   export events;
+}
+
+/// The `suggest` export on its own; a plugin that has it exports both worlds
+/// (the SDK: `plugin!(T, suggest)`).
+world suggester {
+  export suggest;
 }

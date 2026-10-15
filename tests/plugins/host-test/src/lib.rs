@@ -4,7 +4,8 @@
 //! - commands (with `prefix` from the config): `/spin` (endless loop),
 //!   `/panic`, `/reg <name> [umbrella] [virtual]` (registers a command),
 //!   `/http <url>`, `/call <service> <method> <n>`, `/flood <n>`,
-//!   `/sleep <ms>`, `/echo <text>`, `/alloc <mb>`,
+//!   `/sleep <ms>`, `/echo <text>`, `/alloc <mb>`; tab completion of `/echo`
+//!   answers `<name>|<args>|<player>`, of `/sleep <ms>` after that long,
 //! - gate by name prefix: `deny_`, `hold_` (released after 50 ms), `slow_`,
 //!   `never_` (hold without release), `locale_` (deny with the locale the
 //!   gate sees), `early_` (title, action bar and boss bar, then a virtual
@@ -27,7 +28,8 @@
 //!   player `report`; a permission provider with `perms` from the config
 //!   (loads of `slowload_` players take 500 ms, the first load of a
 //!   `flaky_` player fails; `check-offline` calls are reported; `info`
-//!   answers `info <server>`).
+//!   answers `info <server>`; `file` takes 500 ms for a file with
+//!   `pumbo.test.slowfile` and refuses the first one with `pumbo.test.refuse`).
 
 #![allow(clippy::panic)]
 
@@ -84,6 +86,7 @@ struct TestPlugin {
     config: Config<Cfg>,
     calls: Cell<u64>,
     flaky_failed: Cell<bool>,
+    file_refused: Cell<bool>,
 }
 
 fn arg(e: &CommandEvent, i: usize) -> String {
@@ -295,6 +298,26 @@ impl pumbo_sdk::Plugin for TestPlugin {
         let to = self.config.get().report;
         let state = available.map_or("none".to_string(), |r| format!("{}.{}", r.major, r.minor));
         pumbo_sdk::players::send_message(to, plain(format!("changed {service} {state}")));
+    }
+
+    /// `echo` answers with what the host passed (`echo many`: one entry over
+    /// 256 bytes, then 1001 short ones), `sleep <ms>` after that long; other
+    /// commands leave it to the host.
+    async fn on_suggest(&self, player: u64, name: String, args: String) -> Option<Vec<String>> {
+        let prefix = self.config.get().prefix.clone();
+        match name.strip_prefix(prefix.as_str()) {
+            Some("echo") if args == "many" => Some(
+                std::iter::once("x".repeat(257))
+                    .chain((0..1001).map(|n| n.to_string()))
+                    .collect(),
+            ),
+            Some("echo") => Some(vec![format!("{name}|{args}|{player}")]),
+            Some("sleep") => {
+                pumbo_sdk::scheduler::sleep(args.trim().parse().unwrap_or(0)).await;
+                Some(vec!["slept".into()])
+            }
+            _ => None,
+        }
     }
 
     async fn on_command(&self, e: CommandEvent) {
@@ -695,6 +718,14 @@ impl pumbo_sdk::Plugin for TestPlugin {
             let f: pumbo_sdk::contracts::PermissionsFile =
                 pumbo_sdk::service::from_cbor(&c.payload).map_err(CallReject::Rejected)?;
             let report = self.config.get().report;
+            if f.data.contains("pumbo.test.slowfile") {
+                pumbo_sdk::players::send_message(report, plain("slow file"));
+                pumbo_sdk::scheduler::sleep(500).await;
+            }
+            if f.data.contains("pumbo.test.refuse") && !self.file_refused.replace(true) {
+                pumbo_sdk::players::send_message(report, plain("refused file"));
+                return Err(CallReject::Rejected("refused".into()));
+            }
             pumbo_sdk::players::send_message(report, plain(format!("file {}", f.data.len())));
             return pumbo_sdk::service::to_cbor(&true).map_err(CallReject::Rejected);
         }
@@ -756,4 +787,4 @@ impl pumbo_sdk::Plugin for TestPlugin {
     }
 }
 
-pumbo_sdk::plugin!(TestPlugin);
+pumbo_sdk::plugin!(TestPlugin, suggest);

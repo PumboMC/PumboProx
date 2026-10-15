@@ -162,21 +162,195 @@ pub fn old_files(dir: &str) -> Vec<Warning> {
         .collect()
 }
 
-/// Reads a config or message file, writing `template` first when it does not
-/// exist. A file that cannot be read yields the template and a warning.
-pub fn read_or_create(path: &str, template: &str) -> (String, Option<Warning>) {
-    match std::fs::read_to_string(path) {
-        Ok(text) => (text, None),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            if let Some(parent) = std::path::Path::new(path).parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let warning = std::fs::write(path, template)
-                .err()
-                .map(|e| Warning::new(None, format!("cannot write {path}: {e}; using built-in defaults")));
-            (template.to_string(), warning)
+/// Reads a config or message file (a message file is one in a `lang` folder),
+/// writing `template` first when it does not exist. A file that cannot be read
+/// yields the template and a warning.
+///
+/// What was written is also kept in `.generated/` next to the file, so a new
+/// version of the plugin can tell whether the admin changed it. A file nobody
+/// changed follows the new template (a config only when none of its values
+/// changed, so the values in force never change by themselves); a changed
+/// file stays, with a warning naming the options it lacks and the ones that
+/// still have the previous built-in value. A deleted file comes back. A file
+/// from before the copy existed counts as unchanged when a released version
+/// wrote it as it is ([`RELEASED`]); any other one is compared with this
+/// version from now on.
+pub fn read_or_create(path: &str, template: &str) -> (String, Vec<Warning>) {
+    read_or_create_known(path, template, RELEASED)
+}
+
+/// FNV-1a of every `config.yml` and `lang/<code>.yml` the Pumpkin plugins
+/// wrote before `.generated/` existed (0.1.0-beta.1 up to this change).
+const RELEASED: &[u64] = &[
+    0x06e6_8758_cf74_4681,
+    0x079b_4837_7ec4_8b98,
+    0x1462_2bb4_e3b5_dbac,
+    0x3814_daa8_c933_1e7a,
+    0x3c81_3ba1_9a72_5a5e,
+    0x5504_7e1e_3bde_9bc7,
+    0x5b2f_b347_4427_0c1f,
+    0x5f11_ece2_165b_2e9b,
+    0x636a_f97b_de8a_108d,
+    0x708f_bc8d_0b7b_4483,
+    0x751d_90b5_2321_718f,
+    0x795b_af07_3705_5983,
+    0x8891_b608_b37d_1713,
+    0x9a2a_8395_a13e_cdf2,
+    0x9ae7_93ec_462c_e53f,
+    0xa402_de1f_5f61_5cc0,
+    0xaed7_8970_ece7_b193,
+    0xb437_81eb_1b1a_1e48,
+    0xc1a4_cb7d_06ff_e14a,
+    0xc98f_a2ef_14f5_77a3,
+    0xea9e_847f_f647_9420,
+    0xf1b5_1abc_41b9_4883,
+    0xf621_5158_2e88_ce2a,
+];
+
+/// 64-bit FNV-1a, stable across Rust versions (unlike `DefaultHasher`).
+fn fnv(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
+}
+
+fn read_or_create_known(path: &str, template: &str, known: &[u64]) -> (String, Vec<Warning>) {
+    let file = std::path::Path::new(path);
+    let parent = file.parent().unwrap_or(std::path::Path::new(""));
+    let copy = parent.join(".generated").join(file.file_name().unwrap_or_default());
+    let lang = parent.file_name().is_some_and(|n| n == "lang");
+    let write = |p: &std::path::Path| {
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
         }
-        Err(e) => (template.to_string(), Some(Warning::new(None, format!("cannot read {path}: {e}; using defaults")))),
+        std::fs::write(p, template)
+    };
+    let save = || write(file).and_then(|()| write(&copy));
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let warning = save().err().map(|e| Warning::new(None, format!("cannot write {path}: {e}")));
+            return (template.to_string(), warning.into_iter().collect());
+        }
+        Err(e) => {
+            return (
+                template.to_string(),
+                vec![Warning::new(None, format!("cannot read {path}: {e}; using defaults"))],
+            );
+        }
+    };
+    let mut old = std::fs::read_to_string(&copy).ok();
+    if old.is_none() && known.contains(&fnv(&text)) {
+        old = Some(text.clone());
+    }
+    let (mut missing, mut stale) = (Vec::new(), Vec::new());
+    if let (Ok(t), Ok(u)) = (parse_table(template), parse_table(&text)) {
+        let o = old.as_deref().and_then(|o| parse_table(o).ok());
+        compare(&t, o.as_ref(), &u, "", &mut missing, &mut stale);
+    }
+    let unchanged = old.as_deref() == Some(text.as_str());
+    if text != template && unchanged && (lang || stale.is_empty()) {
+        let what = if lang { "texts" } else { "template" };
+        let note = match save() {
+            Ok(()) => format!("updated {path} to the new built-in {what}"),
+            Err(e) => format!("cannot write {path}: {e}"),
+        };
+        return (template.to_string(), vec![Warning::new(None, note)]);
+    }
+    // An unknown file without a copy is compared with this version from now on.
+    if old.is_none() || (text == template && old.as_deref() != Some(template)) {
+        let _ = write(&copy);
+    }
+    let (lacks, kept) = if lang {
+        (
+            "lacks texts of this version, the built-in ones apply",
+            "still has the previous built-in texts (remove these keys to get the new ones) for",
+        )
+    } else {
+        ("lacks options of this version, their defaults apply", "keeps the previous defaults (they apply) for")
+    };
+    let warnings = [(missing, lacks), (stale, kept)]
+        .into_iter()
+        .filter(|(names, _)| !names.is_empty())
+        .map(|(names, what)| Warning::new(None, format!("{path} {what}: {}", names.join(", "))))
+        .collect();
+    (text, warnings)
+}
+
+/// Compares `text` with the `template` of this version: options it lacks (a
+/// missing section is named once) go to `missing`, and options whose built-in
+/// value changed from `old` while `text` still has the old one to `stale`.
+/// Lists are values.
+fn compare(
+    t: &Table,
+    old: Option<&Table>,
+    text: &Table,
+    path: &str,
+    missing: &mut Vec<String>,
+    stale: &mut Vec<String>,
+) {
+    for (key, tv) in t {
+        let full = if path.is_empty() { key.clone() } else { format!("{path}.{key}") };
+        let ov = old.and_then(|o| o.get(key));
+        match (tv, text.get(key)) {
+            (_, None) => missing.push(full),
+            (Value::Object(ts), Some(Value::Object(us))) => {
+                compare(ts, ov.and_then(Value::as_object), us, &full, missing, stale);
+            }
+            (_, Some(uv)) => {
+                if ov.is_some_and(|ov| ov != tv && ov == uv) {
+                    stale.push(full);
+                }
+            }
+        }
+    }
+}
+
+/// The `commands:` section: short commands for the plugin's main command and
+/// what is switched off. Each plugin sets its own defaults.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct Commands {
+    /// Short commands for the main command (`pp` for `/pumboperms`); the
+    /// full name is always registered.
+    pub aliases: Vec<String>,
+    /// Commands or subcommands not to offer.
+    pub disabled: Vec<String>,
+}
+
+impl Commands {
+    /// Names as typed without `/`, in lower case; anything that cannot be a
+    /// command name is dropped with a warning.
+    pub fn validate(&mut self, check: &mut Check<'_>) {
+        for (option, list) in [("commands.aliases", &mut self.aliases), ("commands.disabled", &mut self.disabled)] {
+            for raw in std::mem::take(list) {
+                let name = raw.trim().trim_start_matches('/').to_lowercase();
+                if !crate::command::is_valid_node(&name) {
+                    check.warn(option, format!("'{raw}' in '{option}' is not a command name, ignored"));
+                } else if !list.contains(&name) {
+                    list.push(name);
+                }
+            }
+        }
+    }
+
+    /// The short commands to register for `full`: the full name never twice,
+    /// and a name `taken` gives an owner for is skipped with a warning.
+    pub fn aliases_to_register(
+        &self,
+        full: &str,
+        taken: impl Fn(&str) -> Option<String>,
+    ) -> (Vec<String>, Vec<Warning>) {
+        let mut out = Vec::new();
+        let mut warnings = Vec::new();
+        for alias in self.aliases.iter().filter(|a| *a != full) {
+            match taken(alias) {
+                Some(owner) => warnings.push(Warning::new(
+                    Some("commands.aliases"),
+                    format!("/{alias} belongs to {owner}, not registered; /{full} works"),
+                )),
+                None => out.push(alias.clone()),
+            }
+        }
+        (out, warnings)
     }
 }
 
@@ -640,10 +814,154 @@ mod tests {
         let path = path.to_str().unwrap();
         let (text, w) = read_or_create(path, "a: 1\n");
         assert_eq!(text, "a: 1\n");
-        assert!(w.is_none());
+        assert!(w.is_empty());
         std::fs::write(path, "a: 2\n").unwrap();
         assert_eq!(read_or_create(path, "a: 1\n").0, "a: 2\n");
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A plugin data folder with `lang/en.yml` written by a version whose
+    /// texts were `old`.
+    fn installed(name: &str, old: &str) -> (std::path::PathBuf, String) {
+        let (dir, _) = start_dirs(name);
+        let path = dir.join("lang/en.yml").to_str().unwrap().to_string();
+        let (text, w) = read_or_create(&path, old);
+        assert!(text == old && w.is_empty(), "{w:?}");
+        (dir, path)
+    }
+
+    const OLD: &str = "prefix: \"&#f28c28PumboX &8» \"\nbye: \"Do not move\"\n";
+    const NEW: &str = "prefix: \"&#f28c28Pumbo&#ffff55X &8» \"\nbye: \"Don't move\"\nhello: \"Hi\"\n";
+
+    #[test]
+    fn untouched_lang_file_follows_update() {
+        let (dir, path) = installed("lang-update", OLD);
+        let (text, w) = read_or_create(&path, NEW);
+        assert_eq!(text, NEW);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), NEW);
+        assert!(w.len() == 1 && w[0].message.contains("updated") && !w[0].fatal, "{w:?}");
+        // the next start finds nothing to do
+        assert!(read_or_create(&path, NEW).1.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn edited_lang_file_stays_with_warning() {
+        let (dir, path) = installed("lang-edited", OLD);
+        let edited = "prefix: \"&#f28c28PumboX &8» \"\nbye: \"Stay still\"\n";
+        std::fs::write(&path, edited).unwrap();
+        let (text, w) = read_or_create(&path, NEW);
+        assert_eq!(text, edited);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), edited);
+        let messages: Vec<&str> = w.iter().map(|w| w.message.as_str()).collect();
+        assert!(messages.iter().any(|m| m.contains("lacks") && m.ends_with(": hello")), "{messages:?}");
+        // `prefix` still has the old built-in text, `bye` is the admin's own
+        assert!(messages.iter().any(|m| m.contains("remove these keys") && m.ends_with(": prefix")), "{messages:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn released_file_without_copy_follows_update() {
+        assert_eq!(fnv("a"), 0xaf63_dc4c_8601_ec8c);
+        let (dir, _) = start_dirs("lang-released");
+        let path = dir.join("lang/en.yml").to_str().unwrap().to_string();
+        std::fs::create_dir_all(dir.join("lang")).unwrap();
+        std::fs::write(&path, OLD).unwrap();
+        let (text, w) = read_or_create_known(&path, NEW, &[fnv(OLD)]);
+        assert!(text == NEW && w.len() == 1 && w[0].message.contains("updated"), "{w:?}");
+        assert_eq!(std::fs::read_to_string(dir.join("lang/.generated/en.yml")).unwrap(), NEW);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unknown_file_without_copy_is_compared_from_now_on() {
+        let (dir, _) = start_dirs("lang-unknown");
+        let path = dir.join("lang/en.yml").to_str().unwrap().to_string();
+        std::fs::create_dir_all(dir.join("lang")).unwrap();
+        let own = "prefix: \"[X] \"\nbye: \"Don't move\"\nhello: \"Hi\"\n";
+        std::fs::write(&path, own).unwrap();
+        // the admin's own texts are not listed
+        let (text, w) = read_or_create_known(&path, NEW, &[fnv(OLD)]);
+        assert!(text == own && w.is_empty(), "{w:?}");
+        let newer = NEW.replace("Don't move", "Stand still");
+        let (text, w) = read_or_create_known(&path, &newer, &[fnv(OLD)]);
+        assert!(text == own && w.len() == 1 && w[0].message.ends_with(": bye"), "{w:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn deleted_lang_file_returns() {
+        let (dir, path) = installed("lang-deleted", OLD);
+        std::fs::remove_file(&path).unwrap();
+        let (text, w) = read_or_create(&path, NEW);
+        assert!(text == NEW && w.is_empty(), "{w:?}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), NEW);
+        // and counts as untouched for the version after
+        let newer = format!("{NEW}extra: \"x\"\n");
+        assert_eq!(read_or_create(&path, &newer).0, newer);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn untouched_config_keeps_changed_defaults() {
+        let (dir, _) = start_dirs("cfg-update");
+        let path = dir.join("config.yml").to_str().unwrap().to_string();
+        read_or_create(&path, "a: 1\n");
+        // only an option added: the file follows
+        assert_eq!(read_or_create(&path, "a: 1\nb: 2\n").0, "a: 1\nb: 2\n");
+        // a default changed: the old value stays in force
+        let (text, w) = read_or_create(&path, "a: 5\nb: 2\n");
+        assert_eq!(text, "a: 1\nb: 2\n");
+        assert!(w.len() == 1 && w[0].message.ends_with("keeps the previous defaults (they apply) for: a"), "{w:?}");
+        // a config from before the copy existed is never replaced
+        std::fs::remove_dir_all(dir.join(".generated")).unwrap();
+        let (text, w) = read_or_create(&path, "a: 1\nb: 2\nc: 3\n");
+        assert_eq!(text, "a: 1\nb: 2\n");
+        assert!(w.len() == 1 && w[0].message.ends_with("lacks options of this version, their defaults apply: c"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn commands(yaml: &str) -> Commands {
+        #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+        #[serde(default, rename_all = "kebab-case")]
+        struct C {
+            commands: Commands,
+        }
+        impl Settings for C {
+            fn validate(&mut self, check: &mut Check<'_>) {
+                self.commands.validate(check);
+            }
+        }
+        let (c, w) = load::<C>(yaml);
+        assert!(w.is_empty(), "{w:?}");
+        c.commands
+    }
+
+    #[test]
+    fn aliases_come_from_config() {
+        let c = commands("commands:\n  aliases: [/Perms, p, perms, pumboperms]\n  disabled: [Editor]\n");
+        assert_eq!(c.aliases_to_register("pumboperms", |_| None).0, vec!["perms", "p"]);
+        assert_eq!(c.disabled, vec!["editor"]);
+        let mut bad = Commands { aliases: vec!["two words".into(), "ok".into()], disabled: Vec::new() };
+        let mut w = Vec::new();
+        bad.validate(&mut Check::new(&mut w));
+        assert_eq!((bad.aliases, options(&w)), (vec!["ok".to_string()], vec!["commands.aliases".to_string()]));
+    }
+
+    #[test]
+    fn cleared_alias_list_registers_only_full_name() {
+        let c = commands("commands:\n  aliases: []\n");
+        let (aliases, w) = c.aliases_to_register("pumboperms", |_| None);
+        assert!(aliases.is_empty() && w.is_empty(), "{aliases:?} {w:?}");
+    }
+
+    #[test]
+    fn taken_alias_is_skipped_with_warning() {
+        let c = commands("commands:\n  aliases: [pp, ban]\n");
+        let (aliases, w) = c.aliases_to_register("pumboperms", |a| (a == "ban").then(|| "Pumpkin".to_string()));
+        assert_eq!(aliases, vec!["pp"]);
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0].message, "/ban belongs to Pumpkin, not registered; /pumboperms works");
     }
 
     #[test]

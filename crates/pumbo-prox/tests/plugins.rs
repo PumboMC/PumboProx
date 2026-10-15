@@ -334,7 +334,12 @@ async fn unloading_the_holding_gate_kicks() {
     let wait = Duration::from_secs(15);
     assert!(p.pump(wait, |p| !p.titles.is_empty()).await.unwrap());
     assert!(
-        Some(plugins.admin(None, &["plugin".into(), "unload".into(), "auth".into()])).is_some()
+        Some(plugins.admin(
+            None,
+            &["plugin".into(), "unload".into(), "auth".into()],
+            &|_| true
+        ))
+        .is_some()
     );
     p.pump(wait, |p| p.disconnect.is_some()).await.unwrap();
     let kick = p.disconnect.clone().unwrap_or_default();
@@ -343,7 +348,14 @@ async fn unloading_the_holding_gate_kicks() {
     let refused = login(addr, "steve").await.unwrap_or_default();
     assert!(refused.contains("temporarily unavailable"), "{refused}");
 
-    assert!(Some(plugins.admin(None, &["plugin".into(), "load".into(), "auth".into()])).is_some());
+    assert!(
+        Some(plugins.admin(
+            None,
+            &["plugin".into(), "load".into(), "auth".into()],
+            &|_| true
+        ))
+        .is_some()
+    );
     let slot = plugins.host.plugin("auth").unwrap();
     for _ in 0..300 {
         if slot.status() == pumbo_host::Status::Running {
@@ -413,5 +425,279 @@ async fn a_missing_plugin_directory_is_created() {
         .expect("plugin host");
     assert!(dir.is_dir());
     assert!(plugins.host.plugins().is_empty());
+    proxy.stop();
+}
+
+/// A proxy without servers (players wait in the Pumbox) and the test plugin
+/// as `perms` with `short-name: perms`; `extra` goes into the config.
+async fn pumbox_with_plugin(
+    tag: &str,
+    extra: &str,
+) -> (
+    std::sync::Arc<pumbo_prox::server::Proxy>,
+    SocketAddr,
+    std::sync::Arc<Plugins>,
+) {
+    let manifest = "id: perms\nversion: 0.1.0\napi: \"0.1\"\nshort-name: perms\n";
+    pumbox_with(tag, extra, &test_plugin(), "perms", Some(manifest)).await
+}
+
+/// A proxy without servers and the plugin `wasm` as `id`, with `manifest`
+/// next to it or the one built in.
+async fn pumbox_with(
+    tag: &str,
+    extra: &str,
+    wasm: &std::path::Path,
+    id: &str,
+    manifest: Option<&str>,
+) -> (
+    std::sync::Arc<pumbo_prox::server::Proxy>,
+    SocketAddr,
+    std::sync::Arc<Plugins>,
+) {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("pumbo-e6-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    if let Some(m) = manifest {
+        std::fs::write(dir.join(format!("{id}.yml")), m).unwrap();
+    }
+    std::fs::copy(wasm, dir.join(format!("{id}.wasm"))).unwrap();
+    let text = format!(
+        "listener:\n  - bind: \"127.0.0.1:0\"\nlogin:\n  online-mode: false\nforwarding:\n  mode: none\n\
+         limits:\n  connections-per-ip-per-second: 1000\n  concurrent-per-ip: 1000\n\
+         plugins:\n  dir: {:?}\n{extra}",
+        dir.display().to_string()
+    );
+    let (proxy, addr) = start_proxy(&text).await;
+    let plugins = Plugins::start(&text, &proxy, Vec::new())
+        .await
+        .unwrap()
+        .expect("plugin host");
+    proxy.plugins.set(plugins.clone()).unwrap();
+    let slot = plugins.host.plugin(id).unwrap();
+    for _ in 0..600 {
+        if slot.status() == pumbo_host::Status::Running {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(slot.status(), pumbo_host::Status::Running);
+    (proxy, addr, plugins)
+}
+
+/// Tab completion of `text` as the client asks for it.
+async fn suggest(p: &mut pumbo_testclient::Player, id: i32, text: &str) -> Vec<String> {
+    let before = p.suggestions.len();
+    p.c.send(&pumbo_protocol::packets::play::CommandSuggestion {
+        id,
+        text: text.into(),
+    })
+    .await
+    .unwrap();
+    assert!(
+        p.pump(Duration::from_secs(15), |p| p.suggestions.len() > before)
+            .await
+            .unwrap(),
+        "no answer to {text}"
+    );
+    let last = p.suggestions.last().unwrap();
+    assert_eq!(last.id, id);
+    last.matches.iter().map(|m| m.text.clone()).collect()
+}
+
+/// `/pp <TAB>` asks the plugin's `suggest` first, then offers the plugin's
+/// subcommands, not player names; past them the plugin's `suggest` answers,
+/// or player names when it has nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn pp_tab_lists_subcommands() {
+    let (proxy, addr, plugins) = pumbox_with_plugin("pp-tab", "").await;
+    for line in ["reg pp", "reg user umbrella", "reg group umbrella"] {
+        plugins.console(line);
+    }
+    let uuid = pumbo_identity::offline_uuid("Steve");
+    let mut p = pumbo_testclient::Player::join(
+        addr,
+        module(777),
+        pumbo_testclient::JoinOptions::new("Steve"),
+    )
+    .await
+    .unwrap();
+    for _ in 0..600 {
+        if plugins
+            .visible_commands(uuid)
+            .iter()
+            .any(|(n, subs)| n == "pp" && subs.len() == 2)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(suggest(&mut p, 1, "/pp ").await, ["group", "user"]);
+    assert_eq!(suggest(&mut p, 2, "/pp U").await, ["user"]);
+    assert_eq!(suggest(&mut p, 3, "/pp user St").await, ["Steve"]);
+    let echo = suggest(&mut p, 4, "/echo a  b").await;
+    assert!(
+        echo.len() == 1 && echo[0].starts_with("echo|a  b|"),
+        "{echo:?}"
+    );
+    let first = suggest(&mut p, 5, "/echo ").await;
+    assert!(
+        first.len() == 1 && first[0].starts_with("echo||"),
+        "{first:?}"
+    );
+    p.close().await;
+    proxy.stop();
+}
+
+/// An operator from `commands.operators` uses `/prox plugins` and `/prox
+/// debug`, which the `/prox` help shows them, without a permission entry;
+/// another player is refused both.
+#[tokio::test(flavor = "multi_thread")]
+async fn operator_can_use_prox_plugins() {
+    let uuid = pumbo_identity::offline_uuid("Owner");
+    let (proxy, addr, _plugins) =
+        pumbox_with_plugin("operator", &format!("commands:\n  operators: [{uuid}]\n")).await;
+    let mut p = pumbo_testclient::Player::join(
+        addr,
+        module(777),
+        pumbo_testclient::JoinOptions::new("Owner"),
+    )
+    .await
+    .unwrap();
+    p.command("prox plugins").await.unwrap();
+    assert!(
+        common::message(&mut p, "perms 0.1.0").await,
+        "{:?}",
+        p.messages
+    );
+    p.command("prox debug services").await.unwrap();
+    assert!(
+        common::message(&mut p, "Services:").await,
+        "{:?}",
+        p.messages
+    );
+    p.command("prox plugins reload perms").await.unwrap();
+    assert!(
+        common::message(&mut p, "perms reloaded").await,
+        "{:?}",
+        p.messages
+    );
+    assert!(
+        !p.messages.iter().any(|m| m.contains("permission")),
+        "{:?}",
+        p.messages
+    );
+    let mut guest = pumbo_testclient::Player::join(
+        addr,
+        module(777),
+        pumbo_testclient::JoinOptions::new("Guest"),
+    )
+    .await
+    .unwrap();
+    for line in ["prox plugins", "prox debug services"] {
+        let before = guest.messages.len();
+        guest.command(line).await.unwrap();
+        assert!(
+            guest
+                .pump(Duration::from_secs(15), |g| g.messages[before..]
+                    .iter()
+                    .any(|m| m.contains("You do not have permission")))
+                .await
+                .unwrap(),
+            "{line}: {:?}",
+            guest.messages
+        );
+    }
+    assert!(
+        !guest
+            .messages
+            .iter()
+            .any(|m| m.contains("perms 0.1.0") || m.contains("Services:")),
+        "{:?}",
+        guest.messages
+    );
+    guest.close().await;
+    p.close().await;
+    proxy.stop();
+}
+
+/// `/pp` arguments complete on the proxy as on Pumpkin: online players, then
+/// groups and permission nodes; the first word only what the player may use
+/// (`PUMBO_PERMS_WASM`: a built `pumbo-perms.wasm`; without it the test does
+/// nothing).
+#[tokio::test(flavor = "multi_thread")]
+async fn pp_tab_completes_arguments() {
+    let Ok(wasm) = std::env::var("PUMBO_PERMS_WASM") else {
+        eprintln!("[skip] PUMBO_PERMS_WASM is not set");
+        return;
+    };
+    let (proxy, addr, plugins) = pumbox_with(
+        "pp-args",
+        "",
+        std::path::Path::new(&wasm),
+        "pumbo-perms",
+        None,
+    )
+    .await;
+    let mut p = pumbo_testclient::Player::join(
+        addr,
+        module(777),
+        pumbo_testclient::JoinOptions::new("Steve"),
+    )
+    .await
+    .unwrap();
+    let uuid = pumbo_identity::offline_uuid("Steve");
+    for line in [
+        "pp user Steve permission set * true",
+        "pp creategroup vip",
+        "pp group vip permission set minecraft:command.gamemode true",
+    ] {
+        plugins.console(line);
+    }
+    for _ in 0..600 {
+        if plugins.permission(uuid, "pumbo.perms.user.info", None) == Some(true) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        suggest(&mut p, 1, "/pp user ")
+            .await
+            .contains(&"Steve".to_string())
+    );
+    assert!(
+        suggest(&mut p, 2, "/pp user Steve parent add ")
+            .await
+            .contains(&"vip".to_string())
+    );
+    assert!(
+        suggest(
+            &mut p,
+            3,
+            "/pp user Steve permission set minecraft:command.game"
+        )
+        .await
+        .contains(&"minecraft:command.gamemode".to_string())
+    );
+    let mut alex = pumbo_testclient::Player::join(
+        addr,
+        module(777),
+        pumbo_testclient::JoinOptions::new("Alex"),
+    )
+    .await
+    .unwrap();
+    plugins.console("pp user Alex permission set pumbo.perms.user.info true");
+    let alex_uuid = pumbo_identity::offline_uuid("Alex");
+    for _ in 0..600 {
+        if plugins.permission(alex_uuid, "pumbo.perms.user.info", None) == Some(true) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let mut first = suggest(&mut alex, 4, "/pp ").await;
+    first.sort();
+    assert_eq!(first, ["help", "user"]);
+    alex.close().await;
+    p.close().await;
     proxy.stop();
 }

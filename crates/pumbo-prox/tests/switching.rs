@@ -35,6 +35,7 @@ use pumbo_protocol::packets::play::{
     DialogRef, Login, ShowDialog, TabList,
 };
 use pumbo_protocol::packets::status::Intention;
+use pumbo_protocol::packets::world::{Sound, SoundRef};
 use pumbo_protocol::packets::{self, Ctx, Packet};
 use pumbo_protocol::types::{Reader, WriteExt};
 use pumbo_protocol::{Direction, PacketKind, Phase, VersionModule};
@@ -68,6 +69,10 @@ struct Spec {
     commands: Option<Vec<&'static str>>,
     /// Sent in play after login.
     play_extras: bool,
+    /// A sound every 10 ms in play.
+    noisy: bool,
+    /// A sound right before its play `login`, as Pumpkin 0.2.0 can send one.
+    sound_before_login: bool,
 }
 
 /// Commands from the test to the backend's latest connection.
@@ -359,6 +364,9 @@ async fn serve(
         }
     }
     let p = Phase::Play;
+    if spec.sound_before_login {
+        send(&mut c, m, p, &sound(EARLY_SOUND));
+    }
     send(&mut c, m, p, &play_login());
     if let Some(names) = &spec.commands {
         send(&mut c, m, p, &tree(names));
@@ -405,6 +413,7 @@ async fn serve(
         l.ctl.push(tx);
     }
     let mut tick = tokio::time::interval(Duration::from_millis(500));
+    let mut noise = tokio::time::interval(Duration::from_millis(10));
     let mut ka = 1;
     loop {
         tokio::select! {
@@ -413,6 +422,10 @@ async fn serve(
                 while let Some((f, _)) = c.next_frame().map_err(|e| e.to_string())? {
                     record(m, p, f.id, &f.payload, log);
                 }
+            }
+            _ = noise.tick(), if spec.noisy => {
+                send(&mut c, m, p, &sound(NOISE));
+                c.flush().await.map_err(e)?;
             }
             cmd = rx.recv() => match cmd {
                 Some(Ctl::Kick(why)) => {
@@ -436,6 +449,23 @@ async fn serve(
                 c.flush().await.map_err(e)?;
             }
         }
+    }
+}
+
+/// Seeds that tell the test's sounds apart.
+const NOISE: i64 = 0x0001_d5ee;
+const EARLY_SOUND: i64 = 0x00ea_71e5;
+
+fn sound(seed: i64) -> Sound {
+    Sound {
+        sound: SoundRef::Id(1),
+        category: 0,
+        x: 0,
+        y: 64,
+        z: 0,
+        volume: 1.0,
+        pitch: 1.0,
+        seed,
     }
 }
 
@@ -1308,4 +1338,70 @@ async fn plugin_host_in_play() {
     assert!(q.disconnect.is_none());
     q.close().await;
     proxy.stop();
+}
+
+/// The client gets nothing of the play state while it has no level: none of
+/// the old server's packets after `start_configuration`, and none of the new
+/// server's before its play `login` (Velocity's TransitionSessionHandler
+/// drops those too). Pumpkin 0.2.0 can send a sound before the login, as it
+/// adds a joining player to the world first; vanilla 26.3 then disconnects
+/// with "Network Protocol Error" (`ClientboundSoundPacket`, no level).
+#[tokio::test(flavor = "multi_thread")]
+async fn no_play_packets_reach_a_client_without_a_level() {
+    let lobby = Backend::start(Spec {
+        noisy: true,
+        ..spec("lobby")
+    })
+    .await;
+    let next = Backend::start(Spec {
+        sound_before_login: true,
+        ..spec("next")
+    })
+    .await;
+    let (_proxy, addr) = start_proxy(&config(&[("lobby", &lobby), ("next", &next)], "")).await;
+    let mut p = join(addr, "Listener").await;
+    let _ = p.pump(Duration::from_millis(300), |_| false).await;
+    p.command("server next").await.unwrap();
+    next_login(&mut p).await;
+    let m = module(PROTOCOL);
+    let cb = Ctx::new(&*m, Direction::Clientbound);
+    let (noise, early) = (
+        packets::encode(&sound(NOISE), &cb).unwrap(),
+        packets::encode(&sound(EARLY_SOUND), &cb).unwrap(),
+    );
+    let got: Vec<_> =
+        p.c.log
+            .iter()
+            .filter(|r| r.direction == Direction::Clientbound)
+            .map(|r| (m.packet_kind(r.phase, r.direction, r.id), &r.payload[..]))
+            .collect();
+    let start = got
+        .iter()
+        .position(|(k, _)| *k == Some(PacketKind::StartConfiguration))
+        .expect("the switch");
+    let noise_at: Vec<usize> = (0..got.len()).filter(|i| got[*i].1 == noise).collect();
+    assert!(
+        noise_at.first().is_some_and(|i| *i < start),
+        "no noise before the switch"
+    );
+    assert!(
+        noise_at.iter().all(|i| *i < start),
+        "the old server's sound after start_configuration: {:?}",
+        &got[start..]
+    );
+    assert!(
+        got.iter().all(|(_, payload)| *payload != early),
+        "the new server's sound before its login reached the client"
+    );
+    // After its configuration the client's first play packet is the login.
+    let finish = got
+        .iter()
+        .rposition(|(k, _)| *k == Some(PacketKind::FinishConfiguration))
+        .unwrap();
+    assert_eq!(
+        got[finish + 1].0,
+        Some(PacketKind::Login),
+        "{:?}",
+        &got[finish..]
+    );
 }
