@@ -15,8 +15,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::future::BoxFuture;
@@ -53,7 +53,7 @@ pub struct BridgeConfig {
 impl Default for BridgeConfig {
     fn default() -> Self {
         BridgeConfig {
-            enabled: false,
+            enabled: true,
             listen: "127.0.0.1:25578".into(),
             key_file: "bridge.key".into(),
             command_timeout_ms: 5000,
@@ -146,8 +146,9 @@ struct Link {
     catalog: Mutex<Vec<String>>,
     server: Mutex<Option<String>>,
     perms_mode: Mutex<PermsMode>,
-    perms_sent: Mutex<HashMap<Uuid, BTreeMap<String, bool>>>,
-    closed: AtomicBool,
+    perms_sent: Mutex<HashMap<Uuid, SentPerms>>,
+    /// Why the proxy closes the session (set once).
+    closed: OnceLock<String>,
     close: Notify,
 }
 
@@ -156,8 +157,8 @@ impl Link {
         self.out.try_send(m).is_ok()
     }
 
-    fn close(&self) {
-        self.closed.store(true, Ordering::Relaxed);
+    fn close(&self, why: String) {
+        let _ = self.closed.set(why);
         self.close.notify_one();
     }
 
@@ -168,6 +169,14 @@ impl Link {
     fn mode(&self) -> PermsMode {
         self.perms_mode.lock().map(|m| *m).unwrap_or_default()
     }
+}
+
+/// The last `perm-set` sent for a player, and the newest info request.
+#[derive(Default)]
+struct SentPerms {
+    nodes: BTreeMap<String, bool>,
+    info: Option<String>,
+    asked: u64,
 }
 
 #[derive(Default)]
@@ -388,14 +397,14 @@ impl Bridge {
             server: Mutex::new(None),
             perms_mode: Mutex::new(PermsMode::Bridge),
             perms_sent: Mutex::new(HashMap::new()),
-            closed: AtomicBool::new(false),
+            closed: OnceLock::new(),
             close: Notify::new(),
         });
         debug!("bridge from {peer} authenticated, pairing");
         self.lock().unpaired.insert(link.id, (link.clone(), 0));
         self.wake.notify_one();
-        self.run(&link, sock, codec, buf, rx).await;
-        self.dropped(&link);
+        let why = self.run(&link, sock, codec, buf, rx).await;
+        self.dropped(&link, &why);
     }
 
     fn reject(&self, ip: IpAddr, why: String) {
@@ -453,6 +462,7 @@ impl Bridge {
         Ok(((bridge, pumpkin, mc), proto, codec, buf))
     }
 
+    /// The session until it ends; returns why it ended.
     async fn run(
         &self,
         link: &Arc<Link>,
@@ -460,12 +470,12 @@ impl Bridge {
         mut codec: Codec,
         mut buf: Vec<u8>,
         mut out: mpsc::Receiver<Msg>,
-    ) {
+    ) -> String {
         let (mut rd, mut wr) = sock.into_split();
         let mut tx = codec.clone();
         let mut last_rx = Instant::now();
         let mut ping = tokio::time::interval(PING_EVERY);
-        let why = 'session: loop {
+        'session: loop {
             loop {
                 match codec.decode(&buf) {
                     Ok(Some((m, n))) => {
@@ -477,49 +487,47 @@ impl Bridge {
                     Err(e) => break 'session e.to_string(),
                 }
             }
-            if link.closed.load(Ordering::Relaxed) {
-                break "closed by the proxy".into();
+            if let Some(why) = link.closed.get() {
+                break why.clone();
             }
             tokio::select! {
                 r = rd.read_buf(&mut buf) => match r {
-                    Ok(0) => break "closed by the bridge".into(),
+                    Ok(0) => break "the bridge closed the connection".into(),
                     Ok(_) => {}
-                    Err(e) => break e.to_string(),
+                    Err(e) => break format!("read: {e}"),
                 },
                 Some(m) = out.recv() => {
                     let mut bytes = match tx.encode(&m) {
                         Ok(b) => b,
-                        Err(e) => break e.to_string(),
+                        Err(e) => break format!("cannot send: {e}"),
                     };
                     while let Ok(m) = out.try_recv() {
                         match tx.encode(&m) {
                             Ok(b) => bytes.extend(b),
-                            Err(e) => break 'session e.to_string(),
+                            Err(e) => break 'session format!("cannot send: {e}"),
                         }
                     }
                     if let Err(e) = wr.write_all(&bytes).await {
-                        break e.to_string();
+                        break format!("write: {e}");
                     }
                 }
                 _ = ping.tick() => {
                     if last_rx.elapsed() > SILENCE {
-                        break "silent for 15 s".into();
+                        break "silent for 15 s (no answer to pings)".into();
                     }
                     if let Ok(mut p) = link.ping_at.lock() {
                         p.get_or_insert_with(Instant::now);
                     }
                     link.send(Msg::Ping);
                 }
-                () = link.close.notified() => break "closed by the proxy".into(),
+                () = link.close.notified() => break link.closed.get().cloned().unwrap_or_default(),
             }
-        };
-        let server = link.server().unwrap_or_else(|| "?".into());
-        debug!("bridge session {} ({server}) ended: {why}", link.peer);
+        }
     }
 
-    /// A session ended: its server loses the bridge, calls in flight end
-    /// with `disconnected`.
-    fn dropped(&self, link: &Arc<Link>) {
+    /// A session ended: one line says why, its server loses the bridge,
+    /// calls in flight end with `disconnected`.
+    fn dropped(&self, link: &Arc<Link>, why: &str) {
         let mut lost = None;
         {
             let mut st = self.lock();
@@ -538,8 +546,11 @@ impl Bridge {
                 let _ = tx.send(Err((err::DISCONNECTED.into(), None)));
             }
         }
+        match link.server() {
+            Some(server) => info!("bridge on {server} closed: {why}"),
+            None => warn!("bridge from {} closed before pairing: {why}", link.peer),
+        }
         if let Some(server) = lost {
-            info!("bridge on {server} disconnected");
             if let Some(p) = self.proxy().and_then(|p| p.plugins.get().cloned()) {
                 p.host.set_server_value(&server, "tps", None);
                 p.host.set_server_value(&server, "mspt", None);
@@ -648,8 +659,7 @@ impl Bridge {
             (server, old)
         };
         if let Some(old) = old {
-            info!("a newer bridge session replaces the old one on {server}");
-            old.close();
+            old.close(format!("replaced by a newer session from {}", link.peer));
         }
         if let Ok(mut s) = link.server.lock() {
             *s = Some(server.clone());
@@ -679,7 +689,7 @@ impl Bridge {
         };
         for p in proxy.players() {
             if p.server.as_deref() == Some(server.as_str()) {
-                self.send_perms(link, &server, p.id);
+                self.send_perms(link, &server, p.id, false);
             }
         }
         self.send_export(link, &server);
@@ -690,7 +700,8 @@ impl Bridge {
             return;
         };
         match &ev {
-            Event::Join { player, .. } => self.send_perms(link, &server, *player),
+            // Always: a set sent before the login may have expired in the bridge.
+            Event::Join { player, .. } => self.send_perms(link, &server, *player, true),
             Event::Leave { player, .. } => {
                 if let Ok(mut s) = link.perms_sent.lock() {
                     s.remove(player);
@@ -750,32 +761,78 @@ impl Bridge {
     }
 
     /// Sends the player's decisions for `server` unless they did not change
-    /// (spec §5.2). A local PumboPerms rules there: nothing to send.
-    fn send_perms(&self, link: &Link, server: &str, player: Uuid) {
+    /// (spec §5.2; `force`: also then), then asks the permission provider
+    /// for the player's info there and sends the set again when it changed.
+    /// A local PumboPerms rules there: nothing to send.
+    fn send_perms(&self, link: &Arc<Link>, server: &str, player: Uuid, force: bool) {
         if link.mode() == PermsMode::Local {
             return;
         }
         let Some(plugins) = self.proxy().and_then(|p| p.plugins.get().cloned()) else {
             return;
         };
-        let catalog = link.catalog.lock().map(|c| c.clone()).unwrap_or_default();
-        let Some(nodes) = plugins.backend_permissions(player, server, &catalog) else {
+        let Some(asked) = self.put_perms(link, &plugins, server, player, None, force) else {
             return;
         };
-        if let Ok(mut sent) = link.perms_sent.lock() {
-            if sent.get(&player) == Some(&nodes) {
+        let (me, link, server) = (self.me.clone(), Arc::clone(link), server.to_string());
+        tokio::spawn(async move {
+            let Ok(info) = plugins.permissions_info(player, &server).await else {
                 return;
+            };
+            if let Some(me) = me.upgrade() {
+                me.put_perms(&link, &plugins, &server, player, Some((asked, info)), false);
             }
-            sent.insert(player, nodes.clone());
-        }
-        let set = api::PermSet {
-            player,
-            nodes,
-            extra: BTreeMap::new(),
+        });
+    }
+
+    /// Sends the current set with `info` (`None`: the last one sent) when it
+    /// is new, differs from the last one or `force`. Without `info` returns
+    /// the number of the info request to make; an answer to an older
+    /// request is dropped.
+    fn put_perms(
+        &self,
+        link: &Link,
+        plugins: &crate::plugins::Plugins,
+        server: &str,
+        player: Uuid,
+        info: Option<(u64, Option<String>)>,
+        force: bool,
+    ) -> Option<u64> {
+        let catalog = link.catalog.lock().map(|c| c.clone()).unwrap_or_default();
+        let nodes = plugins.backend_permissions(player, server, &catalog)?;
+        let (set, asked) = {
+            let mut sent = link.perms_sent.lock().ok()?;
+            let new = !sent.contains_key(&player);
+            let answer = info.is_some();
+            // An answer after the player left must not bring the entry back.
+            let last = if answer {
+                sent.get_mut(&player)?
+            } else {
+                sent.entry(player).or_default()
+            };
+            let info = match info {
+                Some((asked, _)) if asked != last.asked => return None,
+                Some((_, info)) => info,
+                None => last.info.clone(),
+            };
+            let send = force || new || last.nodes != nodes || last.info != info;
+            last.nodes = nodes.clone();
+            last.info = info.clone();
+            if !answer {
+                last.asked += 1;
+            }
+            let set = send.then_some(api::PermSet {
+                player,
+                nodes,
+                extra: BTreeMap::new(),
+                info,
+            });
+            (set, (!answer).then_some(last.asked))
         };
-        if let Ok(v) = wire::value(&set) {
+        if let Some(v) = set.and_then(|s| wire::value(&s).ok()) {
             self.notify(link, method::PERM_SET, v);
         }
+        asked
     }
 
     /// The table for the server (from the permission provider when it runs,
@@ -801,17 +858,34 @@ impl Bridge {
     }
 
     /// The session asks: the player is about to log in to `server` (before
-    /// forwarding), so its permission set goes first.
+    /// forwarding), so its permission set goes first, also when the bridge
+    /// had it before (a login that failed, or a set that expired there).
     pub fn connecting(&self, player: Uuid, server: &str) {
         if let Some(link) = self.link(server) {
-            self.send_perms(&link, server, player);
+            self.send_perms(&link, server, player, true);
+        }
+    }
+
+    /// The permission export changed (`permissions.yml` read again, the
+    /// permission provider started or stopped): every paired bridge gets it.
+    pub fn export_changed(&self) {
+        let links: Vec<(Arc<Link>, String)> = self
+            .lock()
+            .servers
+            .iter()
+            .filter_map(|(name, slot)| Some((slot.link.clone()?, name.clone())))
+            .collect();
+        for (link, server) in links {
+            self.send_export(&link, &server);
         }
     }
 
     /// The player's permissions or context changed.
     pub fn perms_changed(&self, player: Uuid, server: Option<&str>) {
-        if let Some(server) = server {
-            self.connecting(player, server);
+        if let Some(server) = server
+            && let Some(link) = self.link(server)
+        {
+            self.send_perms(&link, server, player, false);
         }
     }
 
@@ -862,12 +936,8 @@ impl Bridge {
                 (targets, give_up)
             };
             for l in give_up {
-                warn!(
-                    "bridge from {} does not match any server in servers:, closing it",
-                    l.peer
-                );
                 self.reject(l.peer.ip(), "matches no server in servers:".into());
-                l.close();
+                l.close("it matches no server in servers:".into());
             }
             for (address, nonce) in targets {
                 tokio::spawn(async move {

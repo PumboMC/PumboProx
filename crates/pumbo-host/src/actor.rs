@@ -517,14 +517,22 @@ async fn run_instance(
         Ok(s) => s,
         Err(e) => return InitFailed(format!("{e:#}")),
     };
-    let instance =
-        match Plugin::instantiate_async(&mut store, component, &host.runtime.linker).await {
-            Ok(i) => i,
-            Err(e) => return InitFailed(format!("instantiate: {e:#}")),
-        };
+    let instance = match host
+        .runtime
+        .linker
+        .instantiate_async(&mut store, component)
+        .await
+        .and_then(|i| Ok((Plugin::new(&mut store, &i)?, i)))
+    {
+        Ok((plugin, i)) => {
+            store.data_mut().suggest = suggest_export(&mut store, component, &i);
+            plugin
+        }
+        Err(e) => return InitFailed(format!("instantiate: {e:#}")),
+    };
     let init_deadline = Duration::from_millis(host.cfg.plugins.init_timeout_ms);
-    // `init` registers the commands of this instance again.
-    host.commands.clear_plugin(&slot.id);
+    // `init` registers the commands of this instance again over the old ones.
+    let old_commands = host.commands.of_plugin(&slot.id);
     let result = store
         .run_concurrent(async |acc| -> Outcome {
             let g = instance.pumbo_prox_events();
@@ -541,6 +549,7 @@ async fn run_instance(
             if let Err(msg) = host.plugin_ready(slot, desc) {
                 return InitFailed(msg);
             }
+            host.commands.retire(&old_commands);
             slot.set_status(Status::Running);
             if let Some(r) = reply.take() {
                 let _ = r.send(Ok(()));
@@ -553,6 +562,21 @@ async fn run_instance(
         Ok(o) => o,
         Err(e) => Trapped(format!("{e:#}")),
     }
+}
+
+/// The optional `suggest` export; a plugin built without it has none.
+fn suggest_export(
+    store: &mut wasmtime::Store<PluginState>,
+    component: &Component,
+    instance: &wasmtime::component::Instance,
+) -> Option<crate::runtime::SuggestFn> {
+    let iface = component.get_export_index(None, "pumbo:prox/suggest@0.1.0")?;
+    let func = component.get_export_index(Some(&iface), "suggest")?;
+    let id = store.data().slot.id.clone();
+    instance
+        .get_typed_func(store, func)
+        .inspect_err(|e| tracing::warn!(plugin = %id, "suggest export ignored: {e:#}"))
+        .ok()
 }
 
 async fn serve(acc: &Accessor<PluginState>, g: &Guest, rx: &mut Receivers) -> Outcome {

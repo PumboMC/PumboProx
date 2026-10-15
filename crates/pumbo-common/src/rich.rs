@@ -385,6 +385,41 @@ fn segment_json(s: &Segment, with_actions: bool) -> serde_json::Value {
     serde_json::Value::Object(m)
 }
 
+/// Text with `&` codes ([`crate::text`]) as MiniMessage for a template: each
+/// styled run closes its own tags, so `&r` and the end of the text go back to
+/// the style around it.
+pub fn mini(text: &str) -> String {
+    let mut out = String::new();
+    for span in text::parse(text) {
+        let st = span.style;
+        let mut tags: Vec<String> = st.color.map(|c| format!("color:#{:06x}", c.rgb())).into_iter().collect();
+        for (on, tag) in [
+            (st.bold, "bold"),
+            (st.italic, "italic"),
+            (st.underlined, "underlined"),
+            (st.strikethrough, "strikethrough"),
+            (st.obfuscated, "obfuscated"),
+        ] {
+            if on {
+                tags.push(tag.into());
+            }
+        }
+        for t in &tags {
+            out.push_str(&format!("<{t}>"));
+        }
+        for c in span.text.chars() {
+            if c == '<' || c == '\\' {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+        for t in tags.iter().rev() {
+            out.push_str(&format!("</{}>", t.split(':').next().unwrap_or_default()));
+        }
+    }
+    out
+}
+
 impl From<Line> for Text {
     fn from(line: Line) -> Self {
         Self { lines: vec![line] }
@@ -420,6 +455,7 @@ pub fn text_width(text: &str, bold: bool) -> u32 {
 
 /// Spaces `px` pixels wide: normal spaces are 4 px, bold ones 5 px, so every
 /// width from 12 px up is exact. Smaller widths are rounded down.
+#[expect(clippy::integer_division, reason = "whole spaces of whole pixels")]
 pub fn pad(px: u32) -> Line {
     // (normal, bold) with 4 * normal + 5 * bold == width; from 12 px up the
     // first try succeeds.

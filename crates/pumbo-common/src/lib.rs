@@ -20,7 +20,47 @@
 //! - [`clock`]: injectable wall clock
 //! - [`gate`]: the hand-off contract of gate plugins (PumboFilter, PumboAuth)
 //! - [`bans`]: what other plugins may ask PumboBans (Pumpkin `ipc`, PumboProx service)
+//! - [`panic`]: panic messages through the host logger
 //! - [`random`], [`map`], [`util`]: randomness, map images, small helpers
+
+// Panics trap the host and stdout is lost; these stay errors outside tests.
+#![deny(
+    clippy::string_slice,
+    clippy::print_stdout,
+    clippy::print_stderr,
+    clippy::await_holding_lock,
+    clippy::await_holding_refcell_ref,
+    clippy::integer_division,
+    clippy::modulo_arithmetic,
+    clippy::unchecked_time_subtraction,
+    clippy::get_unwrap,
+    clippy::exit,
+    clippy::large_stack_arrays,
+    clippy::large_stack_frames,
+    clippy::unwrap_in_result,
+    clippy::panic_in_result_fn,
+    clippy::significant_drop_in_scrutinee
+)]
+#![cfg_attr(
+    test,
+    allow(
+        clippy::string_slice,
+        clippy::print_stdout,
+        clippy::print_stderr,
+        clippy::await_holding_lock,
+        clippy::await_holding_refcell_ref,
+        clippy::integer_division,
+        clippy::modulo_arithmetic,
+        clippy::unchecked_time_subtraction,
+        clippy::get_unwrap,
+        clippy::exit,
+        clippy::large_stack_arrays,
+        clippy::large_stack_frames,
+        clippy::unwrap_in_result,
+        clippy::panic_in_result_fn,
+        clippy::significant_drop_in_scrutinee
+    )
+)]
 
 pub mod bans;
 pub mod clock;
@@ -31,6 +71,7 @@ pub mod help;
 pub mod id;
 pub mod lang;
 pub mod map;
+pub mod panic;
 pub mod pumpkin;
 pub mod random;
 pub mod rich;

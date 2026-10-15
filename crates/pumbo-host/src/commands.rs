@@ -3,11 +3,13 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use pumbo_text::Component;
 
 use crate::HostInner;
 use crate::actor::{PluginSlot, Status};
+use crate::manifest::EventKind;
 use crate::wit::commands::{CommandSpec, PermissionState};
 use crate::wit::events::CommandEvent;
 use crate::wit::types::PlayerId;
@@ -130,14 +132,10 @@ impl Commands {
             let mut changed = false;
             for n in names {
                 let key = (short.clone(), n);
-                if inner
+                changed |= inner
                     .umbrella
-                    .get(&key)
-                    .is_none_or(|e| e.spec != entry.spec)
-                {
-                    inner.umbrella.insert(key, Arc::clone(&entry));
-                    changed = true;
-                }
+                    .insert(key, Arc::clone(&entry))
+                    .is_none_or(|e| e.spec != entry.spec);
             }
             return Ok(changed);
         }
@@ -171,19 +169,37 @@ impl Commands {
         });
         let mut changed = false;
         for n in names {
-            if inner.roots.get(&n).is_none_or(|e| e.spec != entry.spec) {
-                inner.roots.insert(n, Arc::clone(&entry));
-                changed = true;
-            }
+            changed |= inner
+                .roots
+                .insert(n, Arc::clone(&entry))
+                .is_none_or(|e| e.spec != entry.spec);
         }
         Ok(changed)
     }
 
-    /// Drops a plugin's registrations before its new instance runs `init`.
-    pub fn clear_plugin(&self, id: &str) {
+    /// A plugin's registrations before its new instance runs `init`. They
+    /// stay (so its commands never reach a backend while it restarts) until
+    /// [`Commands::retire`].
+    pub fn of_plugin(&self, id: &str) -> Vec<Arc<Entry>> {
+        let Ok(inner) = self.inner.read() else {
+            return Vec::new();
+        };
+        inner
+            .roots
+            .values()
+            .chain(inner.umbrella.values())
+            .filter(|e| e.plugin == id)
+            .cloned()
+            .collect()
+    }
+
+    /// After a successful `init`: drops the old registrations the new
+    /// instance did not make again.
+    pub fn retire(&self, old: &[Arc<Entry>]) {
+        let stale = |e: &Arc<Entry>| old.iter().any(|o| Arc::ptr_eq(o, e));
         if let Ok(mut inner) = self.inner.write() {
-            inner.roots.retain(|_, e| e.plugin != id);
-            inner.umbrella.retain(|_, e| e.plugin != id);
+            inner.roots.retain(|_, e| !stale(e));
+            inner.umbrella.retain(|_, e| !stale(e));
         }
     }
 
@@ -244,7 +260,7 @@ impl Commands {
                     aliases: e.spec.aliases.clone(),
                     usage: e.spec.usage.clone(),
                     plugin: e.plugin.clone(),
-                    subcommands: Vec::new(),
+                    subcommands: main_subcommands(host, &inner, slot, e, id),
                 });
             }
         }
@@ -291,6 +307,91 @@ impl Commands {
     }
 }
 
+/// The umbrella commands a player may use after a plugin's main command
+/// (`/pp`): a root that is not itself one of them, as the `/ban` shortcut is.
+fn main_subcommands(
+    host: &HostInner,
+    inner: &Inner,
+    slot: &PluginSlot,
+    root: &Entry,
+    id: PlayerId,
+) -> Vec<String> {
+    let Some(short) = &slot.manifest.short_name else {
+        return Vec::new();
+    };
+    let twin = inner
+        .umbrella
+        .contains_key(&(short.clone(), root.spec.name.clone()));
+    if twin || root.spec.sensitive {
+        return Vec::new();
+    }
+    inner
+        .umbrella
+        .iter()
+        .filter(|((s, n), e)| s == short && *n == e.spec.name)
+        .filter(|(_, e)| allowed(host, slot, e, CommandSender::Player(id)).is_ok())
+        .map(|((_, n), _)| n.clone())
+        .collect()
+}
+
+/// At most this many completions of a plugin reach the client, each at most
+/// [`MAX_SUGGESTION_LEN`] bytes.
+const MAX_SUGGESTIONS: usize = 1000;
+const MAX_SUGGESTION_LEN: usize = 256;
+
+/// Tab completion of a plugin command's arguments by the plugin's `suggest`
+/// export, with the deadline of commands. `None`: not a plugin command past
+/// its name, not for this player, or no answer (no export, `none`, failure).
+pub(crate) async fn suggest(
+    host: Arc<HostInner>,
+    id: PlayerId,
+    line: String,
+) -> Option<Vec<String>> {
+    let line = line.trim_start().trim_start_matches('/');
+    let (root, rest) = line.split_once(' ')?;
+    let root = root.to_ascii_lowercase();
+    let (entry, args) = match crate::admin::umbrella_manifest(&host, &root) {
+        Some(m) => {
+            let (sub, args) = rest.trim_start().split_once(' ')?;
+            let short = m.short_name.as_deref()?;
+            (
+                host.commands.umbrella(short, &sub.to_ascii_lowercase())?,
+                args,
+            )
+        }
+        None if root == "pumbo" => return None,
+        None => (host.commands.root(&root)?, rest),
+    };
+    let slot = host.plugins.get(&entry.plugin)?;
+    if entry.spec.sensitive || allowed(&host, slot, &entry, CommandSender::Player(id)).is_err() {
+        return None;
+    }
+    let (name, args) = (entry.spec.name.clone(), args.to_string());
+    let answer = slot
+        .call(
+            Duration::ZERO,
+            host.cfg.plugins.timeout(EventKind::Command),
+            move |acc, _| {
+                Box::pin(async move {
+                    let Some(f) = acc.with(|mut a| a.get().suggest) else {
+                        return Ok(None);
+                    };
+                    f.call_concurrent(acc, (id, name, args)).await.map(|(r,)| r)
+                })
+            },
+        )
+        .await
+        .ok()
+        .flatten()?;
+    Some(
+        answer
+            .into_iter()
+            .filter(|s| !s.is_empty() && s.len() <= MAX_SUGGESTION_LEN)
+            .take(MAX_SUGGESTIONS)
+            .collect(),
+    )
+}
+
 /// Why a command is not available to a sender.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Denied {
@@ -330,9 +431,42 @@ pub(crate) fn allowed(
 
 pub(crate) fn split(line: &str) -> (String, Vec<String>) {
     let line = line.trim().trim_start_matches('/');
-    let mut words = line.split_whitespace();
+    let mut words = words(line).into_iter();
     let root = words.next().unwrap_or_default().to_ascii_lowercase();
-    (root, words.map(str::to_string).collect())
+    (root, words.collect())
+}
+
+/// Words at whitespace outside double quotes. A quoted part stays in one
+/// word with its quotes and spaces, so a plugin that joins the words with
+/// spaces gets the line back. A quote without a closing one is a plain
+/// character.
+fn words(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut word = String::new();
+    let mut quoted = false;
+    let mut chars = line.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '\\' if quoted && chars.peek().map(|&(_, n)| n) == Some('"') => {
+                word.push(c);
+                word.extend(chars.next().map(|(_, n)| n));
+            }
+            '"' if quoted || line[i + 1..].replace("\\\"", "").contains('"') => {
+                quoted = !quoted;
+                word.push(c);
+            }
+            c if c.is_whitespace() && !quoted => {
+                if !word.is_empty() {
+                    out.push(std::mem::take(&mut word));
+                }
+            }
+            c => word.push(c),
+        }
+    }
+    if !word.is_empty() {
+        out.push(word);
+    }
+    out
 }
 
 pub(crate) fn sender_name(host: &HostInner, sender: CommandSender) -> String {
@@ -386,7 +520,16 @@ pub(crate) fn dispatch(host: &Arc<HostInner>, sender: CommandSender, line: &str)
         &messages.command_unavailable
     };
     if slot.status() != Status::Running {
-        return CommandOutcome::Refused(host.message(unavailable));
+        let text = match slot.status() {
+            Status::Starting
+            | Status::Restarting(_)
+            | Status::Reloading
+            | Status::InitFailed(_) => messages
+                .plugin_restarting
+                .replace("{plugin}", &pumbo_text::template::escape_mini(&slot.id)),
+            _ => unavailable.clone(),
+        };
+        return CommandOutcome::Refused(host.message(&text));
     }
     let event = CommandEvent {
         player: match sender {

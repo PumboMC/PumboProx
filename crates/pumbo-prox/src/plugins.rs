@@ -88,6 +88,10 @@ impl ProxyBridge for SessionBridge {
             return;
         };
         let cmd = match cmd {
+            PlayerCommand::CommandsChanged => {
+                proxy.commands_changed(uuid);
+                return;
+            }
             PlayerCommand::Message(c) => SessionCmd::Message(Box::new(c)),
             PlayerCommand::ActionBar(c) => SessionCmd::ActionBar(Box::new(c)),
             PlayerCommand::Title {
@@ -139,7 +143,6 @@ impl ProxyBridge for SessionBridge {
                 to_backend,
             },
             PlayerCommand::Bossbar(b) => bossbar(b),
-            PlayerCommand::CommandsChanged => SessionCmd::CommandsChanged,
             PlayerCommand::Virtual(v) => SessionCmd::Virtual(Box::new(v)),
         };
         proxy.send_to(uuid, cmd);
@@ -168,6 +171,17 @@ impl ProxyBridge for SessionBridge {
                 Err(ConnectError::Cancelled)
             }
         })
+    }
+
+    fn permissions_export_changed(&self) {
+        if let Some(b) = self
+            .proxy
+            .get()
+            .and_then(Weak::upgrade)
+            .and_then(|p| p.bridge.get().cloned())
+        {
+            b.export_changed();
+        }
     }
 
     fn reconnect(&self, player: PlayerId) -> BoxFuture<'static, Result<(), ConnectError>> {
@@ -472,8 +486,13 @@ impl Plugins {
     }
 
     /// `/prox plugins …` and `/prox debug …` (the host's proxy admin
-    /// commands); `None`: the console.
-    pub fn admin(&self, uuid: Option<Uuid>, args: &[String]) -> Vec<Component> {
+    /// commands); `None`: the console. `can` answers for `pumbo.proxy.*` nodes.
+    pub fn admin(
+        &self,
+        uuid: Option<Uuid>,
+        args: &[String],
+        can: &dyn Fn(&str) -> bool,
+    ) -> Vec<Component> {
         let sender = match uuid {
             Some(u) => match self.id(u) {
                 Some(id) => CommandSender::Player(id),
@@ -481,7 +500,7 @@ impl Plugins {
             },
             None => CommandSender::Console,
         };
-        outcome(self.host.proxy_admin(sender, args)).unwrap_or_default()
+        outcome(self.host.proxy_admin_with(sender, args, can)).unwrap_or_default()
     }
 
     /// A console line (`/pumbo …` and plugin commands).
@@ -587,6 +606,19 @@ impl Plugins {
         )
     }
 
+    /// What the permission provider shows for an online player on `server`
+    /// (PumboBridge `perm-set` info); `Err`: no answer, keep the last one.
+    pub async fn permissions_info(
+        &self,
+        uuid: Uuid,
+        server: &str,
+    ) -> Result<Option<String>, String> {
+        let Some(id) = self.id(uuid) else {
+            return Ok(None);
+        };
+        self.host.permissions_info(id, server).await
+    }
+
     pub fn set_player_value(&self, uuid: Uuid, key: &str, value: String) {
         if let Some(id) = self.id(uuid) {
             self.host.set_player_value(id, key, Some(value));
@@ -595,6 +627,17 @@ impl Plugins {
 
     pub fn permission(&self, uuid: Uuid, node: &str, server: Option<&str>) -> Option<bool> {
         self.host.permission_decision(self.id(uuid)?, node, server)
+    }
+
+    /// Tab completion of a plugin command past its name by the plugin
+    /// (`None`: the proxy completes it).
+    pub fn suggest(
+        &self,
+        uuid: Uuid,
+        line: &str,
+    ) -> impl std::future::Future<Output = Option<Vec<String>>> + Send + 'static {
+        let call = self.id(uuid).map(|id| self.host.suggest_command(id, line));
+        async move { call?.await }
     }
 
     /// Plugin commands a player may use now (for the command tree): each

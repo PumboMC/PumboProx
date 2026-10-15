@@ -28,6 +28,7 @@ use pumbo_protocol::packets::login::{
 };
 use pumbo_protocol::packets::play::{CommandSuggestion, Login};
 use pumbo_protocol::packets::status::Intention;
+use pumbo_protocol::packets::world::ClientTickEnd;
 use pumbo_protocol::packets::{self, Ctx, Packet};
 use pumbo_protocol::types::{Reader, WriteExt};
 use pumbo_protocol::{Direction, PacketKind, Phase, VersionModule};
@@ -57,6 +58,7 @@ struct BackendLog {
     keep_alive_answers: Vec<i64>,
     unknown_keep_alives: Vec<i64>,
     suggestions: usize,
+    tick_ends: usize,
     in_play: usize,
 }
 
@@ -250,6 +252,7 @@ async fn serve_backend(
                             if sent.contains(&k.id) { l.keep_alive_answers.push(k.id) } else { l.unknown_keep_alives.push(k.id) }
                         }
                         Some(PacketKind::CommandSuggestion) => log.lock().unwrap().suggestions += 1,
+                        Some(PacketKind::ClientTickEnd) => log.lock().unwrap().tick_ends += 1,
                         _ => {}
                     }
                 }
@@ -1037,4 +1040,68 @@ async fn pumpkin_trail_particle_is_repaired() {
             2
         );
     }
+}
+
+/// A client whose downlink is slower than its server (a mobile link, a long
+/// chunk load) is still read while the proxy waits to write to it: its
+/// packets go on at their own pace, not in one burst once it reads again,
+/// which the proxy's and Pumpkin's limit of 500 a second would kick.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_that_reads_slowly_is_still_read() {
+    // 20 MiB of chunks after the join, more than the socket buffers hold.
+    let chunk = module(777)
+        .packet_id(
+            Phase::Play,
+            Direction::Clientbound,
+            PacketKind::LevelChunkWithLight,
+        )
+        .unwrap();
+    let mut noise = vec![0u8; 32 * 1024];
+    aws_lc_rs::rand::fill(&mut noise).unwrap();
+    let (backend, log) = fake_backend(BackendOpts {
+        play: vec![(chunk, noise); 640],
+        ..BackendOpts::default()
+    })
+    .await;
+    let (proxy, addr) = start_proxy(&config(backend, "")).await;
+    let mut c = login_to_play(addr, "SlowReader").await;
+    // 4 s without reading, sending 200 packets a second (the limit is 500).
+    for _ in 0..40 {
+        for _ in 0..20 {
+            c.send(&ClientTickEnd).await.unwrap();
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let mut chunks = 0;
+    while chunks < 640 {
+        match c.recv_within(Duration::from_secs(10)).await {
+            Ok((Some(PacketKind::LevelChunkWithLight), _)) => chunks += 1,
+            Ok((Some(PacketKind::Disconnect), f)) => {
+                let d: pumbo_protocol::packets::common::Disconnect = c.decode(&f).unwrap();
+                let why = pumbo_text::Component::from_nbt(&d.reason).unwrap();
+                panic!("kicked after {chunks} chunks: {}", why.plain_text());
+            }
+            Ok(_) => {}
+            Err(e) => panic!("after {chunks} chunks: {e}"),
+        }
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let got = log.lock().unwrap().tick_ends;
+        if got == 800 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{got} of 800 reached the backend"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        proxy
+            .metrics
+            .kicked_packet_rate
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
 }

@@ -91,6 +91,17 @@ fn e4_sections_are_checked() {
 }
 
 #[test]
+fn server_names_differing_by_case_are_rejected() {
+    let two = SAMPLE.replace(
+        "  lobby: { address: \"127.0.0.1:25570\", protocol: 777 }",
+        "  lobby: { address: \"127.0.0.1:25570\", protocol: 777 }\n  Lobby: { address: \"127.0.0.1:25571\", protocol: 777 }",
+    );
+    assert_ne!(two, SAMPLE);
+    let err = Config::parse(&two).unwrap_err().to_string();
+    assert!(err.contains("Lobby") && err.contains("lobby"), "{err}");
+}
+
+#[test]
 fn yaml_errors_name_the_line() {
     // `try` indented less than `selector`: not valid YAML.
     let bad = SAMPLE.replace("  try: [lobby]", " try: [lobby]");
@@ -133,4 +144,14 @@ fn the_default_file_is_valid() {
         pumbo_prox::config::DEFAULT_FILE
     );
     assert_eq!(Config::parse(&ahead).unwrap().try_order(), ["lobby"]);
+}
+
+/// The config of a fresh install turns PumboBridge on, on loopback, so the
+/// servers the proxy creates get ranks from it without any change.
+#[test]
+fn fresh_network_has_bridge_enabled() {
+    let cfg = Config::parse(pumbo_prox::config::DEFAULT_FILE).unwrap();
+    assert!(cfg.bridge.enabled);
+    assert_eq!(cfg.bridge.listen, "127.0.0.1:25578");
+    assert_eq!(cfg.bridge.key_file, "bridge.key");
 }

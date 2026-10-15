@@ -405,6 +405,22 @@ impl Source for Pumpkin {
     }
 }
 
+// ------------------------------------------------------------------ PumboBridge
+
+/// PumboBridge releases (its Pumpkin plugin). Only this repository.
+pub const PUMBOBRIDGE_API: &str = "https://api.github.com/repos/PumboMC/PumboBridge";
+
+/// The file of the PumboBridge release `tag` for Minecraft `mc` (asset names
+/// of `tools/release-plugins.sh`: `PumboBridge-Pumpkin-<mc>-<version>.wasm`).
+fn pumbobridge_asset(files: &[GhAsset], mc: &str) -> Option<String> {
+    let prefix = format!("PumboBridge-Pumpkin-{mc}-");
+    files
+        .iter()
+        .map(|a| &a.name)
+        .find(|n| n.starts_with(&prefix) && n.ends_with(".wasm") && valid_tag(n))
+        .cloned()
+}
+
 // ------------------------------------------------------------------ store
 
 /// The error of a cancelled download.
@@ -602,6 +618,60 @@ impl VersionStore {
                     .map(|(_, c)| c.send(true).is_ok())
             })
             .unwrap_or(false)
+    }
+
+    /// The newest PumboBridge release for Minecraft `mc` from `api`, kept in
+    /// `versions/pumbobridge/<tag>/` after its SHA256 matched `SHA256SUMS`.
+    pub async fn pumbobridge(&self, api: &str, mc: &str) -> Result<PathBuf, String> {
+        let api = api.trim_end_matches('/');
+        let body = self.http.get(&format!("{api}/releases/latest")).await?;
+        let release: GhRelease =
+            serde_json::from_slice(&body).map_err(|e| format!("PumboBridge release: {e}"))?;
+        let tag = &release.tag_name;
+        if !valid_tag(tag) {
+            return Err(format!("PumboBridge release tag {tag:?} is not usable"));
+        }
+        let name = pumbobridge_asset(&release.assets, mc)
+            .ok_or_else(|| format!("PumboBridge {tag} has no file for Minecraft {mc}"))?;
+        let url = |n: &str| {
+            release
+                .assets
+                .iter()
+                .find(|a| a.name == n)
+                .map(|a| a.browser_download_url.clone())
+        };
+        let dir = self.dir.join("pumbobridge").join(tag);
+        let file = dir.join(&name);
+        if file.is_file() {
+            return Ok(file);
+        }
+        let sums = url("SHA256SUMS")
+            .ok_or_else(|| format!("PumboBridge {tag} publishes no SHA256SUMS, refused"))?;
+        let sums = String::from_utf8_lossy(&self.http.get(&sums).await?).to_string();
+        let want = checksum_of(&sums, &name)
+            .ok_or_else(|| format!("SHA256SUMS of PumboBridge {tag} lists no {name}"))?;
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let part = dir.join(format!("{name}.part"));
+        let got = self
+            .http
+            .download(&url(&name).unwrap_or_default(), &part, &|_| {})
+            .await;
+        match got {
+            Ok(got) if got == want => {
+                std::fs::rename(&part, &file).map_err(|e| format!("{}: {e}", file.display()))?;
+                Ok(file)
+            }
+            Ok(got) => {
+                discard(&part);
+                Err(format!(
+                    "SHA256 mismatch for {name}: expected {want}, got {got}"
+                ))
+            }
+            Err(e) => {
+                discard(&part);
+                Err(e)
+            }
+        }
     }
 
     async fn fetch(

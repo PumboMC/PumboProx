@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use crate::HostInner;
 use crate::actor::{Control, PluginSlot, Status};
 use crate::commands::{self, CommandOutcome, CommandSender};
+use crate::manifest::Manifest;
 use crate::schema;
 use crate::wit::admin::{Actor, MetricKind, ParamKind, PluginDescription};
 use crate::wit::events::CommandEvent;
@@ -465,6 +466,16 @@ pub fn help_page(
     lines.iter().map(|l| pumbo_text::parse_mini(l)).collect()
 }
 
+/// The plugin of `/pumbo<short-name>` or of its `short-alias` (`/pf`).
+pub(crate) fn umbrella_manifest<'a>(host: &'a HostInner, root: &str) -> Option<&'a Manifest> {
+    host.plugins.values().map(|p| &p.manifest).find(|m| {
+        m.short_alias.as_deref() == Some(root)
+            || root
+                .strip_prefix("pumbo")
+                .is_some_and(|s| m.short_name.as_deref() == Some(s))
+    })
+}
+
 /// `/pumbo …` and `/pumbo<short-name> …` (plan §6.6.1).
 pub(crate) fn umbrella(
     host: &Arc<HostInner>,
@@ -478,18 +489,7 @@ pub(crate) fn umbrella(
     let (short, rest): (Option<String>, &[String]) = if root == "pumbo" {
         (None, &[])
     } else {
-        // `/pumbo<short-name>` or the plugin's `short-alias` (`/pf`).
-        let m = &host
-            .plugins
-            .values()
-            .find(|p| {
-                let m = &p.manifest;
-                m.short_alias.as_deref() == Some(root)
-                    || root
-                        .strip_prefix("pumbo")
-                        .is_some_and(|s| m.short_name.as_deref() == Some(s))
-            })?
-            .manifest;
+        let m = umbrella_manifest(host, root)?;
         (m.short_name.clone(), args)
     };
     let can = |node: &str| match sender {
@@ -652,9 +652,11 @@ pub(crate) fn umbrella(
         return Some(admin_action(host, &slot, sender, &sub, named));
     }
     if let Some(entry) = host.commands.umbrella(&short, &sub) {
-        if let Err(commands::Denied::NoPermission) = commands::allowed(host, &slot, &entry, sender)
-        {
-            return Some(denied());
+        match commands::allowed(host, &slot, &entry, sender) {
+            Ok(()) => {}
+            Err(commands::Denied::NoPermission) => return Some(denied()),
+            // Like a command that does not exist for this sender.
+            Err(commands::Denied::Hidden) => return Some(unknown_subcommand(host, &sub)),
         }
         let event = CommandEvent {
             player: match sender {
@@ -676,10 +678,14 @@ pub(crate) fn umbrella(
             ),
         });
     }
-    Some(reply(
+    Some(unknown_subcommand(host, &sub))
+}
+
+fn unknown_subcommand(host: &HostInner, sub: &str) -> CommandOutcome {
+    reply(
         host,
-        vec![format!("<red>Unknown subcommand {}", escape_mini(&sub))],
-    ))
+        vec![format!("<red>Unknown subcommand {}", escape_mini(sub))],
+    )
 }
 
 /// Runs an admin action; the answer goes to the sender when it arrives.
@@ -798,7 +804,7 @@ pub(crate) fn proxy_admin(
     proxy_command(host, sender, args, &can)
 }
 
-fn proxy_command(
+pub(crate) fn proxy_command(
     host: &Arc<HostInner>,
     sender: CommandSender,
     rest: &[String],
