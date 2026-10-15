@@ -486,8 +486,13 @@ impl Plugins {
     }
 
     /// `/prox plugins …` and `/prox debug …` (the host's proxy admin
-    /// commands); `None`: the console.
-    pub fn admin(&self, uuid: Option<Uuid>, args: &[String]) -> Vec<Component> {
+    /// commands); `None`: the console. `can` answers for `pumbo.proxy.*` nodes.
+    pub fn admin(
+        &self,
+        uuid: Option<Uuid>,
+        args: &[String],
+        can: &dyn Fn(&str) -> bool,
+    ) -> Vec<Component> {
         let sender = match uuid {
             Some(u) => match self.id(u) {
                 Some(id) => CommandSender::Player(id),
@@ -495,7 +500,7 @@ impl Plugins {
             },
             None => CommandSender::Console,
         };
-        outcome(self.host.proxy_admin(sender, args)).unwrap_or_default()
+        outcome(self.host.proxy_admin_with(sender, args, can)).unwrap_or_default()
     }
 
     /// A console line (`/pumbo …` and plugin commands).
@@ -622,6 +627,17 @@ impl Plugins {
 
     pub fn permission(&self, uuid: Uuid, node: &str, server: Option<&str>) -> Option<bool> {
         self.host.permission_decision(self.id(uuid)?, node, server)
+    }
+
+    /// Tab completion of a plugin command past its name by the plugin
+    /// (`None`: the proxy completes it).
+    pub fn suggest(
+        &self,
+        uuid: Uuid,
+        line: &str,
+    ) -> impl std::future::Future<Output = Option<Vec<String>>> + Send + 'static {
+        let call = self.id(uuid).map(|id| self.host.suggest_command(id, line));
+        async move { call?.await }
     }
 
     /// Plugin commands a player may use now (for the command tree): each

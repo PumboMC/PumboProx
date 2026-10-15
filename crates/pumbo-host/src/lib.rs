@@ -210,7 +210,7 @@ impl Host {
             commands,
             perms: permissions::Permissions {
                 file: RwLock::new(file),
-                online: RwLock::new(HashMap::new()),
+                ..Default::default()
             },
             held: Mutex::new(HashMap::new()),
             http,
@@ -344,6 +344,17 @@ impl Host {
     /// <id>`, `perms list|check …`, `services`.
     pub fn proxy_admin(&self, sender: CommandSender, args: &[String]) -> CommandOutcome {
         admin::proxy_admin(&self.inner, sender, args)
+    }
+
+    /// [`Host::proxy_admin`] with the proxy's permission check, which falls
+    /// back to `commands.operators` like the other `/prox` commands.
+    pub fn proxy_admin_with(
+        &self,
+        sender: CommandSender,
+        args: &[String],
+        can: &dyn Fn(&str) -> bool,
+    ) -> CommandOutcome {
+        admin::proxy_command(&self.inner, sender, args, can)
     }
 
     /// `plugins.required-gates` as it is now.
@@ -507,8 +518,8 @@ impl Host {
     }
 
     /// Reads `permissions.yml` again (`/prox reload`): players online get
-    /// the new file layer and backends a new export. A provider gets the
-    /// file at its next start (`/prox plugins reload <provider>`).
+    /// the new file layer, backends a new export and a running provider the
+    /// file unless it has accepted this one already.
     pub fn reload_permissions(&self) -> Result<(), String> {
         let inner = &self.inner;
         let (file, warnings) =
@@ -529,6 +540,14 @@ impl Host {
             inner.bridge.send(info.id, PlayerCommand::CommandsChanged);
         }
         inner.export_changed();
+        // A provider that is not running gets the file when it starts.
+        if inner
+            .provider_slot()
+            .is_some_and(|s| s.status() == Status::Running)
+        {
+            let inner = Arc::clone(&self.inner);
+            tokio::spawn(async move { inner.hand_file(false).await });
+        }
         Ok(())
     }
 
@@ -620,6 +639,17 @@ impl Host {
     /// command tree).
     pub fn visible_commands(&self, id: PlayerId) -> Vec<VisibleCommand> {
         self.inner.commands.visible(&self.inner, id)
+    }
+
+    /// Tab completion of a plugin command past its name (`pp user St`,
+    /// without the slash) by the plugin's `suggest` export. The answers
+    /// replace the last word; `None`: the proxy decides.
+    pub fn suggest_command(
+        &self,
+        id: PlayerId,
+        line: &str,
+    ) -> impl std::future::Future<Output = Option<Vec<String>>> + Send + 'static {
+        commands::suggest(Arc::clone(&self.inner), id, line.to_string())
     }
 }
 
@@ -907,6 +937,9 @@ impl HostInner {
             // Players keep the provider's last set (a down provider must not
             // give back ranks it took away through permissions.yml).
             self.forget_offline(None);
+            if let Ok(mut a) = self.perms.accepted.lock() {
+                *a = None;
+            }
             if let Ok(mut last) = self.provider_down_logged.lock() {
                 *last = None;
             }

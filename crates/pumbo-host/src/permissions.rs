@@ -11,7 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
-use std::sync::RwLock;
+use std::sync::{Mutex, RwLock};
 
 pub use pumbo_contracts::permissions::{Decision, Layer, Layers, levels, resolve};
 use pumbo_core::permissions::{PermContext, PermissionEntry, PermissionSource, Subject};
@@ -55,6 +55,10 @@ impl PlayerPerms {
 pub(crate) struct Permissions {
     pub file: RwLock<FileSource>,
     pub online: RwLock<HashMap<PlayerId, PlayerPerms>>,
+    /// Fingerprint of the file the running provider last accepted.
+    pub accepted: Mutex<Option<String>>,
+    /// One handoff of the file at a time.
+    pub handing: tokio::sync::Mutex<()>,
 }
 
 impl Permissions {
@@ -688,25 +692,48 @@ impl crate::HostInner {
     /// The provider (re)started: it gets `permissions.yml` to take over,
     /// then the players online are loaded from it again.
     pub(crate) async fn provider_started(&self) {
-        let data = self
-            .perms
-            .file
-            .read()
-            .map(|f| f.snapshot().to_string())
-            .unwrap_or_default();
-        let file = pumbo_contracts::PermissionsFile {
-            fingerprint: fnv_hex(&data),
-            data,
-        };
-        if let Err(e) = self
-            .call_provider::<bool>(pumbo_contracts::METHOD_FILE, &file, 10_000)
-            .await
-        {
-            tracing::warn!("permissions.yml not handed to the permission provider: {e}");
-        }
+        self.hand_file(true).await;
         for id in self.perms.eligible() {
             if let Err(t) = self.load_provider_permissions(id).await {
                 tracing::warn!(player = id, "permissions not reloaded: {}", t.plain_text());
+            }
+        }
+    }
+
+    /// Hands `permissions.yml` to the provider (method `file` with the
+    /// fingerprint) until it has accepted the file as it is now, at least
+    /// once with `always` (the provider started). One handoff at a time, so
+    /// the newest file is the last one the provider gets.
+    pub(crate) async fn hand_file(&self, mut always: bool) {
+        let _one = self.perms.handing.lock().await;
+        loop {
+            let data = self
+                .perms
+                .file
+                .read()
+                .map(|f| f.snapshot().to_string())
+                .unwrap_or_default();
+            let fingerprint = fnv_hex(&data);
+            let taken = self
+                .perms
+                .accepted
+                .lock()
+                .is_ok_and(|a| a.as_ref() == Some(&fingerprint));
+            if taken && !always {
+                return;
+            }
+            always = false;
+            let file = pumbo_contracts::PermissionsFile { fingerprint, data };
+            let sent = self
+                .call_provider::<bool>(pumbo_contracts::METHOD_FILE, &file, 10_000)
+                .await;
+            if let Ok(mut a) = self.perms.accepted.lock() {
+                // A file that timed out may still land, so a failure leaves none accepted.
+                *a = sent.is_ok().then_some(file.fingerprint);
+            }
+            if let Err(e) = sent {
+                tracing::warn!("permissions.yml not handed to the permission provider: {e}");
+                return;
             }
         }
     }

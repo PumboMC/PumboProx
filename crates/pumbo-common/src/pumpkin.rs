@@ -249,6 +249,70 @@ pub fn alias_op_level(node: &str) -> u8 {
     UNGUARDED_ALIASES.iter().find(|(_, n, _)| *n == node).map_or(4, |(_, _, l)| *l)
 }
 
+/// Commands the other Pumbo plugins register on Pumpkin by default, with the
+/// plugin. Pumpkin registers a second command of the same name over the first
+/// without a word, so PumboPerms does not take these as short commands. Each
+/// plugin core tests its part.
+pub const PUMBO_COMMANDS: &[(&str, &[&str])] = &[
+    (
+        "PumboAuth",
+        &[
+            "pumboauth",
+            "pa",
+            "auth",
+            "login",
+            "l",
+            "log",
+            "register",
+            "reg",
+            "changepassword",
+            "changepass",
+            "cp",
+            "unregister",
+            "unreg",
+            "logout",
+            "destroysession",
+            "2fa",
+            "totp",
+            "premium",
+            "license",
+        ],
+    ),
+    (
+        "PumboBans",
+        &[
+            "pumbobans",
+            "pb",
+            "ban",
+            "tempban",
+            "ipban",
+            "banip",
+            "mute",
+            "tempmute",
+            "ipmute",
+            "warn",
+            "kick",
+            "unban",
+            "unbanip",
+            "unmute",
+            "unwarn",
+            "history",
+            "warns",
+            "banlist",
+            "mutelist",
+            "checkban",
+            "alts",
+            "staffhistory",
+        ],
+    ),
+    ("PumboFilter", &["pumbofilter", "pf", "captcha"]),
+];
+
+/// The Pumbo plugin that registers `command` on Pumpkin ([`PUMBO_COMMANDS`]).
+pub fn pumbo_command_owner(command: &str) -> Option<&'static str> {
+    PUMBO_COMMANDS.iter().find(|(_, names)| names.contains(&command)).map(|(plugin, _)| *plugin)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use common::*;
+use pumbo_host::manifest::EventKind;
 use pumbo_host::wit::events::{ChatReply, ConnectEvent};
 use pumbo_host::{CommandOutcome, CommandSender, GateOutcome, Host, HostConfig, Status};
 
@@ -1400,6 +1401,130 @@ async fn provider_restart_keeps_last_sets() {
     host.shutdown().await;
 }
 
+/// `/prox reload` hands a changed `permissions.yml` to the running provider
+/// (PumboPerms compares its import with it); the same file is not sent again.
+#[tokio::test(flavor = "multi_thread")]
+async fn reload_hands_a_changed_file_to_the_provider() {
+    let env = provider_env("provider-file-reload");
+    let (host, bridge) = start(env.host_config("")).await;
+    host.player_joined(player(99, "reporter", None));
+    let files = || -> Vec<String> {
+        let all = bridge.messages(99).into_iter();
+        all.filter(|m| m.starts_with("file ")).collect()
+    };
+    wait_for("the file at the start", LONG, || files().len() == 1).await;
+    host.reload_permissions().unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(files().len(), 1, "an unchanged file is not sent");
+
+    env.file(
+        "permissions.yml",
+        "groups:\n  default:\n    permissions: [pumbo.test.base, pumbo.test.more]\n",
+    );
+    host.reload_permissions().unwrap();
+    wait_for("the changed file", LONG, || files().len() == 2).await;
+    let sent = files();
+    assert_ne!(sent[0], sent[1], "the new file: {sent:?}");
+    host.reload_permissions().unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(files().len(), 2, "the same file again is not sent");
+    host.shutdown().await;
+}
+
+/// A file the provider did not take is handed again by the next `/prox
+/// reload`, though the file did not change in between.
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_handoff_is_retried_by_the_next_reload() {
+    let env = provider_env("provider-file-retry");
+    let (host, bridge) = start(env.host_config("")).await;
+    host.player_joined(player(99, "reporter", None));
+    let files = || -> Vec<String> {
+        let all = bridge.messages(99).into_iter();
+        all.filter(|m| m.starts_with("file ")).collect()
+    };
+    wait_for("the file at the start", LONG, || files().len() == 1).await;
+    env.file(
+        "permissions.yml",
+        "groups:\n  default:\n    permissions: [pumbo.test.base, pumbo.test.refuse]\n",
+    );
+    host.reload_permissions().unwrap();
+    let refused = || bridge.messages(99).contains(&"refused file".to_string());
+    wait_for("the refused file", LONG, refused).await;
+    host.reload_permissions().unwrap();
+    wait_for("the same file again", LONG, || files().len() == 2).await;
+    host.shutdown().await;
+}
+
+/// A file read before a newer `/prox reload` can reach the provider after
+/// the newer one; the provider still ends with the newest file.
+#[tokio::test(flavor = "multi_thread")]
+async fn provider_ends_with_the_newest_file() {
+    let env = provider_env("provider-file-newest");
+    let (host, bridge) = start(env.host_config("")).await;
+    host.player_joined(player(99, "reporter", None));
+    let files = || -> Vec<String> {
+        let all = bridge.messages(99).into_iter();
+        all.filter(|m| m.starts_with("file ")).collect()
+    };
+    wait_for("the file at the start", LONG, || files().len() == 1).await;
+    let path = env.root.join("permissions.yml");
+    let original = std::fs::read_to_string(&path).unwrap();
+    // The provider takes 500 ms over this file.
+    env.file(
+        "permissions.yml",
+        "groups:\n  default:\n    permissions: [pumbo.test.base, pumbo.test.slowfile]\n",
+    );
+    host.reload_permissions().unwrap();
+    let slow = || bridge.messages(99).contains(&"slow file".to_string());
+    wait_for("the slow file", LONG, slow).await;
+    // The edit is undone while the provider still reads it.
+    std::fs::write(&path, original).unwrap();
+    host.reload_permissions().unwrap();
+    wait_for("the slow file to land", LONG, || files().len() >= 3).await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let sent = files();
+    assert_eq!(
+        sent.last(),
+        sent.first(),
+        "the newest file goes last: {sent:?}"
+    );
+    host.shutdown().await;
+}
+
+/// A file that timed out can still reach the provider, so after a timeout
+/// the host takes no file as accepted and an undone edit is handed again.
+#[tokio::test(flavor = "multi_thread")]
+async fn provider_ends_with_the_newest_file_after_a_timeout() {
+    let env = provider_env("provider-file-timeout");
+    // Calls end after 200 ms, the slow file lands after 500 ms.
+    env.plugin(
+        "perm",
+        "test",
+        "permission-provider: true\nprovides:\n  - { service: \"pumbo:permissions\", version: \"1.0\", max-timeout-ms: 200 }",
+    );
+    let (host, bridge) = start(env.host_config("")).await;
+    host.player_joined(player(99, "reporter", None));
+    let files = || -> Vec<String> {
+        let all = bridge.messages(99).into_iter();
+        all.filter(|m| m.starts_with("file ")).collect()
+    };
+    wait_for("the file at the start", LONG, || files().len() == 1).await;
+    let path = env.root.join("permissions.yml");
+    let original = std::fs::read_to_string(&path).unwrap();
+    env.file(
+        "permissions.yml",
+        "groups:\n  default:\n    permissions: [pumbo.test.base, pumbo.test.slowfile]\n",
+    );
+    host.reload_permissions().unwrap();
+    wait_for("the late slow file", LONG, || files().len() == 2).await;
+    std::fs::write(&path, original).unwrap();
+    host.reload_permissions().unwrap();
+    wait_for("the undone edit", LONG, || files().len() == 3).await;
+    let sent = files();
+    assert_eq!(sent.last(), sent.first(), "{sent:?}");
+    host.shutdown().await;
+}
+
 /// An unloaded provider: players online keep its set, new logins are refused
 /// (`on-load-failure: deny`, the default).
 #[tokio::test(flavor = "multi_thread")]
@@ -1637,4 +1762,200 @@ async fn offline_cache_cleared_on_replace() {
     ask(&host, &bridge, id, &line, "hasoff").await;
     assert_eq!(asked(&bridge), 2, "asked again after the push");
     host.shutdown().await;
+}
+
+/// A plugin built without the `suggest` export loads and runs its commands as
+/// before; completing its arguments is left to the proxy.
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_without_suggest_still_loads() {
+    let env = Env::new("no-suggest");
+    std::fs::copy(wasm("example"), env.plugins().join("pumbo-example.wasm")).unwrap();
+    let (host, bridge) = start(env.host_config("")).await;
+    assert_eq!(
+        host.plugin("pumbo-example").unwrap().status(),
+        Status::Running
+    );
+    host.player_joined(player(1, "Steve", None));
+    let hello = ask(&host, &bridge, 1, "/hello", "[Example]").await;
+    assert!(hello.contains("Steve"), "{hello}");
+    assert_eq!(host.suggest_command(1, "hello St").await, None);
+    host.shutdown().await;
+}
+
+/// Tab completion past a command's name goes to the plugin that owns it, also
+/// through `/pumbo<short-name>`, with the arguments as typed, and to no other
+/// plugin. A plugin with nothing to say, the name itself, a command the player
+/// may not use and an answer past the command deadline get no answer; at most
+/// 1000 entries of at most 256 bytes reach the player.
+#[tokio::test(flavor = "multi_thread")]
+async fn suggest_reaches_the_plugin_that_owns_the_command() {
+    let env = Env::new("suggest");
+    env.plugin("test", "test", "short-name: test");
+    env.config_file("test", "config.yml", "prefix: u\n");
+    env.plugin("other", "test", "");
+    env.config_file("other", "config.yml", "prefix: v\n");
+    let mut cfg = env.host_config("");
+    cfg.plugins.timeouts.insert(EventKind::Command, 300);
+    let (host, bridge) = start(cfg).await;
+    host.player_joined(player(1, "a", None));
+    for line in ["/ureg uecho umbrella", "/ureg limbo umbrella virtual"] {
+        assert_eq!(ask(&host, &bridge, 1, line, "reg").await, "reg Ok(())");
+    }
+    let s = |line: &'static str| host.suggest_command(1, line);
+    assert_eq!(
+        s("uecho a  \"b c\" ").await,
+        Some(vec!["uecho|a  \"b c\" |1".to_string()])
+    );
+    assert_eq!(
+        s("/pumbotest uecho x St").await,
+        Some(vec!["uecho|x St|1".to_string()])
+    );
+    assert_eq!(s("uspin x").await, None);
+    assert_eq!(s("uecho").await, None);
+    assert_eq!(s("pumbotest limbo x").await, None);
+    assert_eq!(s("hello x").await, None);
+    assert_eq!(s("vecho y").await, Some(vec!["vecho|y|1".to_string()]));
+    let many = s("uecho many").await.unwrap();
+    assert_eq!(many.len(), 1000);
+    assert_eq!(many[0], "0");
+    assert_eq!(s("usleep 0").await, Some(vec!["slept".to_string()]));
+    let t = Instant::now();
+    assert_eq!(s("usleep 5000").await, None);
+    assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
+    host.shutdown().await;
+}
+
+/// A plugin's main command (`/pp`) lists the umbrella commands the player may
+/// use as its subcommands; a shortcut that is one of them (`/ban`) does not.
+#[tokio::test(flavor = "multi_thread")]
+async fn main_command_lists_umbrella_subcommands() {
+    let env = Env::new("main-subs");
+    env.plugin("test", "test", "short-name: test");
+    env.config_file("test", "config.yml", "prefix: u\n");
+    let (host, bridge) = start(env.host_config("")).await;
+    host.player_joined(player(1, "a", None));
+    for line in [
+        "/ureg alpha umbrella",
+        "/ureg limbo umbrella virtual",
+        "/ureg beta",
+        "/ureg beta umbrella",
+    ] {
+        assert_eq!(ask(&host, &bridge, 1, line, "reg").await, "reg Ok(())");
+    }
+    let subs = |name: &str| {
+        host.visible_commands(1)
+            .into_iter()
+            .find(|c| c.name == name)
+            .unwrap()
+            .subcommands
+    };
+    assert_eq!(subs("uecho"), ["alpha", "beta"]);
+    assert!(subs("beta").is_empty());
+    assert!(subs("usecret").is_empty());
+    host.shutdown().await;
+}
+
+/// Spaces inside double quotes reach the plugin as typed; a quote that is
+/// never closed groups nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn quoted_arguments_keep_their_spaces() {
+    let env = Env::new("quoted");
+    env.plugin("test", "test", "");
+    let (host, bridge) = start(env.host_config("")).await;
+    host.player_joined(player(1, "a", None));
+    assert_eq!(
+        ask(&host, &bridge, 1, "/echo \"a  b\"   c", "echo").await,
+        "echo \"a  b\" c"
+    );
+    assert_eq!(
+        ask(&host, &bridge, 1, "/echo a \"b  -s", "echo").await,
+        "echo a \"b -s"
+    );
+    host.shutdown().await;
+}
+
+/// PumboPerms on the proxy (`PUMBO_PERMS_WASM`: a built `pumbo-perms.wasm`;
+/// without it the test does nothing) imports `permissions.yml` with 3000
+/// players in 20 groups of 50 nodes, then takes a change in `default`, which
+/// every group inherits, with 200 of them online. Neither trips the time
+/// budget, also with `memory-mb: 64`.
+#[tokio::test(flavor = "multi_thread")]
+async fn provider_change_fits_wasm_budget() {
+    let Ok(wasm) = std::env::var("PUMBO_PERMS_WASM") else {
+        eprintln!("[skip] PUMBO_PERMS_WASM is not set");
+        return;
+    };
+    logs();
+    let mut yml = String::from("groups:\n  default: {}\n");
+    for g in 0..20 {
+        let nodes: Vec<String> = (0..50).map(|n| format!("budget.g{g}.n{n}")).collect();
+        yml.push_str(&format!(
+            "  g{g}: {{ inherits: [default], permissions: [{}] }}\n",
+            nodes.join(", ")
+        ));
+    }
+    yml.push_str("players:\n");
+    for id in 1..=3000u64 {
+        let uuid = uuid::Uuid::from_u64_pair(0xabcd, id);
+        yml.push_str(&format!("  {uuid}: {{ groups: [g{}] }}\n", id % 20));
+    }
+    for memory in [None, Some(64)] {
+        let env = Env::new("perms-budget");
+        std::fs::copy(&wasm, env.plugins().join("pumbo-perms.wasm")).unwrap();
+        env.file("permissions.yml", &yml);
+        let mut cfg = env.host_config("");
+        if let Some(mb) = memory {
+            cfg.plugins.memory_mb = mb;
+        }
+        let from = logs().len();
+        let (host, _) = start(cfg).await;
+        let t = Instant::now();
+        wait_for("the import of permissions.yml", LONG, || {
+            logs()
+                .get(from..)
+                .is_some_and(|l| l.contains("permissions.yml: "))
+        })
+        .await;
+        let import = t.elapsed();
+        let slot = host.plugin("pumbo-perms").unwrap();
+        let generation = slot.generation.load(Ordering::SeqCst);
+        for id in 1..=200 {
+            assert_eq!(login(&host, id, &format!("p{id}")).await, GateOutcome::Pass);
+        }
+        wait_for("the sets of the provider", LONG, || {
+            (1..=200).all(|id| host.has_permission(id, &format!("budget.g{}.n0", id % 20), None))
+        })
+        .await;
+        let t = Instant::now();
+        assert_eq!(
+            host.dispatch_command(
+                CommandSender::Console,
+                "/pp group default permission set budget.all true"
+            ),
+            CommandOutcome::Handled
+        );
+        wait_for("the change for every player", LONG, || {
+            (1..=200).all(|id| host.has_permission(id, "budget.all", None))
+        })
+        .await;
+        let change = t.elapsed();
+        eprintln!(
+            "[measure] memory-mb {memory:?}: import of 3000 players after the start {import:?}, change for 200 players {change:?}"
+        );
+        assert_eq!(slot.status(), Status::Running);
+        assert_eq!(
+            slot.generation.load(Ordering::SeqCst),
+            generation,
+            "the instance restarted"
+        );
+        let log = logs();
+        let trap = log
+            .get(from..)
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| l.contains("pumbo-perms"))
+            .find(|l| l.contains("budget exceeded") || l.contains("plugin failed"));
+        assert!(trap.is_none(), "{trap:?}");
+        host.shutdown().await;
+    }
 }

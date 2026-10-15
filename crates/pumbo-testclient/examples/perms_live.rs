@@ -10,9 +10,10 @@
 //! perms_live solo <server ip:port> <server dir> [step...]
 //! ```
 //!
-//! Network steps: N1 N2 N3 N4 N5 N5b N6 N7 N8 N14 by default; N10 checks the
+//! Network steps: N1 N2 N3 N4 N5 N5b N6 N7 N8 N9 N15 N14 by default; N10 checks the
 //! data after a restart (the script runs it after `down` and `up`), N11 the
 //! same and the time PumboPerms took to open its database after the SIGKILL.
+//! N1p, N10p and N11p are their proxy parts, for servers without PumboBridge.
 //! N12 (load, `PERMS_LIVE_N12_SECS`, 300) and N13 (long run with
 //! `<network dir>/footprint.log`, `PERMS_LIVE_N13_SECS`, 3600) run only when
 //! named. Their bots (`PpOp7x`, `PpPlain7x`, `PpPend7x`, `PpSlow7x`) must be
@@ -20,7 +21,7 @@
 //! command a second.
 //! `soak` is the long run of `tools/perms-soak.sh` (its variables are on
 //! the step).
-//! Solo steps: J1-J6; J8a and J8b are the two halves of J8 (data made by the
+//! Solo steps: J1-J7; J8a and J8b are the two halves of J8 (data made by the
 //! released 0.1.2-beta, then read by this build), the script swaps the file
 //! between them. Logs are `<dir>/<proxy|lobby|survival>/console.log` and
 //! `<server dir>/console.log`. Each step prints `PASS <step>` or
@@ -104,8 +105,17 @@ impl Live {
     }
 
     async fn wait_log(&self, who: &str, needle: &str, secs: u64) -> Step {
+        self.wait_log_after(who, 0, needle, secs).await
+    }
+
+    /// Like `wait_log`, in what the log got after its first `from` bytes.
+    async fn wait_log_after(&self, who: &str, from: usize, needle: &str, secs: u64) -> Step {
         for _ in 0..secs * 4 {
-            if self.log(who).contains(needle) {
+            if self
+                .log(who)
+                .get(from..)
+                .is_some_and(|new| new.contains(needle))
+            {
                 return Ok(());
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
@@ -277,9 +287,14 @@ async fn banned(victim: &mut Player) -> Result<bool, String> {
 
 // ------------------------------------------------------------------ network
 
-async fn n1(l: &Live) -> Step {
+/// The proxy part of N1, for a network without PumboBridge.
+async fn n1p(l: &Live) -> Step {
     l.wait_log("proxy", "PumboPerms", 60).await?;
-    l.wait_log("proxy", "loaded", 60).await?;
+    l.wait_log("proxy", "loaded", 60).await
+}
+
+async fn n1(l: &Live) -> Step {
+    n1p(l).await?;
     for s in ["lobby", "survival"] {
         l.wait_log(s, "stepped back", 60).await?;
         l.wait_log(s, "the bridge writes the permissions", 60)
@@ -433,6 +448,139 @@ async fn n8(l: &Live) -> Step {
     Ok(())
 }
 
+/// Tab completion of `text`, as the client asks the proxy for it.
+async fn suggest(p: &mut Player, text: &str) -> Result<Vec<String>, String> {
+    let before = p.suggestions.len();
+    let id = i32::try_from(before).unwrap_or(0) + 1;
+    p.c.send(&pumbo_protocol::packets::play::CommandSuggestion {
+        id,
+        text: text.into(),
+    })
+    .await
+    .map_err(|e| format!("{}: {text}: {e}", p.opts.name))?;
+    if !pump(p, 5000, |p| p.suggestions.iter().any(|s| s.id == id)).await? {
+        return Err(format!("no answer to {text}"));
+    }
+    let answer = p.suggestions.iter().rev().find(|s| s.id == id);
+    Ok(answer
+        .map(|s| s.matches.iter().map(|m| m.text.clone()).collect())
+        .unwrap_or_default())
+}
+
+/// Tab completion of `/pp` on the proxy: subcommands for the first word,
+/// only those the player may use, then names of online players, groups and
+/// permission nodes.
+async fn n9(l: &Live) -> Step {
+    // 3 connections a second from one address, and N8 just joined two.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let mut admin = l.bot(ADMIN).await?;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let mut online = l.bot(VICTIM).await?;
+    pump(&mut online, 500, |_| false).await?;
+    let first = suggest(&mut admin, "/pp ").await?;
+    if !["user", "group", "track"]
+        .iter()
+        .all(|w| first.iter().any(|s| s == w))
+        || first.iter().any(|s| s == ADMIN || s == VICTIM)
+    {
+        return Err(format!("/pp <TAB> gave {first:?}"));
+    }
+    let users = suggest(&mut admin, "/pp user ").await?;
+    if !users.iter().any(|s| s == VICTIM) {
+        return Err(format!("/pp user <TAB> gave {users:?}"));
+    }
+    let groups = suggest(&mut admin, &format!("/pp user {VICTIM} parent add ")).await?;
+    if !["mod", "vip"].iter().all(|g| groups.iter().any(|s| s == g)) {
+        return Err(format!(
+            "/pp user {VICTIM} parent add <TAB> gave {groups:?}"
+        ));
+    }
+    let nodes = suggest(
+        &mut admin,
+        &format!("/pp user {VICTIM} permission set minecraft:command.game"),
+    )
+    .await?;
+    if !nodes.iter().any(|s| s == "minecraft:command.gamemode") {
+        return Err(format!(
+            "/pp user {VICTIM} permission set <TAB> gave {nodes:?}"
+        ));
+    }
+    let node = "pumbo.perms.user.info";
+    must_run(
+        &mut admin,
+        &format!("pp user {VICTIM} permission set {node} true"),
+    )
+    .await?;
+    let mut limited = Vec::new();
+    for _ in 0..10 {
+        limited = suggest(&mut online, "/pp ").await?;
+        limited.sort();
+        if limited == ["help", "user"] {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    must_run(
+        &mut admin,
+        &format!("pp user {VICTIM} permission unset {node}"),
+    )
+    .await?;
+    if limited != ["help", "user"] {
+        return Err(format!("/pp <TAB> with only {node} gave {limited:?}"));
+    }
+    online.close().await;
+    admin.close().await;
+    Ok(())
+}
+
+/// `/tick freeze` on survival stops Pumpkin's plugin tasks, PumboBridge's
+/// too; its handler of each server list ping answers the proxy instead. The
+/// proxy keeps the bridge through 20 s of pings, and after `/tick unfreeze`
+/// the bridge is still connected.
+async fn n15(l: &Live) -> Step {
+    let (proxy_from, survival_from) = (l.log("proxy").len(), l.log("survival").len());
+    let mut admin = l.bot(ADMIN).await?;
+    let mut op = l.on_survival(OP).await?;
+    must_run(&mut op, "tick freeze").await?;
+    // The proxy answers a ping to its own port itself; survival listens on the proxy's port + 2 (dev-network.sh).
+    let survival = SocketAddr::new(l.addr.ip(), l.addr.port() + 2);
+    let pinged = async {
+        for _ in 0..20 {
+            pumbo_testclient::status(survival, l.module.clone())
+                .await
+                .map_err(|e| format!("server list ping of survival: {e}"))?;
+            idle(&mut [&mut admin, &mut op], 1).await?;
+        }
+        Ok::<(), String>(())
+    }
+    .await;
+    ask(&mut op, "tick unfreeze").await?;
+    pinged?;
+    let new = |who: &str, from: usize| l.log(who).get(from..).unwrap_or_default().to_string();
+    if !new("survival", survival_from).contains("ticks are frozen") {
+        return Err("PumboBridge on survival did not see the frozen ticks".into());
+    }
+    if let Some(line) = new("proxy", proxy_from)
+        .lines()
+        .find(|l| l.contains("bridge on survival closed"))
+    {
+        return Err(format!("the proxy dropped the frozen bridge: {line}"));
+    }
+    l.wait_log_after("survival", survival_from, "the bridge works again", 10)
+        .await?;
+    let rows = ask(&mut admin, "prox bridge").await?;
+    if !rows
+        .iter()
+        .flat_map(|m| m.lines())
+        .any(|r| r.contains("survival") && r.contains("connected"))
+    {
+        return Err(format!("/prox bridge after /tick unfreeze: {rows:?}"));
+    }
+    op.close().await;
+    admin.close().await;
+    Ok(())
+}
+
 /// Re-import of a changed `permissions.yml` after an admin built a track,
 /// an inheritance and a weight on its groups: all three stay.
 async fn n7(l: &Live) -> Step {
@@ -468,8 +616,13 @@ async fn n7(l: &Live) -> Step {
         return Err("permissions.yml has no \"  builder: {}\" line".into());
     }
     std::fs::write(&file, changed).map_err(|e| e.to_string())?;
-    // The host reads the file again; PumboPerms gets it at its next start.
+    // The host reads the file again and hands it to the running PumboPerms,
+    // and to the restarted one at its start: each says the file changed.
+    let from = l.log("proxy").len();
     ask(&mut admin, "prox reload").await?;
+    l.wait_log_after("proxy", from, "changed since it was imported", 30)
+        .await?;
+    let from2 = l.log("proxy").len();
     ask_for(
         &mut admin,
         "prox plugins reload pumbo-perms",
@@ -477,7 +630,7 @@ async fn n7(l: &Live) -> Step {
         30,
     )
     .await?;
-    l.wait_log("proxy", "changed since it was imported", 30)
+    l.wait_log_after("proxy", from2, "changed since it was imported", 30)
         .await?;
     // The answer to a large import comes after the import finishes.
     let lines = ask_for(&mut admin, "pp import run file", "Imported file", 60).await?;
@@ -516,6 +669,17 @@ async fn ranks_kept(admin: &mut Player) -> Step {
 /// After a SIGKILL: PumboPerms on the proxy opened its database (3000
 /// players) in under a second, and the data is there (N10).
 async fn n11(l: &Live) -> Step {
+    opened_fast(l).await?;
+    n10(l).await
+}
+
+/// N11 without PumboBridge: the time to open and the data of N10p.
+async fn n11p(l: &Live) -> Step {
+    opened_fast(l).await?;
+    n10p(l).await
+}
+
+async fn opened_fast(l: &Live) -> Step {
     l.wait_log("proxy", "loaded:", 60).await?;
     let log = l.log("proxy");
     let ms: u64 = log
@@ -530,7 +694,16 @@ async fn n11(l: &Live) -> Step {
     if ms >= 1000 {
         return Err(format!("opening the database took {ms} ms"));
     }
-    n10(l).await
+    Ok(())
+}
+
+/// The proxy part of N10, for a network without PumboBridge: the track,
+/// inheritance and weight of N7.
+async fn n10p(l: &Live) -> Step {
+    let mut admin = l.bot(ADMIN).await?;
+    ranks_kept(&mut admin).await?;
+    admin.close().await;
+    Ok(())
 }
 
 /// After a restart or a SIGKILL: the changes of N3, N4 and N7 are still there.
@@ -646,7 +819,8 @@ async fn n12(l: &Live) -> Step {
     Ok(())
 }
 
-/// RSS of a process from `ps` and its footprint from `footprint`, in KB.
+/// RSS of a process from `ps` and its footprint from `footprint` (macOS),
+/// in KB.
 fn memory(pid: &str) -> (Option<u64>, Option<u64>) {
     let run = |cmd: &str, args: &[&str]| {
         std::process::Command::new(cmd)
@@ -739,7 +913,8 @@ async fn n13(l: &Live) -> Step {
                     kb(rss),
                     kb(footprint)
                 ));
-                if let (Some(kb), Some(slot)) = (footprint, held.get_mut(i)) {
+                // RSS where `footprint` is missing (Linux).
+                if let (Some(kb), Some(slot)) = (footprint.or(rss), held.get_mut(i)) {
                     if at >= length / 6 {
                         slot.0.get_or_insert(kb);
                     }
@@ -999,7 +1174,15 @@ async fn j4(l: &Live) -> Step {
     ask(&mut admin, "plugin unload pumboperms").await?;
     // Pumpkin 0.2.0 loads a file named by one word from its working
     // directory; the script puts a copy there.
-    ask(&mut admin, "plugin load PumboPerms-26.3.wasm").await?;
+    let variant = match std::env::var("PUMBO_PROTOCOL").as_deref() {
+        Ok("776") => "26.2",
+        _ => "26.3",
+    };
+    ask(
+        &mut admin,
+        &format!("plugin load PumboPerms-{variant}.wasm"),
+    )
+    .await?;
     idle(&mut [&mut admin], 2).await?;
     let lines = ask(&mut admin, "pp info").await?;
     if !lines.iter().any(|l| l.contains("Platform")) {
@@ -1048,6 +1231,48 @@ async fn j6(l: &Live) -> Step {
         return Err(format!("{PLAIN} moved: {at:?} -> {:?}", plain.position));
     }
     plain.close().await;
+    Ok(())
+}
+
+/// Tab completion on Pumpkin: `/pp` is a command of its own (Pumpkin 0.2.0
+/// suggests nothing right after an alias), its arguments have names, and a
+/// complete command offers nothing more. A short form (`/pp u`) runs and
+/// completes, and `/pp editor` gets PumboPerms' answer, not Pumpkin's error.
+/// Before J4: a command registered again keeps Pumpkin's old argument nodes,
+/// which ask the unloaded plugin.
+async fn j7(l: &Live) -> Step {
+    let mut admin = l.bot(ADMIN).await?;
+    let has = |got: &[String], want: &[&str]| want.iter().all(|w| got.iter().any(|s| s == w));
+    let first = suggest(&mut admin, "/pp ").await?;
+    if !has(&first, &["user", "group", "track"]) {
+        return Err(format!("/pp <TAB> gave {first:?}"));
+    }
+    let user = suggest(&mut admin, &format!("/pp user {ADMIN} ")).await?;
+    if !has(&user, &["info", "permission", "parent", "meta", "promote"]) {
+        return Err(format!("/pp user {ADMIN} <TAB> gave {user:?}"));
+    }
+    let names = suggest(&mut admin, "/pp user PpAd").await?;
+    if names != [ADMIN] {
+        return Err(format!("/pp user PpAd<TAB> gave {names:?}"));
+    }
+    let done = suggest(&mut admin, "/pp track x create ").await?;
+    if !done.is_empty() {
+        return Err(format!("/pp track x create <TAB> gave {done:?}"));
+    }
+    // Other names of words go to PumboPerms with the rest of the line.
+    let short = ask(&mut admin, &format!("pp u {ADMIN} info")).await?;
+    if !short.iter().any(|m| m.contains("UUID")) {
+        return Err(format!("/pp u {ADMIN} info gave {short:?}"));
+    }
+    let names = suggest(&mut admin, "/pp u PpAd").await?;
+    if names != [ADMIN] {
+        return Err(format!("/pp u PpAd<TAB> gave {names:?}"));
+    }
+    let editor = ask(&mut admin, "pp editor").await?;
+    if !editor.iter().any(|m| m.contains("editor")) || denied(&editor) {
+        return Err(format!("/pp editor gave {editor:?}"));
+    }
+    admin.close().await;
     Ok(())
 }
 
@@ -1125,6 +1350,7 @@ fn solo_uuid(nick: &str) -> Option<Uuid> {
 async fn run(l: &Live, step: &str) -> Step {
     match step {
         "N1" => n1(l).await,
+        "N1p" => n1p(l).await,
         "N2" => n2(l).await,
         "N3" => n3(l).await,
         "N4" => n4(l).await,
@@ -1133,11 +1359,15 @@ async fn run(l: &Live, step: &str) -> Step {
         "N6" => n6(l).await,
         "N7" => n7(l).await,
         "N8" => n8(l).await,
+        "N9" => n9(l).await,
         "N10" => n10(l).await,
+        "N10p" => n10p(l).await,
         "N11" => n11(l).await,
+        "N11p" => n11p(l).await,
         "N12" => n12(l).await,
         "N13" => n13(l).await,
         "N14" => n14(l).await,
+        "N15" => n15(l).await,
         "soak" => soak(l).await,
         "J1" => j1(l).await,
         "J2" => j2(l).await,
@@ -1145,6 +1375,7 @@ async fn run(l: &Live, step: &str) -> Step {
         "J4" => j4(l).await,
         "J5" => j5(l).await,
         "J6" => j6(l).await,
+        "J7" => j7(l).await,
         "J8a" => j8a(l).await,
         "J8b" => j8b(l).await,
         other => Err(format!("unknown step {other}")),
@@ -1194,8 +1425,10 @@ async fn main() -> std::process::ExitCode {
         solo: kind == "solo",
     };
     let defaults: &[&str] = match live.solo {
-        true => &["J1", "J2", "J3", "J4", "J5", "J6"],
-        false => &["N1", "N2", "N3", "N4", "N5", "N5b", "N6", "N7", "N8", "N14"],
+        true => &["J1", "J2", "J3", "J7", "J4", "J5", "J6"],
+        false => &[
+            "N1", "N2", "N3", "N4", "N5", "N5b", "N6", "N7", "N8", "N9", "N15", "N14",
+        ],
     };
     let steps: Vec<&str> = match args.get(3..) {
         Some(s) if !s.is_empty() => s.iter().map(String::as_str).collect(),

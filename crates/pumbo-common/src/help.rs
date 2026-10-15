@@ -22,7 +22,7 @@ use crate::command::Commands;
 use crate::lang::Lang;
 use crate::rich::{self, CHAT_WIDTH, Click, Line, Segment, Text};
 use crate::style::{self, BRAND, INFO, MUTED, VALUE};
-use crate::text::{self, Args, Style};
+use crate::text::{self, Args, Color, Style};
 
 /// Entries on one chat page.
 pub const PER_PAGE: usize = 8;
@@ -94,6 +94,7 @@ impl Entry {
 #[derive(Debug, Clone)]
 pub struct Help {
     plugin: String,
+    accent: Color,
     version: String,
     alias: String,
     section: String,
@@ -101,15 +102,20 @@ pub struct Help {
     root: String,
     per_page: usize,
     entries: Vec<Entry>,
+    tag: Line,
+    marker: Line,
+    whole: bool,
+    framed: bool,
 }
 
 impl Help {
-    /// `plugin` is the name in the header (`PumboAuth`), `help_command` the
-    /// command that shows this help (`/pumboauth help`); page arrows run it with
-    /// the page number.
-    pub fn new(plugin: impl Into<String>, help_command: impl Into<String>) -> Self {
+    /// `plugin` is the name in the header (`PumboAuth`), `accent` its colour
+    /// ([`style::accent`]), `help_command` the command that shows this help
+    /// (`/pumboauth help`); page arrows run it with the page number.
+    pub fn new(plugin: impl Into<String>, accent: Color, help_command: impl Into<String>) -> Self {
         Self {
             plugin: plugin.into(),
+            accent,
             version: String::new(),
             alias: String::new(),
             section: String::new(),
@@ -117,15 +123,19 @@ impl Help {
             root: String::new(),
             per_page: PER_PAGE,
             entries: Vec::new(),
+            tag: Line::new(),
+            marker: Line::new(),
+            whole: false,
+            framed: false,
         }
     }
 
     /// The help of a command tree: one entry per subcommand, with the
     /// description and details messages of each and its permission; the root is
     /// [`Commands::root`].
-    pub fn from_commands<H>(plugin: impl Into<String>, commands: &Commands<H>, lang: &Lang) -> Self {
+    pub fn from_commands<H>(plugin: impl Into<String>, accent: Color, commands: &Commands<H>, lang: &Lang) -> Self {
         let root = commands.root();
-        let mut help = Self::new(plugin, commands.help_line()).root(root.clone());
+        let mut help = Self::new(plugin, accent, commands.help_line()).root(root.clone());
         if let Some(a) = commands.alias_of_root() {
             help = help.alias(a);
         }
@@ -173,6 +183,30 @@ impl Help {
         self
     }
 
+    /// A tag in front of every chat line and a marker in front of each
+    /// command line after it (PumboPerms: `[PP] > user <player>`). The
+    /// description column and the cut to the chat width count both.
+    pub fn tag(mut self, tag: Line, marker: Line) -> Self {
+        self.tag = tag;
+        self.marker = marker;
+        self
+    }
+
+    /// A description in the chat line only when it fits whole; the tooltip
+    /// always has it. Without this, a long description is cut with `...`.
+    pub fn whole_descriptions(mut self) -> Self {
+        self.whole = true;
+        self
+    }
+
+    /// A ruled bar on top with the name, version and root in the middle, and
+    /// one at the bottom with the page arrows ([`style::bar`]); the hint moves
+    /// into the tooltip of the name.
+    pub fn framed(mut self) -> Self {
+        self.framed = true;
+        self
+    }
+
     /// Adds an entry (builder style).
     pub fn entry(mut self, entry: Entry) -> Self {
         self.entries.push(entry);
@@ -203,19 +237,26 @@ impl Help {
         let visible = self.visible(allowed);
         let pages = visible.len().div_ceil(self.per_page).max(1);
         let page = page.clamp(1, pages);
-        let mut out = Text::from(self.header(lang));
+        let room = CHAT_WIDTH.saturating_sub(self.tag.width());
+        let head = if self.framed { self.bar(self.bar_title(lang), room) } else { self.header(lang).truncate(room) };
+        let mut out = Text::from(self.tag.clone().append(head));
         if visible.is_empty() {
-            out.extend(Text::parse_with(&lang.get("command-help-empty"), Style::colored(INFO)));
+            for line in Text::parse_with(&lang.get("command-help-empty"), Style::colored(INFO)).lines {
+                out.push(self.tag.clone().append(line));
+            }
             return out;
         }
         let shown: Vec<&Entry> = visible.into_iter().skip((page - 1) * self.per_page).take(self.per_page).collect();
         let rows: Vec<(Line, Line)> = shown
             .iter()
-            .map(|e| (style::syntax(&self.listed(e)), Line::parse_with(&e.summary, Style::colored(INFO))))
+            .map(|e| (style::syntax(&self.listed(e), self.accent), Line::parse_with(&e.summary, Style::colored(INFO))))
             .collect();
-        let column = column(&rows.iter().map(|(c, d)| (c.width(), d.width())).collect::<Vec<_>>());
+        let lead = self.tag.clone().append(self.marker.clone());
+        let room = CHAT_WIDTH.saturating_sub(lead.width());
+        let column = column(&rows.iter().map(|(c, d)| (c.width(), d.width())).collect::<Vec<_>>(), room);
         for (entry, (listed, summary)) in shown.into_iter().zip(rows) {
-            out.push(chat_entry(lang, entry, listed, summary, column));
+            let line = chat_entry(lang, self.accent, entry, listed, summary, column, room, self.whole);
+            out.push(lead.clone().append(line));
         }
         if let Some(footer) = self.footer(lang, page, pages) {
             out.push(footer);
@@ -254,7 +295,7 @@ impl Help {
     }
 
     fn header(&self, lang: &Lang) -> Line {
-        let mut line = Line::from(Segment::new(self.plugin.as_str(), Style::colored(BRAND).bolded()));
+        let mut line = style::name(&self.plugin, self.accent);
         if !self.version.is_empty() {
             line = line.with(Segment::colored(format!(" {}", self.version), MUTED));
         }
@@ -262,7 +303,7 @@ impl Help {
             line = line.with(Segment::colored(" · ", MUTED)).with(Segment::colored(self.section.as_str(), VALUE));
         }
         if !self.root.is_empty() {
-            let mut root = Segment::colored(self.root.as_str(), style::COMMAND)
+            let mut root = Segment::colored(self.root.as_str(), style::words(self.accent))
                 .on_click(Click::Suggest(format!("{} ", self.root)));
             let hover = lang.get("command-help-click");
             if !hover.is_empty() {
@@ -291,12 +332,44 @@ impl Help {
         }
     }
 
+    /// The middle of the top bar: the name with the hint as its tooltip, the
+    /// version and the root.
+    fn bar_title(&self, lang: &Lang) -> Line {
+        let mut line = style::name(&self.plugin, self.accent);
+        let hint = lang.get("command-help-hint");
+        if !hint.is_empty() {
+            line = line.on_hover(Text::parse_with(&hint, Style::colored(INFO)));
+        }
+        if !self.version.is_empty() {
+            line = line.with(Segment::colored(format!(" {}", self.version), MUTED));
+        }
+        if !self.root.is_empty() {
+            let mut root = Segment::colored(self.root.as_str(), style::words(self.accent))
+                .on_click(Click::Suggest(format!("{} ", self.root)));
+            let hover = lang.get("command-help-click");
+            if !hover.is_empty() {
+                root = root.on_hover(Text::parse_with(&hover, Style::colored(INFO)));
+            }
+            line = line.with(Segment::colored(" · ", MUTED)).with(root);
+        }
+        line
+    }
+
+    /// A bar across `room` in the brand colour and the colour of the command
+    /// words.
+    fn bar(&self, centre: Line, room: u32) -> Line {
+        style::bar(centre, room, BRAND, style::words(self.accent))
+    }
+
     fn footer(&self, lang: &Lang, page: usize, pages: usize) -> Option<Line> {
         let mut line = Line::new();
         if pages > 1 {
             line.push(self.arrow("◀", page > 1, page.saturating_sub(1), lang.get("command-help-previous")));
             line.push(Segment::colored(format!(" {page}/{pages} "), INFO));
             line.push(self.arrow("▶", page < pages, page + 1, lang.get("command-help-next")));
+        }
+        if self.framed {
+            return Some(self.tag.clone().append(self.bar(line, CHAT_WIDTH.saturating_sub(self.tag.width()))));
         }
         let hint = lang.get("command-help-hint");
         if !hint.is_empty() {
@@ -305,7 +378,7 @@ impl Help {
             }
             line = line.append(Line::parse_with(&hint, Style::colored(MUTED)));
         }
-        (!line.is_empty()).then(|| line.truncate(CHAT_WIDTH))
+        (!line.is_empty()).then(|| self.tag.clone().append(line.truncate(CHAT_WIDTH.saturating_sub(self.tag.width()))))
     }
 
     fn arrow(&self, symbol: &str, enabled: bool, target: usize, hover: String) -> Segment {
@@ -326,31 +399,45 @@ fn message(lang: &Lang, key: &str) -> String {
 /// width): the widest command (up to [`COLUMN_MAX`]) plus [`GAP`] at which no
 /// aligned description has to be cut; when every choice cuts one, the
 /// narrowest. Commands wider than the column get their description after
-/// [`GAP`] instead.
-fn column(rows: &[(u32, u32)]) -> u32 {
+/// [`GAP`] instead. `room`: the chat width left after the tag and marker.
+fn column(rows: &[(u32, u32)], room: u32) -> u32 {
     let mut candidates: Vec<u32> = rows.iter().map(|(w, _)| w + GAP).filter(|c| *c <= COLUMN_MAX + GAP).collect();
     candidates.sort_unstable_by(|a, b| b.cmp(a));
     candidates.dedup();
-    let fits = |c: u32| rows.iter().filter(|(w, _)| w + GAP <= c).all(|(_, d)| c + d <= CHAT_WIDTH);
+    let fits = |c: u32| rows.iter().filter(|(w, _)| w + GAP <= c).all(|(_, d)| c + d <= room);
     candidates.iter().copied().find(|c| fits(*c)).or_else(|| candidates.last().copied()).unwrap_or(COLUMN_MAX + GAP)
 }
 
 /// One help line: the listed command, padding up to the column, the
-/// description; cut to the chat width. Clicking types the full command.
-fn chat_entry(lang: &Lang, entry: &Entry, listed: Line, summary: Line, column: u32) -> Line {
+/// description; cut to `room` (the chat width left after the tag and
+/// marker). With `whole`, a description that does not fit is left out instead.
+/// Clicking types the full command.
+#[allow(clippy::too_many_arguments)]
+fn chat_entry(
+    lang: &Lang,
+    accent: Color,
+    entry: &Entry,
+    listed: Line,
+    summary: Line,
+    column: u32,
+    room: u32,
+    whole: bool,
+) -> Line {
     let width = listed.width();
     let mut line = listed;
     if !summary.is_empty() {
         let pad = if width + GAP <= column { column - width } else { GAP };
-        line = line.append(rich::pad(pad)).append(summary);
+        if !whole || width + pad + summary.width() <= room {
+            line = line.append(rich::pad(pad)).append(summary);
+        }
     }
-    line.truncate(CHAT_WIDTH).on_click(Click::Suggest(entry.suggestion())).on_hover(tooltip(lang, entry))
+    line.truncate(room).on_click(Click::Suggest(entry.suggestion())).on_hover(tooltip(lang, accent, entry))
 }
 
 /// The tooltip of an entry: the full command, the whole description, the
 /// details, then the permission and what a click does.
-fn tooltip(lang: &Lang, entry: &Entry) -> Text {
-    let mut text = Text::from(style::syntax(&entry.syntax()));
+fn tooltip(lang: &Lang, accent: Color, entry: &Entry) -> Text {
+    let mut text = Text::from(style::syntax(&entry.syntax(), accent));
     text.extend(Text::parse_with(&entry.summary, Style::colored(VALUE)));
     text.extend(Text::parse_with(&entry.details, Style::colored(INFO)));
     let mut meta = Text::new();
@@ -392,7 +479,7 @@ mod tests {
 
     /// 20 admin entries (`pumbo.auth.admin.cmdN`) and 2 for everyone.
     fn big() -> Help {
-        let mut help = Help::new("PumboAuth", "/pumboauth help").section("Admin");
+        let mut help = Help::new("PumboAuth", style::accent::AUTH, "/pumboauth help").section("Admin");
         for i in 0..20 {
             help.push(
                 Entry::new(format!("/pumboauth cmd{i}"), format!("Desc {i}"))
@@ -465,7 +552,8 @@ mod tests {
             vec!["/pumboauth cmd3", "/login", "/logout"]
         );
 
-        let nothing = Help::new("PumboAuth", "/pumboauth help").entry(Entry::new("/x", "y").permission("pumbo.x"));
+        let nothing = Help::new("PumboAuth", style::accent::AUTH, "/pumboauth help")
+            .entry(Entry::new("/x", "y").permission("pumbo.x"));
         assert_eq!(nothing.chat(&en, 1, player).plain(), "PumboAuth\nThere are no commands you can use.");
         assert_eq!(nothing.console(&en, player).plain(), "PumboAuth\nThere are no commands you can use.");
     }
@@ -501,7 +589,7 @@ mod tests {
     fn long_lines_are_cut_but_the_tooltip_keeps_everything() {
         let en = lang("en");
         let long = "Changes the password of a player without asking for the old one";
-        let help = Help::new("PumboAuth", "/pumboauth help")
+        let help = Help::new("PumboAuth", style::accent::AUTH, "/pumboauth help")
             .entry(Entry::new("/pumboauth reload", "Reloads"))
             .entry(Entry::new("/pumboauth forcechangepassword", long).args("<nick> <password>"));
         let page = help.chat(&en, 1, all);
@@ -513,13 +601,13 @@ mod tests {
         let reload = &page.lines[1];
         let reload_x: u32 =
             reload.segments.iter().take_while(|s| !s.text.starts_with("Reloads")).map(Segment::width).sum();
-        assert_eq!(reload_x, style::syntax("/pumboauth reload").width() + GAP);
+        assert_eq!(reload_x, style::syntax("/pumboauth reload", style::accent::AUTH).width() + GAP);
     }
 
     #[test]
     fn root_is_shown_once() {
         let pl = lang("pl");
-        let help = Help::new("PumboAuth", "/pumboauth help")
+        let help = Help::new("PumboAuth", style::accent::AUTH, "/pumboauth help")
             .section("Admin")
             .root("/pumboauth")
             .entry(Entry::new("/pumboauth reload", "Przeładowuje config"))
@@ -543,7 +631,7 @@ mod tests {
     fn column_leaves_room_for_descriptions() {
         // aligning everything after the widest command would cut the first description
         let long = "Przeładowuje config i komunikaty";
-        let help = Help::new("PumboAuth", "/pumboauth help")
+        let help = Help::new("PumboAuth", style::accent::AUTH, "/pumboauth help")
             .root("/pumboauth")
             .entry(Entry::new("/pumboauth reload", long))
             .entry(Entry::new("/pumboauth unregister", "Usuwa konto gracza").args("<nick>"))
@@ -554,13 +642,16 @@ mod tests {
         };
         // reload and unregister share the column, forceregister follows its own command
         assert_eq!(x(1, "Przeładowuje"), x(2, "Usuwa"));
-        assert_eq!(x(2, "Usuwa"), style::syntax("unregister <nick>").width() + GAP);
-        assert_eq!(x(3, "Rejestruje"), style::syntax("forceregister <nick> <hasło>").width() + GAP);
+        assert_eq!(x(2, "Usuwa"), style::syntax("unregister <nick>", style::accent::AUTH).width() + GAP);
+        assert_eq!(
+            x(3, "Rejestruje"),
+            style::syntax("forceregister <nick> <hasło>", style::accent::AUTH).width() + GAP
+        );
         assert!(page.lines[1].plain().ends_with(long));
         assert!(page.lines.iter().all(|l| l.width() <= CHAT_WIDTH));
-        assert_eq!(column(&[]), COLUMN_MAX + GAP);
+        assert_eq!(column(&[], CHAT_WIDTH), COLUMN_MAX + GAP);
         // nothing fits: the narrowest column
-        assert_eq!(column(&[(10, 400), (50, 400)]), 10 + GAP);
+        assert_eq!(column(&[(10, 400), (50, 400)], CHAT_WIDTH), 10 + GAP);
     }
 
     #[test]
@@ -598,7 +689,7 @@ mod tests {
             )
             .with(Sub::new("reload", "admin.reload", ()).description("help-reload"));
         let pl = lang("pl");
-        let help = Help::from_commands("PumboBans", &tree, &pl);
+        let help = Help::from_commands("PumboBans", style::accent::BANS, &tree, &pl);
         let ban = &help.entries()[0];
         assert_eq!(ban.command, "/pumbobans ban");
         assert_eq!(ban.args, "<player> [time] [reason...]");
@@ -620,10 +711,14 @@ mod tests {
     fn header_with_version_and_short_alias() {
         let tree = Commands::<()>::new("bans").label("/pumbobans").short_alias("/pb");
         let en = lang("en");
-        let help = Help::from_commands("PumboBans", &tree, &en).version("0.1.0").section("Admin");
+        let help = Help::from_commands("PumboBans", style::accent::BANS, &tree, &en).version("0.1.0").section("Admin");
         let header = &help.chat(&en, 1, all).lines[0];
         assert_eq!(header.plain(), "PumboBans 0.1.0 · Admin   /pumbobans /pb");
-        assert_eq!(header.segments[1].style.color, Some(MUTED));
+        assert_eq!(
+            (header.segments[1].text.as_str(), header.segments[1].style.color),
+            ("Bans", Some(style::accent::BANS))
+        );
+        assert_eq!(header.segments[2].style.color, Some(MUTED));
         let alias = header.segments.last().unwrap();
         assert_eq!(alias.click, Some(Click::Suggest("/pb ".into())));
         assert!(help.console(&en, all).plain().starts_with("PumboBans 0.1.0 · Admin   /pumbobans /pb\n"));

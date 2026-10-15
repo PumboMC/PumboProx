@@ -48,7 +48,7 @@ use uuid::Uuid;
 use crate::bungee;
 use crate::commands::{self, Source};
 use crate::config::{PacksOnSwitch, SignedChatCancel};
-use crate::conn::{Conn, ConnError};
+use crate::conn::{Conn, ConnError, WRITE_TIMEOUT};
 use crate::limits::TokenBucket;
 use crate::metrics::{GaugeGuard, Metrics};
 use crate::server::{ChatInput, PlayerGuard, Proxy, Runtime, SessionCmd};
@@ -66,6 +66,9 @@ const ACK_TIMEOUT: Duration = Duration::from_secs(5);
 const OWN_KEEP_ALIVE: Duration = Duration::from_secs(10);
 /// Keep-alive IDs of the backend waiting for the client's answer (§2.9).
 const MAX_PENDING_KEEP_ALIVES: usize = 32;
+/// Bytes waiting for a slow client above which its backend is not read
+/// until the client takes them (Velocity's high write mark, 2 MiB).
+const CLIENT_BACKLOG: usize = 2 << 20;
 
 type LoginFuture = Pin<Box<dyn Future<Output = Result<Conn, BackendFail>> + Send>>;
 /// A kick waiting for `on-server-kicked` (E5): decision, kick text, shutdown-like.
@@ -512,13 +515,20 @@ impl Play<'_> {
                 return end;
             }
             let deadline = self.deadline(idle);
-            // While a kick waits for plugins the backend is not read any more.
+            // While a kick waits for plugins the backend is not read any more,
+            // nor while the client has a backlog.
             let kick_pending = self.pending_kick.is_some();
+            let client_full = self.client_full();
             tokio::select! {
                 biased;
                 () = stopped(&mut shutdown) => return end_kick("The proxy is shutting down."),
-                r = self.client.fill() => {
+                // The client is written here, so it is read while it takes its
+                // data slowly: holding its packets back would pass them on in
+                // one burst later, over the limits of the proxy and backend.
+                r = self.client.fill_writing(client_full.then_some(CLIENT_BACKLOG)) => {
                     let Ok(n) = r else { return End::ClientClosed };
+                    // It took its backlog: the backend is read again.
+                    let Some(n) = n else { continue };
                     self.last_client = Instant::now();
                     Metrics::add(&m.bytes_from_clients, n as u64);
                     if !self.bytes.take(n as f64) {
@@ -535,7 +545,7 @@ impl Play<'_> {
                         return end;
                     }
                 }
-                r = fill_opt(self.backend.as_mut().filter(|_| !kick_pending).map(|b| &mut b.conn)) => {
+                r = fill_opt(self.backend.as_mut().filter(|_| !kick_pending && !client_full).map(|b| &mut b.conn)) => {
                     let end = match r {
                         Ok(n) => {
                             Metrics::add(&m.bytes_from_backends, n as u64);
@@ -583,12 +593,22 @@ impl Play<'_> {
         }
     }
 
+    /// The client is behind by more than [`CLIENT_BACKLOG`].
+    fn client_full(&self) -> bool {
+        self.client.pending() > CLIENT_BACKLOG
+    }
+
     fn deadline(&self, idle: Duration) -> Instant {
         let mut d = self.last_client + idle;
-        if let Some(b) = &self.backend {
-            d = d.min(b.last_read + idle);
-        } else {
-            d = d.min(self.next_own_keep_alive);
+        // The next write to a client that stopped reading fails (`run` ends).
+        if let Some(s) = self.client.stalled_since() {
+            d = d.min(s + WRITE_TIMEOUT);
+        }
+        match &self.backend {
+            // Not read meanwhile, so not idle either.
+            Some(_) if self.client_full() => {}
+            Some(b) => d = d.min(b.last_read + idle),
+            None => d = d.min(self.next_own_keep_alive),
         }
         if let Some(a) = self.ack_deadline {
             d = d.min(a);
@@ -621,10 +641,11 @@ impl Play<'_> {
             self.next_tab = now + Duration::from_millis(self.rt.config.tab.refresh_ms.max(100));
             self.config_tab(false);
         }
-        if self
-            .backend
-            .as_ref()
-            .is_some_and(|b| now >= b.last_read + idle)
+        if !self.client_full()
+            && self
+                .backend
+                .as_ref()
+                .is_some_and(|b| now >= b.last_read + idle)
         {
             Metrics::inc(&self.proxy.metrics.timeouts_idle);
             return self.backend_lost(Some(Component::text("Timed out.")));
@@ -649,10 +670,8 @@ impl Play<'_> {
         None
     }
 
+    /// Writes to the servers; the client is written while it is read (`run`).
     async fn flush(&mut self) -> Result<(), End> {
-        if self.client.flush().await.is_err() {
-            return Err(End::ClientClosed);
-        }
         if let Some(b) = self.backend.as_mut()
             && b.conn.flush().await.is_err()
             && let Some(end) = self.backend_lost(None)
@@ -1303,6 +1322,9 @@ impl Play<'_> {
                 data,
                 to_backend,
             } => self.plugin_message(channel, data, to_backend),
+            SessionCmd::Suggestions(answer) => {
+                self.out(|m, c| queue_out(c, m, Phase::Play, &*answer));
+            }
             SessionCmd::Property { name, value } => {
                 let props = &mut self.player.profile.properties;
                 props.retain(|p| p.name != name);
@@ -2352,49 +2374,60 @@ impl Play<'_> {
             server: current.as_deref(),
         };
         // The proxy runs this command, so a backend's suggestions for it would be
-        // for a different command. Without our own: the plugin's subcommands for
-        // the first word, online players after it, nothing for passwords.
-        // ponytail: player names for every argument until the WIT has a suggestion event.
+        // for a different command. Without our own: the plugin's `suggest`, else
+        // its subcommands for the first word or online players, nothing for
+        // passwords.
         let sensitive = self.rt.sensitive.contains(&root)
             || plugins.is_some_and(|p| p.host.is_sensitive_command(&root));
-        let (start, matches) = commands::suggest(self.proxy, &self.rt, &source, line)
-            .unwrap_or_else(|| {
+        let (start, matches) = match commands::suggest(self.proxy, &self.rt, &source, line) {
+            Some(own) => own,
+            None => {
                 let Some(space) = line
                     .rfind(' ')
                     .filter(|_| plugin_cmd.is_some() && !sensitive)
                 else {
-                    return (line.len(), Vec::new());
+                    return self.answer_suggestions(s, line.len(), Vec::new());
                 };
                 let start = space + 1;
-                let word = line[start..].to_ascii_lowercase();
                 let first = line[..space].split_whitespace().count() == 1;
-                let options = match plugin_cmd {
-                    Some((_, subs)) if first && !subs.is_empty() => subs,
-                    _ => self.proxy.players().into_iter().map(|p| p.name).collect(),
-                };
-                let matches = options
-                    .into_iter()
-                    .filter(|o| o.to_ascii_lowercase().starts_with(&word))
-                    .collect();
-                (start, matches)
-            });
-        // Brigadier counts UTF-16 units of the whole text, slash included.
-        let start = s.text.len() - line.len() + start;
-        let before = s.text.get(..start).unwrap_or_default();
-        let word = s.text.get(start..).unwrap_or_default();
-        let units = |t: &str| i32::try_from(t.encode_utf16().count()).unwrap_or(i32::MAX);
-        let answer = CommandSuggestions {
-            id: s.id,
-            start: units(before),
-            length: units(word),
-            matches: matches
-                .into_iter()
-                .map(|text| Suggestion {
-                    text,
-                    tooltip: None,
-                })
-                .collect(),
+                match (plugin_cmd, plugins) {
+                    (cmd, Some(p)) => {
+                        // The plugin answers later; it filters by the player's rights.
+                        let subs = cmd.map(|(_, subs)| subs).filter(|s| first && !s.is_empty());
+                        let ask = p.suggest(self.player.profile.id, line);
+                        let (proxy, id, text) =
+                            (self.proxy.clone(), self.player.profile.id, s.text.clone());
+                        let (req, line) = (s.id, line.to_string());
+                        tokio::spawn(async move {
+                            let matches = match ask.await {
+                                Some(m) => m,
+                                None => starting_with(
+                                    subs.unwrap_or_else(|| {
+                                        proxy.players().into_iter().map(|p| p.name).collect()
+                                    }),
+                                    &line[start..],
+                                ),
+                            };
+                            let answer = suggestions(req, &text, &line, start, matches);
+                            proxy.send_to(id, SessionCmd::Suggestions(Box::new(answer)));
+                        });
+                        return Ok(Step::Drop);
+                    }
+                    _ => (line.len(), Vec::new()),
+                }
+            }
         };
+        self.answer_suggestions(s, start, matches)
+    }
+
+    fn answer_suggestions(
+        &mut self,
+        s: &CommandSuggestion,
+        start: usize,
+        matches: Vec<String>,
+    ) -> Result<Step, Fail> {
+        let line = s.text.strip_prefix('/').unwrap_or(&s.text);
+        let answer = suggestions(s.id, &s.text, line, start, matches);
         queue_out(&mut self.client, &*self.module, Phase::Play, &answer)?;
         Ok(Step::Drop)
     }
@@ -2460,7 +2493,7 @@ impl Play<'_> {
     fn backend_step(&mut self, f: &RawFrame) -> Result<Step, Fail> {
         let module = self.module.clone();
         let cb = ctx(&*module, Direction::Clientbound);
-        let Some(phase) = self.backend.as_ref().map(|b| b.phase) else {
+        let Some((phase, joined)) = self.backend.as_ref().map(|b| (b.phase, b.joined)) else {
             return Ok(Step::Drop);
         };
         let kind = module.packet_kind(phase, Direction::Clientbound, f.id);
@@ -2515,6 +2548,21 @@ impl Play<'_> {
                 }
             }
             (_, Some(PacketKind::CustomPayload)) => self.backend_payload(phase, f)?,
+            // Nothing else before its play `login`: the client has no level
+            // yet, and vanilla disconnects on a world packet. Pumpkin 0.2.0
+            // can send a sound first (it adds a joining player to the world
+            // before the login). Velocity's TransitionSessionHandler drops them too.
+            (Phase::Play, _) if !joined => {
+                if let Some(b) = &self.backend
+                    && self.proxy.first_report("before_login", &b.name)
+                {
+                    warn!(
+                        "{} sent play packets before its login; they are dropped, the client has no world yet",
+                        b.name
+                    );
+                }
+                Step::Drop
+            }
             (Phase::Play, Some(PacketKind::PlayerPosition)) => {
                 // A teleport the client must confirm: PumboBridge holds the
                 // next one until then ("Wrong teleport id" otherwise).
@@ -2883,6 +2931,43 @@ fn releases(names: &[String]) -> String {
         (Some(a), Some(b)) if a != b => format!("{a}–{b}"),
         (Some(a), _) => a.clone(),
         _ => "?".into(),
+    }
+}
+
+/// The options that start with `word`, ignoring case.
+fn starting_with(options: Vec<String>, word: &str) -> Vec<String> {
+    let word = word.to_ascii_lowercase();
+    options
+        .into_iter()
+        .filter(|o| o.to_ascii_lowercase().starts_with(&word))
+        .collect()
+}
+
+/// The answer to request `id` for `text`; `line` is `text` without the slash
+/// and `start` where the replaced word begins in it.
+fn suggestions(
+    id: i32,
+    text: &str,
+    line: &str,
+    start: usize,
+    matches: Vec<String>,
+) -> CommandSuggestions {
+    // Brigadier counts UTF-16 units of the whole text, slash included.
+    let start = text.len() - line.len() + start;
+    let before = text.get(..start).unwrap_or_default();
+    let word = text.get(start..).unwrap_or_default();
+    let units = |t: &str| i32::try_from(t.encode_utf16().count()).unwrap_or(i32::MAX);
+    CommandSuggestions {
+        id,
+        start: units(before),
+        length: units(word),
+        matches: matches
+            .into_iter()
+            .map(|text| Suggestion {
+                text,
+                tooltip: None,
+            })
+            .collect(),
     }
 }
 

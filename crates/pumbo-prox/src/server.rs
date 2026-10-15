@@ -163,6 +163,8 @@ pub enum SessionCmd {
         data: Vec<u8>,
         to_backend: bool,
     },
+    /// A tab completion answer that came after the request (from a plugin).
+    Suggestions(Box<pumbo_protocol::packets::play::CommandSuggestions>),
     /// Profile property change for the next forwarding (`None` value: remove).
     Property {
         name: String,

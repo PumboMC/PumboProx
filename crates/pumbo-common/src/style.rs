@@ -36,10 +36,28 @@ use crate::rich::{Click, Line, Segment, Text};
 use crate::text::{self, Args, Color, Named, Style};
 use crate::time::Term;
 
-/// Pumbo orange: plugin names in prefixes and headers.
+/// Pumbo orange: "Pumbo" at the start of every plugin name.
 pub const BRAND: Color = Color::Rgb(0xF28C28);
-/// Commands in help pages and usage lines.
+/// Commands inside messages (`/login <password>`).
 pub const COMMAND: Color = Color::Rgb(0xFFC27A);
+/// Field labels in info views (`Weight:`): the light orange of [`COMMAND`],
+/// which a plugin with its own accent no longer uses for command words.
+pub const LABEL: Color = COMMAND;
+
+/// The colour of each plugin: the second word of its name (`Perms` in
+/// `PumboPerms`), its command words in help and usage lines ([`words`]) and
+/// the titles of its views ([`title`]). The plugins that still have
+/// [`BRAND`] keep [`COMMAND`] for command words.
+pub mod accent {
+    use super::{BRAND, Color};
+
+    /// A warm yellow, apart from the warning yellow (`&e`, #FFFF55) and from
+    /// the orange of "Pumbo" next to it.
+    pub const PERMS: Color = Color::Rgb(0xFFD54F);
+    pub const BANS: Color = BRAND;
+    pub const FILTER: Color = BRAND;
+    pub const AUTH: Color = BRAND;
+}
 /// Required arguments (`<player>`).
 pub const ARGUMENT: Color = Color::Named(Named::White);
 /// Optional arguments (`[reason]`).
@@ -82,9 +100,58 @@ pub fn code(color: Color) -> String {
     }
 }
 
-/// The standard text of a plugin's `prefix` message: `&#f28c28PumboBans &8» `.
-pub fn prefix_code(plugin: &str) -> String {
-    format!("{}{plugin} {}» ", code(BRAND), code(MUTED))
+/// `PumboPerms` -> (`Pumbo`, `Perms`).
+fn split_name(plugin: &str) -> (&str, &str) {
+    plugin.strip_prefix("Pumbo").map_or(("", plugin), |rest| ("Pumbo", rest))
+}
+
+/// The standard text of a plugin's `prefix` message: "Pumbo" in [`BRAND`], the
+/// rest of the name in the plugin's `accent`, then `» ` (`&#f28c28PumboBans &8» `
+/// while the accent is the brand colour).
+pub fn prefix_code(plugin: &str, accent: Color) -> String {
+    let (pumbo, rest) = split_name(plugin);
+    let rest_code = if accent == BRAND { String::new() } else { code(accent) };
+    format!("{}{pumbo}{rest_code}{rest} {}» ", code(BRAND), code(MUTED))
+}
+
+/// The short tag in front of every chat line, as LuckPerms does with `[LP]`:
+/// the first letter of "Pumbo" in [`BRAND`] and the first letter of the rest of
+/// the name in the plugin's `accent`, both bold, in plain dark grey brackets (a
+/// colour code ends bold: `&8[&#f28c28&lP&#ffd54f&lP&8] ` for PumboPerms).
+pub fn tag_code(plugin: &str, accent: Color) -> String {
+    let (pumbo, rest) = split_name(plugin);
+    let first = |s: &str| s.chars().next().map(String::from).unwrap_or_default();
+    format!("{m}[{}&l{}{}&l{}{m}] ", code(BRAND), first(pumbo), code(accent), first(rest), m = code(MUTED))
+}
+
+/// A line `width` pixels wide, ruled across like a header or a page bar: a
+/// struck-through rule in `left`, the `centre` text, the rule again in `right`
+/// (PumboPerms: [`BRAND`] and its accent, the colours of `[PP]`). Without
+/// centre text it is one rule in the two colours; a centre wider than the
+/// line is cut to it.
+#[expect(clippy::integer_division, reason = "a rule is made of whole spaces")]
+pub fn bar(centre: Line, width: u32, left: Color, right: Color) -> Line {
+    let space = crate::rich::text_width(" ", false).max(1);
+    let gap = if centre.is_empty() { 0 } else { 2 * space };
+    let centre = if centre.width() + gap > width { centre.truncate(width.saturating_sub(gap)) } else { centre };
+    let side = (width.saturating_sub(centre.width() + gap) / 2 / space) as usize;
+    let rule = |color: Color| {
+        let mut style = Style::colored(color);
+        style.strikethrough = true;
+        Segment::new(" ".repeat(side), style)
+    };
+    let mut line = Line::from(rule(left));
+    if !centre.is_empty() {
+        line = line.with(Segment::new(" ", Style::default())).append(centre).with(Segment::new(" ", Style::default()));
+    }
+    line.with(rule(right))
+}
+
+/// A plugin name in bold for headers: "Pumbo" in [`BRAND`], the rest in `accent`.
+pub fn name(plugin: &str, accent: Color) -> Line {
+    let (pumbo, rest) = split_name(plugin);
+    Line::from(Segment::new(pumbo, Style::colored(BRAND).bolded()))
+        .with(Segment::new(rest, Style::colored(accent).bolded()))
 }
 
 /// The plugin's `prefix` message as a line (empty when it is not set).
@@ -97,16 +164,30 @@ pub fn prefix(lang: &Lang) -> Line {
 /// the older style do not get the prefix twice. A disabled (empty) message
 /// gives empty text, which the platform layer does not send.
 pub fn message(lang: &Lang, tone: Tone, key: &str, args: &Args) -> Text {
+    colored(lang, tone.color(), key, args)
+}
+
+/// The title line of a view (`Group vip`): like [`message`], in the plugin's
+/// `accent`; highlighted values keep their colour.
+pub fn title(lang: &Lang, accent: Color, key: &str, args: &Args) -> Text {
+    colored(lang, accent, key, args)
+}
+
+fn colored(lang: &Lang, color: Color, key: &str, args: &Args) -> Text {
     let mut args = args.clone();
     if !args.has("prefix") {
         args.set("prefix", "");
     }
-    toned(lang, tone, &lang.format(key, &args))
+    prefixed(lang, color, &lang.format(key, &args))
 }
 
 /// Like [`message`] for text that is already formatted.
 pub fn toned(lang: &Lang, tone: Tone, body: &str) -> Text {
-    let mut text = Text::parse_with(body, Style::colored(tone.color()));
+    prefixed(lang, tone.color(), body)
+}
+
+fn prefixed(lang: &Lang, color: Color, body: &str) -> Text {
+    let mut text = Text::parse_with(body, Style::colored(color));
     if let Some(first) = text.lines.first_mut() {
         let rest = std::mem::take(first);
         *first = prefix(lang).append(rest);
@@ -144,18 +225,25 @@ fn highlight(v: impl fmt::Display, color: Color) -> String {
     format!("{}{}&r", code(color), text::escape(&v.to_string()))
 }
 
+/// The colour of command words in help and usage lines: the plugin's
+/// `accent`, or [`COMMAND`] while the accent is still the brand colour.
+pub fn words(accent: Color) -> Color {
+    if accent == BRAND { COMMAND } else { accent }
+}
+
 /// A command with its arguments, coloured by kind: `<required>` in
 /// [`ARGUMENT`], `[optional]` in [`OPTIONAL`], words typed as they are in
-/// [`COMMAND`]. `/pumbobans ban <player> [reason...]`.
-pub fn syntax(line: &str) -> Line {
+/// [`words`] of the plugin's `accent`. `/pumbobans ban <player> [reason...]`.
+pub fn syntax(line: &str, accent: Color) -> Line {
+    let accent = words(accent);
     let mut out = Line::new();
     let mut run = String::new();
-    let mut run_color = COMMAND;
+    let mut run_color = accent;
     for (i, token) in line.split_whitespace().enumerate() {
         let color = match token.chars().next() {
             Some('<') => ARGUMENT,
             Some('[') => OPTIONAL,
-            _ => COMMAND,
+            _ => accent,
         };
         if color != run_color && !run.is_empty() {
             out.push(Segment::colored(std::mem::take(&mut run), run_color));
@@ -210,17 +298,17 @@ fn with_actions(text: Text, click: Click, hover: Option<Text>) -> Text {
 }
 
 /// Reply to an unknown subcommand: a short error with a hint to use
-/// `help_command`; a click runs it.
-pub fn unknown_subcommand(lang: &Lang, name: &str, help_command: &str) -> Text {
-    let args = Args::new().arg(value(name)).arg(command(help_command));
+/// `help_command` (in [`words`] of the plugin's `accent`); a click runs it.
+pub fn unknown_subcommand(lang: &Lang, accent: Color, name: &str, help_command: &str) -> Text {
+    let args = Args::new().arg(value(name)).arg(highlight(help_command, words(accent)));
     let text = error(lang, "command-unknown", &args);
     with_actions(text, Click::Run(help_command.to_string()), tooltip(lang, "command-unknown-hover"))
 }
 
 /// Reply to a command with missing arguments: `Usage: <usage>`, coloured like
 /// the help; a click types the command.
-pub fn usage(lang: &Lang, usage: &str) -> Text {
-    let shown = format!("{}&r", syntax(usage).legacy());
+pub fn usage(lang: &Lang, accent: Color, usage: &str) -> Text {
+    let shown = format!("{}&r", syntax(usage, accent).legacy());
     let text = error(lang, "command-usage", &Args::new().arg(shown));
     with_actions(text, Click::Suggest(suggestion(usage)), tooltip(lang, "command-usage-hover"))
 }
@@ -230,14 +318,11 @@ pub fn usage(lang: &Lang, usage: &str) -> Text {
 /// the console.
 pub fn version<L: fmt::Display, V: fmt::Display>(
     plugin: &str,
+    accent: Color,
     version: &str,
     rows: impl IntoIterator<Item = (L, V)>,
 ) -> Text {
-    let mut text = Text::from(
-        Line::new()
-            .with(Segment::new(plugin, Style::colored(BRAND).bolded()))
-            .with(Segment::colored(format!(" {version}"), VALUE)),
-    );
+    let mut text = Text::from(name(plugin, accent).with(Segment::colored(format!(" {version}"), VALUE)));
     for (label, value) in rows {
         text.push(
             Line::new()
@@ -369,14 +454,49 @@ mod tests {
     }
 
     #[test]
-    fn prefix_code_uses_the_brand_colour() {
-        let spans = parse(&prefix_code("PumboBans"));
-        assert_eq!(spans[0].text, "PumboBans ");
-        assert_eq!(spans[0].style.color, Some(BRAND));
-        assert_eq!(spans[1].text, "» ");
-        assert_eq!(spans[1].style.color, Some(MUTED));
+    fn prefix_colors_pumbo_and_perms() {
+        let yellow = Color::Named(Named::Yellow);
+        let spans = parse(&prefix_code("PumboPerms", yellow));
+        let parts: Vec<_> = spans.iter().map(|s| (s.text.as_str(), s.style.color)).collect();
+        assert_eq!(parts, vec![("Pumbo", Some(BRAND)), ("Perms ", Some(yellow)), ("» ", Some(MUTED))]);
+        // an accent equal to the brand colour keeps the text the plugins ship today
+        assert_eq!(prefix_code("PumboBans", BRAND), "&#f28c28PumboBans &8» ");
+        let spans = parse(&prefix_code("PumboPerms", accent::PERMS));
+        assert!(spans[0].text.starts_with("Pumbo") && spans[0].style.color == Some(BRAND));
+        assert!(spans.iter().any(|s| s.text.contains("Perms") && s.style.color == Some(accent::PERMS)));
+        let header: Vec<_> = name("PumboPerms", yellow).segments.into_iter().map(|s| (s.text, s.style)).collect();
+        assert_eq!(
+            header,
+            vec![("Pumbo".into(), Style::colored(BRAND).bolded()), ("Perms".into(), Style::colored(yellow).bolded())]
+        );
         assert_eq!(code(BRAND), "&#f28c28");
         assert_eq!(code(ERROR), "&c");
+        assert_eq!(prefix_code("PumboPerms", accent::PERMS), "&#f28c28Pumbo&#ffd54fPerms &8» ");
+        assert_eq!(tag_code("PumboPerms", accent::PERMS), "&8[&#f28c28&lP&#ffd54f&lP&8] ");
+    }
+
+    #[test]
+    fn perms_yellow_is_its_own_colour() {
+        // compared as RGB: Color::Rgb(0xFFFF55) would be the warning yellow too
+        for (other, what) in [(BRAND, "brand"), (WARN, "warning"), (LABEL, "label"), (COMMAND, "command")] {
+            assert_ne!(accent::PERMS.rgb(), other.rgb(), "PERMS looks like the {what} colour");
+        }
+        // the plugins without their own colour keep the light orange for command words
+        assert_eq!(words(accent::PERMS), accent::PERMS);
+        assert_eq!(words(accent::BANS), COMMAND);
+    }
+
+    #[test]
+    fn title_in_the_accent() {
+        let en = lang("en");
+        let t = title(&en, accent::PERMS, "lines", &Args::from([value("vip")]));
+        assert_eq!(t.plain(), "PumboTest » One vip\ntwo");
+        let parts: Vec<_> = t.lines[0].segments.iter().map(|s| (s.text.as_str(), s.style.color)).collect();
+        assert_eq!(
+            parts,
+            vec![("PumboTest ", Some(BRAND)), ("» ", Some(MUTED)), ("One ", Some(accent::PERMS)), ("vip", Some(VALUE))]
+        );
+        assert_eq!(t.lines[1].segments[0].style.color, Some(accent::PERMS));
     }
 
     #[test]
@@ -422,39 +542,58 @@ mod tests {
 
     #[test]
     fn syntax_colours() {
-        let line = syntax("/pumbobans ban <player> [reason...]");
+        let line = syntax("/pumbobans ban <player> [reason...]", accent::BANS);
         let parts: Vec<_> = line.segments.iter().map(|s| (s.text.as_str(), s.style.color)).collect();
         assert_eq!(
             parts,
             vec![("/pumbobans ban ", Some(COMMAND)), ("<player> ", Some(ARGUMENT)), ("[reason...]", Some(OPTIONAL))]
         );
-        assert_eq!(syntax("/x import authme <file>").segments[0].text, "/x import authme ");
+        // a plugin with its own colour gets it for its command words
+        let yellow = Color::Named(Named::Yellow);
+        assert_eq!(syntax("/pp user <player>", yellow).segments[0].style.color, Some(yellow));
+        assert_eq!(syntax("/x import authme <file>", COMMAND).segments[0].text, "/x import authme ");
         assert_eq!(suggestion("/pumbobans ban <player> [reason...]"), "/pumbobans ban ");
         assert_eq!(suggestion("/pumboauth reload"), "/pumboauth reload");
-        assert!(syntax("").segments.is_empty());
+        assert!(syntax("", COMMAND).segments.is_empty());
     }
 
     #[test]
     fn standard_replies() {
         let pl = lang("pl");
-        let t = unknown_subcommand(&pl, "foo", "/pumbotest help");
+        let t = unknown_subcommand(&pl, accent::BANS, "foo", "/pumbotest help");
         assert_eq!(t.plain(), "PumboTest » Nieznana podkomenda foo. Użyj /pumbotest help.");
         let line = &t.lines[0];
         assert!(line.segments.iter().all(|s| s.click == Some(Click::Run("/pumbotest help".into()))));
         assert_eq!(line.segments[0].hover.as_ref().map(Text::plain).as_deref(), Some("Kliknij, żeby zobaczyć komendy"));
         assert!(line.segments.iter().any(|s| s.text == "/pumbotest help" && s.style.color == Some(COMMAND)));
 
-        let t = usage(&pl, "/pumbotest ban <gracz> [powód]");
+        let t = usage(&pl, COMMAND, "/pumbotest ban <gracz> [powód]");
         assert_eq!(t.plain(), "PumboTest » Użycie: /pumbotest ban <gracz> [powód]");
         assert!(t.lines[0].segments.iter().all(|s| s.click == Some(Click::Suggest("/pumbotest ban ".into()))));
         assert!(t.lines[0].segments.iter().any(|s| s.text.starts_with("<gracz>") && s.style.color == Some(ARGUMENT)));
 
         let v = version(
             "PumboAuth",
+            accent::AUTH,
             "0.4.0",
             [(pl.get("version-platform"), "Pumpkin 0.2.0 (26.3)"), ("Tryb".into(), "standalone")],
         );
         assert_eq!(v.plain(), "PumboAuth 0.4.0\nPlatforma: Pumpkin 0.2.0 (26.3)\nTryb: standalone");
         assert!(v.lines[0].segments[0].style.bold);
+    }
+
+    #[test]
+    fn bar_is_ruled_in_two_colours() {
+        let centre = Line::from(Segment::colored("2/5", VALUE));
+        let line = bar(centre.clone(), 300, BRAND, accent::PERMS);
+        assert!(line.width() <= 300 && line.width() + 8 >= 300, "{}", line.width());
+        let (first, last) = (&line.segments[0], line.segments.last().unwrap());
+        assert!(first.style.strikethrough && first.style.color == Some(BRAND) && first.text.trim().is_empty());
+        assert!(last.style.strikethrough && last.style.color == Some(accent::PERMS));
+        assert_eq!(first.text.len(), last.text.len());
+        assert!(line.plain().contains(" 2/5 "));
+        let plain = bar(Line::new(), 300, BRAND, accent::PERMS);
+        assert_eq!(plain.segments.len(), 2);
+        assert!(bar(Line::from(Segment::colored("x".repeat(200), VALUE)), 100, BRAND, BRAND).width() <= 100);
     }
 }

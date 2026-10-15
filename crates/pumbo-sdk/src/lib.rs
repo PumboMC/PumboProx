@@ -26,6 +26,8 @@
 //!   [`lang::Lang`]: translations with the language of each player,
 //!   [`describe::Description`]: machine-readable description for the host.
 //! - [`testing`]: a fake host for `cargo test` without WASM.
+//! - tab completion of the plugin's commands: [`Plugin::on_suggest`] with
+//!   `plugin!(T, suggest)`, [`suggest::from_table`] for usage lines.
 //!
 //! Plugins run single-threaded: never block (no `std::thread::sleep`, no long
 //! synchronous I/O); use [`scheduler::sleep`] and other async functions.
@@ -44,12 +46,26 @@ pub mod bindings {
     });
 }
 
+/// Bindings of the optional `suggest` export (world `suggester`).
+#[allow(unsafe_code, clippy::all, missing_docs)]
+pub mod suggest_bindings {
+    wit_bindgen::generate!({
+        path: "../../wit",
+        world: "suggester",
+        pub_export_macro: true,
+        export_macro_name: "__export_suggest",
+        default_bindings_module: "pumbo_sdk::suggest_bindings",
+        with: { "pumbo:prox/types@0.1.0": crate::bindings::pumbo::prox::types },
+    });
+}
+
 pub mod config;
 pub mod describe;
 mod embed;
 mod host;
 pub mod lang;
 pub mod service;
+pub mod suggest;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod testing;
 pub mod text;
@@ -176,6 +192,20 @@ pub trait Plugin: Default + 'static {
 
     async fn on_command(&self, e: CommandEvent) {}
 
+    /// Tab completion of this plugin's commands, exported only with
+    /// `plugin!(T, suggest)`. `name` as in [`CommandEvent`], `args` the rest
+    /// of the line as typed; the answers replace the last word.
+    /// [`suggest::from_table`] completes from usage lines. `None`: online
+    /// player names.
+    async fn on_suggest(
+        &self,
+        player: PlayerId,
+        name: String,
+        args: String,
+    ) -> Option<Vec<String>> {
+        None
+    }
+
     async fn on_plugin_message(&self, p: PlayerId, channel: String, data: Vec<u8>) -> bool {
         true
     }
@@ -260,9 +290,30 @@ pub mod __private {
 }
 
 /// Exports a [`Plugin`] type to the host. The type needs `Default`; one
-/// instance lives as long as the WASM instance.
+/// instance lives as long as the WASM instance. `plugin!(T, suggest)` also
+/// exports [`Plugin::on_suggest`] (tab completion of the plugin's commands).
 #[macro_export]
 macro_rules! plugin {
+    ($t:ty, suggest) => {
+        $crate::plugin!($t);
+
+        #[cfg(target_arch = "wasm32")]
+        const _: () = {
+            use $crate::Plugin as _;
+
+            impl $crate::suggest_bindings::exports::pumbo::prox::suggest::Guest for __PumboExport {
+                async fn suggest(
+                    player: u64,
+                    name: ::std::string::String,
+                    args: ::std::string::String,
+                ) -> ::core::option::Option<::std::vec::Vec<::std::string::String>> {
+                    __pumbo_instance().on_suggest(player, name, args).await
+                }
+            }
+
+            $crate::suggest_bindings::__export_suggest!(__PumboExport with_types_in $crate::suggest_bindings);
+        };
+    };
     ($t:ty) => {
         #[doc(hidden)]
         #[allow(dead_code)]
