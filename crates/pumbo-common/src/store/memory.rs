@@ -58,6 +58,15 @@ fn scan(tables: &Tables, table: &str, prefix: &str, visit: &mut dyn FnMut(&str, 
     }
 }
 
+fn scan_rev(tables: &Tables, table: &str, visit: &mut dyn FnMut(&str, &[u8]) -> bool) {
+    let Some(t) = tables.get(table) else { return };
+    for (k, v) in t.iter().rev() {
+        if !visit(k, v) {
+            break;
+        }
+    }
+}
+
 fn len(tables: &Tables, table: &str) -> u64 {
     tables.get(table).map_or(0, |t| t.len() as u64)
 }
@@ -69,6 +78,11 @@ impl ReadOps for View<'_> {
 
     fn scan(&self, table: &str, prefix: &str, visit: &mut dyn FnMut(&str, &[u8]) -> bool) -> Result<()> {
         scan(self.0, table, prefix, visit);
+        Ok(())
+    }
+
+    fn scan_rev(&self, table: &str, visit: &mut dyn FnMut(&str, &[u8]) -> bool) -> Result<()> {
+        scan_rev(self.0, table, visit);
         Ok(())
     }
 
@@ -84,6 +98,11 @@ impl ReadOps for Tx {
 
     fn scan(&self, table: &str, prefix: &str, visit: &mut dyn FnMut(&str, &[u8]) -> bool) -> Result<()> {
         scan(&self.0, table, prefix, visit);
+        Ok(())
+    }
+
+    fn scan_rev(&self, table: &str, visit: &mut dyn FnMut(&str, &[u8]) -> bool) -> Result<()> {
+        scan_rev(&self.0, table, visit);
         Ok(())
     }
 
