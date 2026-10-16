@@ -18,12 +18,15 @@
 //! `<network dir>/footprint.log`, `PERMS_LIVE_N13_SECS`, 3600) run only when
 //! named. Their bots (`PpOp7x`, `PpPlain7x`, `PpPend7x`, `PpSlow7x`) must be
 //! ops on survival: Pumpkin kicks anyone else who sends more than about one
-//! command a second.
+//! command a second. N16 runs only when named, after the script gave the
+//! proxy a new database with 400 000 names and `memory-mb: 64`.
 //! `soak` is the long run of `tools/perms-soak.sh` (its variables are on
 //! the step).
 //! Solo steps: J1-J7; J8a and J8b are the two halves of J8 (data made by the
 //! released 0.1.2-beta, then read by this build), the script swaps the file
-//! between them. Logs are `<dir>/<proxy|lobby|survival>/console.log` and
+//! between them. J10 runs only when named, on a lone Pumpkin the script gave
+//! the same database and `max_memory_mb = 64` for PumboPerms.
+//! Logs are `<dir>/<proxy|lobby|survival>/console.log` and
 //! `<server dir>/console.log`. Each step prints `PASS <step>` or
 //! `FAIL <step>: <why>`; any failure exits with 1.
 //! `PUMBO_PROTOCOL` (777) is the protocol of the bots. Bans go through `/pb`:
@@ -56,6 +59,10 @@ const STRANGER: &str = "PpNew7x";
 /// per address by default and the admin takes one.
 const LOAD: [&str; 4] = [OP, PLAIN, PENDING, SLOW];
 const LOGS: [&str; 3] = ["proxy", "lobby", "survival"];
+/// Names in the database of N16 and J10, as `names_fixture` of
+/// pumbo-perms-core writes them: `Player<i>` with the UUID
+/// `00000000-0000-4000-8000-<i in 12 digits>`.
+const NAMES: u32 = 400_000;
 
 fn env_secs(var: &str, default: u64) -> u64 {
     std::env::var(var)
@@ -136,7 +143,7 @@ impl Live {
     }
 
     /// No trapped plugin call on the proxy and no failed Wasm call on the
-    /// servers since `ends`.
+    /// servers since `ends`. A lone Pumpkin has one log: give one end.
     fn no_plugin_errors(&self, ends: &[usize]) -> Step {
         for (who, from) in LOGS.iter().zip(ends) {
             let log = self.log(who);
@@ -145,6 +152,7 @@ impl Live {
                 l.contains("time budget exceeded") || (l.contains("Wasm") && l.contains("failed"))
             };
             if let Some(line) = new.lines().find(bad) {
+                let who = if self.solo { "server" } else { *who };
                 return Err(format!("the {who} log has: {line}"));
             }
         }
@@ -679,16 +687,17 @@ async fn n11p(l: &Live) -> Step {
     n10p(l).await
 }
 
+/// The last "database opened in <n> ms" of PumboPerms in a log.
+fn opened_ms(log: &str) -> Option<u64> {
+    log.lines().rev().find_map(|line| {
+        let (_, after) = line.split_once("database opened in ")?;
+        after.split_whitespace().next()?.parse().ok()
+    })
+}
+
 async fn opened_fast(l: &Live) -> Step {
     l.wait_log("proxy", "loaded:", 60).await?;
-    let log = l.log("proxy");
-    let ms: u64 = log
-        .lines()
-        .rev()
-        .find_map(|line| {
-            let (_, after) = line.split_once("database opened in ")?;
-            after.split_whitespace().next()?.parse().ok()
-        })
+    let ms = opened_ms(&l.log("proxy"))
         .ok_or("the proxy log does not say how long opening the database took")?;
     println!("N11: PumboPerms opened its database in {ms} ms after the SIGKILL");
     if ms >= 1000 {
@@ -1088,6 +1097,48 @@ async fn n14(l: &Live) -> Step {
     Ok(())
 }
 
+/// Waits until PumboPerms opened its database (in the log of `who`) and
+/// prints how long that took with the `NAMES` of N16 and J10.
+async fn print_opened(l: &Live, step: &str, who: &str) -> Step {
+    l.wait_log(who, "database opened in ", 60).await?;
+    let ms = opened_ms(&l.log(who))
+        .ok_or_else(|| format!("the {who} log does not say how long opening the database took"))?;
+    println!("{step}: database with {NAMES} names opened in {ms} ms");
+    Ok(())
+}
+
+/// `/pp user` finds the last of the `NAMES`, with its UUID.
+async fn last_name_found(admin: &mut Player) -> Step {
+    let last = NAMES - 1;
+    let uuid = format!("00000000-0000-4000-8000-{last:012}");
+    let line = format!("pp user Player{last} info");
+    let lines = ask(admin, &line).await?;
+    match lines.iter().any(|m| m.contains(&uuid)) {
+        true => Ok(()),
+        false => Err(format!("/{line} does not show {uuid}: {lines:?}")),
+    }
+}
+
+/// After the script gave the proxy a new database with `NAMES` names and
+/// `memory-mb: 64`, and started the network again with fresh logs. The new
+/// database has no ledger of permissions.yml, so PumboPerms imports the file
+/// again; the admin's `*` comes from it.
+async fn n16(l: &Live) -> Step {
+    print_opened(l, "N16", "proxy").await?;
+    l.wait_log("proxy", "Imported file", 60).await?;
+    let mut admin = l.bot(ADMIN).await?;
+    last_name_found(&mut admin).await?;
+    let (rss, footprint) = memory(&l.pid("proxy")?);
+    let kb = |v: Option<u64>| v.map_or("?".into(), |k| k.to_string());
+    println!(
+        "N16: proxy memory {} KB RSS, {} KB footprint",
+        kb(rss),
+        kb(footprint)
+    );
+    admin.close().await;
+    l.no_plugin_errors(&[0; LOGS.len()])
+}
+
 // ------------------------------------------------------------------ solo
 
 async fn j1(l: &Live) -> Step {
@@ -1340,6 +1391,17 @@ async fn j8_same(admin: &mut Player) -> Step {
     Ok(())
 }
 
+/// A lone Pumpkin with a database of `NAMES` names and `max_memory_mb = 64`
+/// for PumboPerms (the script writes both): the database opens, the last
+/// name resolves and no Wasm call fails.
+async fn j10(l: &Live) -> Step {
+    print_opened(l, "J10", "server").await?;
+    let mut admin = l.bot(ADMIN).await?;
+    last_name_found(&mut admin).await?;
+    admin.close().await;
+    l.no_plugin_errors(&[0])
+}
+
 // ------------------------------------------------------------------ main
 
 fn solo_uuid(nick: &str) -> Option<Uuid> {
@@ -1368,6 +1430,7 @@ async fn run(l: &Live, step: &str) -> Step {
         "N13" => n13(l).await,
         "N14" => n14(l).await,
         "N15" => n15(l).await,
+        "N16" => n16(l).await,
         "soak" => soak(l).await,
         "J1" => j1(l).await,
         "J2" => j2(l).await,
@@ -1378,6 +1441,7 @@ async fn run(l: &Live, step: &str) -> Step {
         "J7" => j7(l).await,
         "J8a" => j8a(l).await,
         "J8b" => j8b(l).await,
+        "J10" => j10(l).await,
         other => Err(format!("unknown step {other}")),
     }
 }
