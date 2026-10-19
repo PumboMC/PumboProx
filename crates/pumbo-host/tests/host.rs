@@ -162,6 +162,25 @@ async fn endless_loop_is_interrupted() {
     .await;
 }
 
+/// Loading has its own budget: `init` that works 600 ms without calling the
+/// host loads (`load-budget-ms`, 2 s), the same work in a command is stopped
+/// (`budget-ms`, 200 ms), and the restart after it loads again.
+#[tokio::test(flavor = "multi_thread")]
+async fn loading_has_its_own_budget() {
+    let env = Env::new("loadbudget");
+    env.plugin("busy", "test", r#"events: [chat]"#);
+    env.config_file("busy", "config.yml", "busy_init_ms: 600\n");
+    let (host, _) = start(env.host_config("")).await;
+    let slot = host.plugin("busy").unwrap();
+    assert_eq!(slot.status(), Status::Running);
+    host.player_joined(player(1, "a", Some("lobby")));
+    assert_eq!(
+        fail_by(&host, "busy", CommandSender::Player(1), "/busy 600").await,
+        CommandOutcome::Handled
+    );
+    wait_for("restart of busy", LONG, || slot.status() == Status::Running).await;
+}
+
 /// A panic during a gate denies the player (never passes), the plugin
 /// restarts; repeated failures disable it and close logins until a reload.
 #[tokio::test(flavor = "multi_thread")]
