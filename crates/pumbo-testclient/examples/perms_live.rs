@@ -29,7 +29,10 @@
 //! Logs are `<dir>/<proxy|lobby|survival>/console.log` and
 //! `<server dir>/console.log`. Each step prints `PASS <step>` or
 //! `FAIL <step>: <why>`; any failure exits with 1.
-//! `PUMBO_PROTOCOL` (777) is the protocol of the bots. Bans go through `/pb`:
+//! `PUMBO_PROTOCOL` (777) is the protocol of the bots. On Pumpkin 0.1.0-dev
+//! (776) every player gets the whole command tree, so N4, N5, N5b and N10
+//! skip their checks of the tree there and keep the rest (refused commands,
+//! `/pp` answers). Bans go through `/pb`:
 //! on Pumpkin 0.2.0 the `/ban` shortcut of PumboBans keeps the vanilla
 //! permission (`minecraft:command.ban`) in the command tree.
 
@@ -159,6 +162,20 @@ impl Live {
         Ok(())
     }
 
+    /// Whether the command tree shows a player's rights. Pumpkin 0.1.0-dev
+    /// (protocol 776) sends every player its whole tree and checks the rights
+    /// only when a command runs (`command/client_suggestions.rs`), so there
+    /// `step` checks the refused command alone and says so.
+    fn tree_shows_rights(&self, step: &str) -> bool {
+        if self.module.protocol() != ProtocolVersion::V776 {
+            return true;
+        }
+        println!(
+            "{step}: Pumpkin 0.1.0-dev sends every player its whole command tree, so the step checks the refused command, not the tree"
+        );
+        false
+    }
+
     fn pid(&self, who: &str) -> Result<String, String> {
         let path = self.dir.join(who).join("pid");
         std::fs::read_to_string(&path)
@@ -172,6 +189,25 @@ async fn pump(p: &mut Player, ms: u64, until: impl FnMut(&Player) -> bool) -> Re
     p.pump(Duration::from_millis(ms), until)
         .await
         .map_err(|e| format!("{}: {e}", p.opts.name))
+}
+
+/// Waits up to 5 s for the server to announce the join of `p`: Pumpkin
+/// 0.1.0-dev finishes a join, and so learns the name, some time after the
+/// play login.
+async fn until_joined(p: &mut Player) -> Step {
+    match pump(p, 5000, |p| {
+        p.messages
+            .iter()
+            .any(|m| m.contains("multiplayer.player.joined"))
+    })
+    .await?
+    {
+        true => Ok(()),
+        false => Err(format!(
+            "{}: no join message 5 s after the login",
+            p.opts.name
+        )),
+    }
 }
 
 /// Keeps every bot answering while time passes.
@@ -346,7 +382,8 @@ async fn n3(l: &Live) -> Step {
 async fn n4(l: &Live) -> Step {
     let mut admin = l.bot(ADMIN).await?;
     let mut moderator = l.on_survival(MODERATOR).await?;
-    if !tree_has(&moderator, "tempban") {
+    let tree = l.tree_shows_rights("N4");
+    if tree && !tree_has(&moderator, "tempban") {
         return Err(format!("{MODERATOR} has no /ban before the change"));
     }
     let trees = saw(&moderator, Phase::Play, PacketKind::Commands);
@@ -355,12 +392,16 @@ async fn n4(l: &Live) -> Step {
         &format!("pp user {MODERATOR} parent remove mod"),
     )
     .await?;
+    // PumboBridge sends the command list again once the change is set.
     let fresh = pump(&mut moderator, 2000, |p| {
-        saw(p, Phase::Play, PacketKind::Commands) > trees && !tree_has(p, "tempban")
+        saw(p, Phase::Play, PacketKind::Commands) > trees && !(tree && tree_has(p, "tempban"))
     })
     .await?;
     if !fresh {
-        return Err(format!("{MODERATOR} still has /ban 2 s after the change"));
+        return Err(match tree {
+            true => format!("{MODERATOR} still has /ban 2 s after the change"),
+            false => format!("{MODERATOR} got no command list 2 s after the change"),
+        });
     }
     must_fail(&mut moderator, &format!("pb ban {VICTIM} test")).await?;
     moderator.close().await;
@@ -377,10 +418,11 @@ async fn n5(l: &Live) -> Step {
         return Err(format!("the reload was not confirmed: {lines:?}"));
     }
     // Online through the restart: the tree never offers /ban.
+    let tree = l.tree_shows_rights("N5");
     let until = tokio::time::Instant::now() + Duration::from_secs(5);
     while tokio::time::Instant::now() < until {
         pump(&mut admin, 100, |_| false).await?;
-        if pump(&mut moderator, 100, |p| tree_has(p, "tempban")).await? {
+        if pump(&mut moderator, 100, |p| tree && tree_has(p, "tempban")).await? {
             return Err(format!("{MODERATOR} got /ban back during the reload"));
         }
     }
@@ -403,7 +445,7 @@ async fn n5b(l: &Live) -> Step {
         for s in ["lobby", "survival"] {
             l.log_lacks(s, "takes over the permissions here again")?;
         }
-        if tree_has(&moderator, "tempban") {
+        if l.tree_shows_rights("N5b") && tree_has(&moderator, "tempban") {
             return Err(format!("{MODERATOR} got /ban back with the provider down"));
         }
         must_fail(&mut moderator, &format!("pb ban {VICTIM} test")).await?;
@@ -719,7 +761,9 @@ async fn n10p(l: &Live) -> Step {
 async fn n10(l: &Live) -> Step {
     let mut admin = l.bot(ADMIN).await?;
     let moderator = l.on_survival(MODERATOR).await?;
-    if tree_has(&moderator, "tempban") || check_true(&mut admin, MODERATOR, "group.mod").await? {
+    if (l.tree_shows_rights("N10") && tree_has(&moderator, "tempban"))
+        || check_true(&mut admin, MODERATOR, "group.mod").await?
+    {
         return Err(format!("{MODERATOR} is in mod again"));
     }
     if !check_true(&mut admin, VICTIM, "group.mod").await? {
@@ -733,11 +777,12 @@ async fn n10(l: &Live) -> Step {
 
 /// Load: the four bots send 100 commands a second each on survival (the 400
 /// of eight bots at 50 in the plan) and the admin 20 `/pp` changes a second
-/// in `default`. Nobody is disconnected, no plugin call traps or fails, and
-/// the last change holds afterwards.
+/// in `default`. Nobody is disconnected or leaves survival, no plugin call
+/// traps or fails, and the last change holds afterwards.
 async fn n12(l: &Live) -> Step {
     let secs = env_secs("PERMS_LIVE_N12_SECS", 300);
     let ends = l.log_ends();
+    let survival_from = l.log("survival").len();
     // The proxy lets 3 connections a second in from one address, and the step before just joined some.
     let pace = || tokio::time::sleep(Duration::from_millis(400));
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -747,6 +792,8 @@ async fn n12(l: &Live) -> Step {
         pace().await;
         load.push(l.on_survival(name).await?);
     }
+    // A bot kicked from survival goes to lobby: one play login more.
+    let joined: Vec<usize> = load.iter().map(|p| p.logins.len()).collect();
     let node = "pumbo.load.node";
     let tick = Duration::from_millis(10);
     let started = tokio::time::Instant::now();
@@ -791,6 +838,15 @@ async fn n12(l: &Live) -> Step {
                 "{} was disconnected under load: {:?}{hint}",
                 p.opts.name, p.disconnect
             ));
+        }
+        if let Some((p, _)) = load.iter().zip(&joined).find(|(p, n)| p.logins.len() > **n) {
+            let spam = format!("Player {} kicked for spamming", p.opts.name);
+            let log = l.log("survival");
+            let hint = match log.get(survival_from..).unwrap_or_default().contains(&spam) {
+                true => " (survival kicked it for spamming: make it an op there)",
+                false => "",
+            };
+            return Err(format!("{} left survival under load{hint}", p.opts.name));
         }
         answers += admin.messages.len();
         for p in load.iter_mut().chain(std::iter::once(&mut admin)) {
@@ -1155,6 +1211,7 @@ async fn j2(l: &Live) -> Step {
     let mut admin = l.bot(ADMIN).await?;
     // `/pp user <nick>` finds only players who joined once.
     let mut moderator = l.bot(MODERATOR).await?;
+    until_joined(&mut moderator).await?;
     for line in [
         "pp creategroup mod".to_string(),
         "pp group mod permission set pumbo.bans.* true".into(),
@@ -1333,7 +1390,8 @@ async fn j7(l: &Live) -> Step {
 async fn j8a(l: &Live) -> Step {
     let mut admin = l.bot(ADMIN).await?;
     // `/pp user <nick>` finds only players who joined once.
-    let moderator = l.bot(MODERATOR).await?;
+    let mut moderator = l.bot(MODERATOR).await?;
+    until_joined(&mut moderator).await?;
     for line in [
         "pp creategroup helper".to_string(),
         "pp creategroup mod".into(),

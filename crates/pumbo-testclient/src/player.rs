@@ -749,11 +749,26 @@ impl Player {
 
     /// An unsigned command (no slash).
     pub async fn command(&mut self, command: &str) -> Result<(), ClientError> {
+        self.until_play().await?;
         self.c
             .send(&ChatCommand {
                 command: command.into(),
             })
             .await
+    }
+
+    /// Chat and commands exist only in play: in a configuration phase (a
+    /// server switch) this first handles packets until play, for up to the
+    /// client timeout.
+    async fn until_play(&mut self) -> Result<(), ClientError> {
+        let wait = self.c.timeout;
+        if self.c.phase == Phase::Play || self.pump(wait, |p| p.c.phase == Phase::Play).await? {
+            return Ok(());
+        }
+        Err(ClientError::Protocol(match &self.disconnect {
+            Some(why) => format!("disconnected before play: {why}"),
+            None => format!("not in play after {} s", wait.as_secs()),
+        }))
     }
 
     /// Sends the chat session and signs chat from now on.
@@ -797,6 +812,7 @@ impl Player {
     /// A chat message, signed when a chat session is on. `offset` overrides
     /// the acknowledgement count of an unsigned message (tests of `chat_ack`).
     pub async fn chat(&mut self, message: &str, offset: Option<i32>) -> Result<(), ClientError> {
+        self.until_play().await?;
         let salt = i64::from_be_bytes(rand_bytes()?);
         let packet = match self.signer.as_mut() {
             Some(s) => {
@@ -834,6 +850,7 @@ impl Player {
         args: &[(&str, &str)],
         offset: Option<i32>,
     ) -> Result<(), ClientError> {
+        self.until_play().await?;
         let salt = i64::from_be_bytes(rand_bytes()?);
         let packet = match self.signer.as_mut() {
             Some(s) => {
