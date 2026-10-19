@@ -1725,6 +1725,28 @@ async fn plugin_command_waits_while_plugin_restarts() {
     host.shutdown().await;
 }
 
+/// A player who logs in while the provider is still starting (it takes
+/// 500 ms to accept this file) is loaded once: the start loads again only
+/// the players it found when the provider started.
+#[tokio::test(flavor = "multi_thread")]
+async fn login_during_provider_start_loads_once() {
+    let env = provider_env("load-once");
+    env.file(
+        "permissions.yml",
+        "groups:\n  default:\n    permissions: [pumbo.test.base, pumbo.test.slowfile]\n",
+    );
+    let (host, bridge) = start(env.host_config("")).await;
+    host.player_joined(player(99, "reporter", None));
+    assert_eq!(login(&host, 7, "steve").await, GateOutcome::Pass);
+    until_provider_set(&host, 7).await;
+    // Past the slow file and the loads the provider's start makes after it.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    let messages = bridge.messages(99);
+    let loads = messages.iter().filter(|m| *m == "load steve").count();
+    assert_eq!(loads, 1, "{messages:?}");
+    host.shutdown().await;
+}
+
 /// A set the provider pushes for a player drops the cached `has-offline`
 /// answers about that player.
 #[tokio::test(flavor = "multi_thread")]

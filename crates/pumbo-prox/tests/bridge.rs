@@ -80,6 +80,8 @@ struct FakeBridge {
     sock: TcpStream,
     codec: Codec,
     buf: Vec<u8>,
+    /// Messages read by `alive_during`, for `recv`.
+    pending: std::collections::VecDeque<Msg>,
 }
 
 impl FakeBridge {
@@ -90,6 +92,7 @@ impl FakeBridge {
             sock,
             codec: Codec::new(Side::Bridge),
             buf: Vec::new(),
+            pending: std::collections::VecDeque::new(),
         };
         let nb = [7u8; 32];
         let instance = [9u8; 16];
@@ -128,6 +131,9 @@ impl FakeBridge {
 
     /// The next message other than a ping; `None` when the proxy closed.
     async fn recv(&mut self) -> Option<Msg> {
+        if let Some(m) = self.pending.pop_front() {
+            return Some(m);
+        }
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
             if let Some((m, n)) = self.codec.decode(&self.buf).ok()? {
@@ -142,6 +148,38 @@ impl FakeBridge {
             match r {
                 Ok(Ok(n)) if n > 0 => {}
                 _ => return None,
+            }
+        }
+    }
+
+    /// The next message as it comes, pings included; `None` when the proxy closed.
+    async fn next_raw(&mut self) -> Option<Msg> {
+        loop {
+            if let Some((m, n)) = self.codec.decode(&self.buf).ok()? {
+                self.buf.drain(..n);
+                return Some(m);
+            }
+            match self.sock.read_buf(&mut self.buf).await {
+                Ok(n) if n > 0 => {}
+                _ => return None,
+            }
+        }
+    }
+
+    /// Runs `work` while answering the proxy's pings, as a real bridge does
+    /// from its own task; other messages wait for `recv`. A slow step (a
+    /// plugin reload on a busy runner) would otherwise leave the link silent
+    /// past the proxy's 15 s, and the proxy drops it.
+    async fn alive_during<T>(&mut self, work: impl std::future::Future<Output = T>) -> T {
+        tokio::pin!(work);
+        loop {
+            tokio::select! {
+                out = &mut work => return out,
+                m = self.next_raw() => match m {
+                    Some(Msg::Ping) => self.send(&Msg::Pong).await,
+                    Some(m) => self.pending.push_back(m),
+                    None => return work.await,
+                },
             }
         }
     }
@@ -823,7 +861,9 @@ async fn provider_down_keeps_last_info() {
     };
     assert_eq!(info.as_deref(), Some("info lobby"));
     let host = s.proxy.plugins.get().unwrap().host.clone();
-    host.plugin("perm").unwrap().unload().await.unwrap();
+    fb.alive_during(host.plugin("perm").unwrap().unload())
+        .await
+        .unwrap();
     s.bridge.connecting(STEVE, "lobby");
     assert_eq!(fb.perm_set().await.expect("the forced set").info, info);
     assert!(fb.perm_set().await.is_none(), "the info was dropped");
@@ -865,9 +905,11 @@ async fn export_resent_on_provider_state_change() {
     };
     assert!(rules(&fb.export().await.unwrap()));
     let host = s.proxy.plugins.get().unwrap().host.clone();
-    host.plugin("perm").unwrap().unload().await.unwrap();
+    fb.alive_during(host.plugin("perm").unwrap().unload())
+        .await
+        .unwrap();
     assert!(rules(&fb.export().await.expect("an export when it stops")));
-    host.reload_plugin("perm").await.unwrap();
+    fb.alive_during(host.reload_plugin("perm")).await.unwrap();
     assert!(rules(
         &fb.export().await.expect("an export when it runs again")
     ));
@@ -913,7 +955,9 @@ async fn provider_reload_with_a_player_keeps_the_bridge() {
     }
 
     provider_gives("minecraft:command.ban");
-    plugins.host.reload_plugin("perm").await.unwrap();
+    fb.alive_during(plugins.host.reload_plugin("perm"))
+        .await
+        .unwrap();
     loop {
         let set = fb.perm_set().await.expect("the new set after the reload");
         if set.nodes == only("minecraft:command.ban") {
