@@ -920,7 +920,8 @@ impl HostInner {
             self.forget_offline(None);
             self.export_changed();
             if let Some(me) = self.me.get().and_then(Weak::upgrade) {
-                tokio::spawn(async move { me.provider_started().await });
+                let players = self.perms.eligible();
+                tokio::spawn(async move { me.provider_started(players).await });
             }
         }
     }
