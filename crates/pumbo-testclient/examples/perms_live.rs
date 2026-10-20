@@ -84,16 +84,30 @@ struct Live {
 
 impl Live {
     async fn bot(&self, name: &str) -> Result<Player, String> {
-        let join = || Player::join(self.addr, self.module.clone(), JoinOptions::new(name));
-        match join().await {
-            // The proxy asks Mojang about every name; a slow answer refuses the login.
-            Err(e) if e.to_string().contains("Could not check your account") => {
-                println!("RETRY {name}: the proxy could not check the account");
-                join().await
+        // A bot that just left stays on the proxy until its session there
+        // ends, which can take longer than a new login.
+        let started = tokio::time::Instant::now();
+        let mut waited = false;
+        loop {
+            match Player::join(self.addr, self.module.clone(), JoinOptions::new(name)).await {
+                Err(e)
+                    if e.to_string().contains("already connected to this proxy")
+                        && started.elapsed() < Duration::from_secs(5) =>
+                {
+                    waited = true;
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                other => {
+                    if waited {
+                        println!(
+                            "WAIT {name}: the proxy ended the last session after {} ms",
+                            started.elapsed().as_millis()
+                        );
+                    }
+                    return other.map_err(|e| format!("{name} cannot join: {e}"));
+                }
             }
-            other => other,
         }
-        .map_err(|e| format!("{name} cannot join: {e}"))
     }
 
     /// A bot on `survival` (behind the proxy) or on the lone server.
