@@ -473,7 +473,12 @@ async fn n5b(l: &Live) -> Step {
         }
     }
     .await;
-    ask(&mut admin, "prox plugins load pumbo-perms").await?;
+    // The next step logs in at once: wait until the provider runs again.
+    let done = "pumbo-perms loaded";
+    let lines = ask_for(&mut admin, "prox plugins load pumbo-perms", done, 30).await?;
+    if !lines.iter().any(|m| m.contains(done)) {
+        return Err(format!("the load was not confirmed: {lines:?}"));
+    }
     moderator.close().await;
     admin.close().await;
     result
