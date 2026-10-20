@@ -5,8 +5,9 @@ name: ci
 # (Windows, macOS, Linux aarch64 and musl) are built by release.yml on a tag,
 # or by hand with its Run workflow button before tagging.
 on:
+  # Other branches run through their pull requests; tags through release.yml.
   push:
-    branches: ['**'] # not tags: release.yml builds those
+    branches: [main]
   pull_request:
   workflow_dispatch:
 

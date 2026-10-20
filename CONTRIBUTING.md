@@ -99,11 +99,11 @@ The plugin interface is [`wit/pumbo-prox.wit`](wit/pumbo-prox.wit), the Rust SDK
 
 ## Commits and pull requests
 
-1. Fork the repository and branch off `dev`: `feat/<topic>` for something new, `fix/<topic>` for a bug, `chore/<topic>` for the rest.
+1. Fork the repository and branch off `main`: `feat/<topic>` for something new, `fix/<topic>` for a bug, `chore/<topic>` for the rest.
 2. Keep one topic per pull request. Small pull requests get reviewed faster.
 3. Write commit messages as one plain sentence that says what the change does, starting with a capital letter and without a full stop, for example `Send the next gate's command tree when a player changes virtual worlds`. Prefix the part of the code when that helps: `pumbo-bridge-proto: re-export uuid and ciborium`. We don't use Conventional Commits prefixes (`feat:`, `fix:`).
 4. Add or update tests for what you change, and run `tools/ci-local.sh`.
-5. Open the pull request against `dev` (`main` only takes releases) and fill in the template: what changes, why, and how you tested it (with the client and Pumpkin versions if you tried it in the game). The title starts with `FEAT:`, `FIX:`, `DOCS:` or `DEPS:` (dependency updates) and a space and has at most 72 characters, for example `FIX: keep comments in the config on reload`.
+5. Open the pull request against `main` and fill in the template: what changes, why, and how you tested it (with the client and Pumpkin versions if you tried it in the game). The title starts with `FEAT:`, `FIX:`, `DOCS:` or `DEPS:` (dependency updates) and a space and has at most 72 characters, for example `FIX: keep comments in the config on reload`.
 
 A maintainer reviews it, may ask for changes, and merges it when CI is green.
 
