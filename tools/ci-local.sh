@@ -30,7 +30,8 @@ cargo test --workspace --locked --exclude spike-wasm-async
 cargo test -p spike-wasm-async --release --locked -- --nocapture --test-threads=1
 
 step deny
-cargo deny --locked check
+# Advisories run in .github/workflows/audit.yml, so a new one does not fail every branch.
+cargo deny --locked check bans licenses sources
 
 step build-aws-lc
 cargo build --release --locked -p spike-rsa

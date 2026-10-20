@@ -1,0 +1,29 @@
+name: audit
+
+# RustSec advisories change from day to day: checked in ci.yml, a new one would
+# fail every branch with nothing changed in the repository. They run here
+# instead: daily, when the dependencies change, and with the Run workflow
+# button. tools/ci-local.sh checks bans, licenses and sources.
+on:
+  schedule:
+    - cron: '23 5 * * *'
+  push:
+    branches: [main]
+    paths: [Cargo.lock, '**/Cargo.toml', deny.toml, .github/workflows/audit.yml]
+  pull_request:
+    paths: [Cargo.lock, '**/Cargo.toml', deny.toml, .github/workflows/audit.yml]
+  workflow_dispatch:
+
+jobs:
+  advisories:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo-deny
+        run: cargo install cargo-deny --locked --version 0.20.2
+      - run: cargo deny --locked check advisories
