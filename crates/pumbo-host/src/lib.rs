@@ -921,7 +921,11 @@ impl HostInner {
             self.export_changed();
             if let Some(me) = self.me.get().and_then(Weak::upgrade) {
                 let players = self.perms.eligible();
-                tokio::spawn(async move { me.provider_started(players).await });
+                let instance = self
+                    .perms
+                    .instance
+                    .load(std::sync::atomic::Ordering::SeqCst);
+                tokio::spawn(async move { me.provider_started(players, instance).await });
             }
         }
     }
@@ -935,6 +939,9 @@ impl HostInner {
     pub(crate) fn plugin_down(&self, slot: &Arc<PluginSlot>) {
         self.services_of_changed(slot, false);
         if self.is_permission_provider(slot) {
+            self.perms
+                .instance
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             // Players keep the provider's last set (a down provider must not
             // give back ranks it took away through permissions.yml).
             self.forget_offline(None);

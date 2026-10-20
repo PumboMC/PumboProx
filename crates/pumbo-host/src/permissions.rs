@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
 
 pub use pumbo_contracts::permissions::{Decision, Layer, Layers, levels, resolve};
@@ -39,6 +40,9 @@ pub(crate) struct PlayerPerms {
     /// Provider loads of the player now running; the retry and the
     /// provider's start leave such a player to them.
     pub loading: u32,
+    /// `Permissions::instance` when the last load that got an answer
+    /// started: the provider's start skips a player its new instance loaded.
+    pub loaded_on: u64,
 }
 
 impl PlayerPerms {
@@ -62,6 +66,9 @@ pub(crate) struct Permissions {
     pub accepted: Mutex<Option<String>>,
     /// One handoff of the file at a time.
     pub handing: tokio::sync::Mutex<()>,
+    /// Instances of the provider that ended (`plugin_down`): a load started
+    /// since then gets its answer from the next one.
+    pub instance: AtomicU64,
 }
 
 impl Permissions {
@@ -91,15 +98,17 @@ impl Permissions {
         .is_some()
     }
 
-    /// The set of a load started at `epoch`; false when a newer push came
-    /// in between (or the player left).
+    /// The set of a load started at `epoch` on the provider's `instance`;
+    /// false when a newer push came in between (or the player left).
     pub fn load_provider_layer(
         &self,
         id: PlayerId,
         epoch: u64,
+        instance: u64,
         entries: Vec<PermissionEntry>,
     ) -> bool {
         self.with(id, |p| {
+            p.loaded_on = instance;
             if p.epoch == epoch {
                 p.provider = entries;
                 p.loaded = true;
@@ -162,9 +171,10 @@ impl Permissions {
         self.players(|p| p.eligible && !p.loaded && p.loading == 0)
     }
 
-    /// Players past the point of loading without a load running.
-    pub fn idle_eligible(&self) -> Vec<PlayerId> {
-        self.players(|p| p.eligible && p.loading == 0)
+    /// Players past the point of loading that the provider's `instance` has
+    /// not loaded, without a load running.
+    pub fn not_loaded_by(&self, instance: u64) -> Vec<PlayerId> {
+        self.players(|p| p.eligible && p.loading == 0 && (!p.loaded || p.loaded_on < instance))
     }
 
     /// Counts a provider load of the player as running until the guard drops.
@@ -717,15 +727,19 @@ impl crate::HostInner {
         ciborium::from_reader(out.as_slice()).map_err(|e| format!("answer: {e}"))
     }
 
-    /// The provider (re)started: it gets `permissions.yml` to take over,
-    /// then the players online are loaded from it again.
-    /// Loads again the `players` that were past the point of loading when the
-    /// provider started. A player who logged in since is loaded by the login,
-    /// and a load still running for a player is left to finish.
-    pub(crate) async fn provider_started(&self, players: Vec<crate::wit::types::PlayerId>) {
+    /// The provider's `instance` started: it gets `permissions.yml` to take
+    /// over, then the `players` that were past the point of loading are
+    /// loaded from it again. A player who logged in since is loaded by the
+    /// login; a load still running, or one the new instance already answered
+    /// (a login can reach it before the file), is not repeated.
+    pub(crate) async fn provider_started(
+        &self,
+        players: Vec<crate::wit::types::PlayerId>,
+        instance: u64,
+    ) {
         self.hand_file(true).await;
-        let idle = self.perms.idle_eligible();
-        for id in players.into_iter().filter(|id| idle.contains(id)) {
+        let due = self.perms.not_loaded_by(instance);
+        for id in players.into_iter().filter(|id| due.contains(id)) {
             if let Err(t) = self.load_provider_permissions(id).await {
                 tracing::warn!(player = id, "permissions not reloaded: {}", t.plain_text());
             }
@@ -782,6 +796,9 @@ impl crate::HostInner {
         };
         self.perms.mark_eligible(id);
         let _loading = self.perms.start_load(id);
+        // A load that outlives a restart counts for the old instance, so the
+        // provider's start loads the player again.
+        let instance = self.perms.instance.load(Ordering::SeqCst);
         let Some(slot) = self.provider_slot() else {
             self.warn_provider_down("is not running");
             return self.load_failed();
@@ -794,7 +811,7 @@ impl crate::HostInner {
         match source.load(&who).await {
             Ok(entries) => {
                 // A set pushed while this load ran is newer.
-                if self.perms.load_provider_layer(id, epoch, entries) {
+                if self.perms.load_provider_layer(id, epoch, instance, entries) {
                     self.forget_offline(Some(who.uuid));
                     self.bridge
                         .send(id, crate::bridge::PlayerCommand::CommandsChanged);
@@ -1050,6 +1067,20 @@ players:
 
     fn value(p: &Permissions, id: PlayerId, node: &str) -> Option<bool> {
         p.decide(id, node, &levels(None, &[])).map(|d| d.value)
+    }
+
+    #[test]
+    fn provider_start_skips_players_its_instance_loaded() {
+        let p = one_online(7);
+        p.mark_eligible(7);
+        let first = p.instance.load(Ordering::SeqCst);
+        assert_eq!(p.not_loaded_by(first), vec![7]);
+        // A login load the new instance answered before the file handoff.
+        assert!(p.load_provider_layer(7, 0, first, Vec::new()));
+        assert!(p.not_loaded_by(first).is_empty());
+        // The provider went down: its next instance has to load the player.
+        p.instance.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(p.not_loaded_by(first + 1), vec![7]);
     }
 
     #[test]
