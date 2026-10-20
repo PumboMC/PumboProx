@@ -16,6 +16,11 @@ use crate::wit_bindings::Plugin;
 /// How often (ms) the engine epoch advances (D-E0-2).
 pub const EPOCH_TICK_MS: u64 = 10;
 
+/// Epoch ticks for a budget in milliseconds.
+fn budget_ticks(ms: u32) -> u32 {
+    ms.div_ceil(u32::try_from(EPOCH_TICK_MS).unwrap_or(10))
+}
+
 /// The optional `suggest` export: (player, command name, arguments).
 pub(crate) type SuggestFn = TypedFunc<(u64, String, String), (Option<Vec<String>>,)>;
 
@@ -39,6 +44,13 @@ impl PluginState {
     /// it also fires for the epoch libcall itself.)
     pub(crate) fn touch(&mut self) {
         self.busy_ticks = 0;
+    }
+
+    /// Sets the budget of continuous guest work: `load-budget-ms` while the
+    /// plugin loads, `budget-ms` once it handles events.
+    pub(crate) fn set_budget(&mut self, ms: u32) {
+        self.busy_ticks = 0;
+        self.budget_ticks = budget_ticks(ms);
     }
 }
 
@@ -127,9 +139,8 @@ impl Runtime {
                 .trap_on_grow_failure(true)
                 .build(),
             busy_ticks: 0,
-            budget_ticks: cfg
-                .budget_ms
-                .div_ceil(u32::try_from(EPOCH_TICK_MS).unwrap_or(10)),
+            // A new instance starts by loading.
+            budget_ticks: budget_ticks(cfg.load_budget_ms),
             host: Arc::clone(host),
             slot: Arc::clone(slot),
             suggest: None,

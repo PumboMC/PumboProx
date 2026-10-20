@@ -1,0 +1,3 @@
+# Test threads get 2 MiB of stack by default, too little for the debug futures of the network tests.
+[env]
+RUST_MIN_STACK = "8388608"

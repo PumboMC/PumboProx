@@ -56,6 +56,20 @@ impl Backend for RedbBackend {
     }
 }
 
+/// Visits a table from its last key, for both kinds of transaction.
+fn scan_rev(
+    t: &impl ReadableTable<&'static str, &'static [u8]>,
+    visit: &mut dyn FnMut(&str, &[u8]) -> bool,
+) -> Result<()> {
+    for item in t.iter().map_err(err)?.rev() {
+        let (k, v) = item.map_err(err)?;
+        if !visit(k.value(), v.value()) {
+            break;
+        }
+    }
+    Ok(())
+}
+
 struct Read(redb::ReadTransaction);
 
 struct Write(redb::WriteTransaction);
@@ -85,6 +99,14 @@ impl ReadOps for Read {
         Ok(())
     }
 
+    fn scan_rev(&self, table: &str, visit: &mut dyn FnMut(&str, &[u8]) -> bool) -> Result<()> {
+        match self.0.open_table(def(table)) {
+            Ok(t) => scan_rev(&t, visit),
+            Err(TableError::TableDoesNotExist(_)) => Ok(()),
+            Err(e) => Err(err(e)),
+        }
+    }
+
     fn len(&self, table: &str) -> Result<u64> {
         match self.0.open_table(def(table)) {
             Ok(t) => t.len().map_err(err),
@@ -110,6 +132,10 @@ impl ReadOps for Write {
             }
         }
         Ok(())
+    }
+
+    fn scan_rev(&self, table: &str, visit: &mut dyn FnMut(&str, &[u8]) -> bool) -> Result<()> {
+        scan_rev(&self.0.open_table(def(table)).map_err(err)?, visit)
     }
 
     fn len(&self, table: &str) -> Result<u64> {

@@ -2,10 +2,13 @@
 //! name and `config.yml` of the plugin, so one module covers many cases:
 //!
 //! - commands (with `prefix` from the config): `/spin` (endless loop),
+//!   `/busy <ms>` (works that long without calling the host),
 //!   `/panic`, `/reg <name> [umbrella] [virtual]` (registers a command),
 //!   `/http <url>`, `/call <service> <method> <n>`, `/flood <n>`,
 //!   `/sleep <ms>`, `/echo <text>`, `/alloc <mb>`; tab completion of `/echo`
 //!   answers `<name>|<args>|<player>`, of `/sleep <ms>` after that long,
+//! - `busy_init_ms` from the config: `init` works that long without
+//!   calling the host,
 //! - gate by name prefix: `deny_`, `hold_` (released after 50 ms), `slow_`,
 //!   `never_` (hold without release), `locale_` (deny with the locale the
 //!   gate sees), `early_` (title, action bar and boss bar, then a virtual
@@ -75,6 +78,8 @@ struct Cfg {
     bad_describe: bool,
     /// `init` fails.
     fail_init: bool,
+    /// `init` works this long without calling the host.
+    busy_init_ms: u64,
     /// Prefix of the command names, so several instances can be loaded.
     prefix: String,
     /// Answer to `on-pre-login`: `force-online`, `force-offline`, `deny`.
@@ -87,6 +92,16 @@ struct TestPlugin {
     calls: Cell<u64>,
     flaky_failed: Cell<bool>,
     file_refused: Cell<bool>,
+}
+
+/// Works `ms` milliseconds without calling the host (reading the WASI clock
+/// is no host call for the time budget).
+fn busy(ms: u64) {
+    let end = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+    let mut x: u64 = 0;
+    while std::time::Instant::now() < end {
+        x = std::hint::black_box(x.wrapping_add(1));
+    }
 }
 
 fn arg(e: &CommandEvent, i: usize) -> String {
@@ -157,11 +172,12 @@ impl pumbo_sdk::Plugin for TestPlugin {
         if self.config.get().fail_init {
             return Err("init failed on purpose".into());
         }
+        busy(self.config.get().busy_init_ms);
         let prefix = self.config.get().prefix.clone();
         for name in [
-            "spin", "panic", "reg", "http", "call", "flood", "sleep", "echo", "alloc", "push",
-            "resolve", "pub", "metric", "avail", "lookup", "hasoff", "pset", "prepl", "bar",
-            "timer", "every", "cancel", "hash", "file",
+            "spin", "busy", "panic", "reg", "http", "call", "flood", "sleep", "echo", "alloc",
+            "push", "resolve", "pub", "metric", "avail", "lookup", "hasoff", "pset", "prepl",
+            "bar", "timer", "every", "cancel", "hash", "file",
         ] {
             Command::new(&format!("{prefix}{name}")).register()?;
         }
@@ -328,6 +344,10 @@ impl pumbo_sdk::Plugin for TestPlugin {
                 loop {
                     x = std::hint::black_box(x.wrapping_add(1));
                 }
+            }
+            "busy" => {
+                busy(arg(&e, 0).parse().unwrap_or(0));
+                reply(&e, "busy done".into());
             }
             "panic" => panic!("deliberate panic"),
             "reg" => {

@@ -69,6 +69,10 @@ pub trait ReadOps {
     /// `visit` returns false. An empty prefix visits the whole table.
     fn scan(&self, table: &str, prefix: &str, visit: &mut dyn FnMut(&str, &[u8]) -> bool) -> Result<()>;
 
+    /// Visits the entries of a table from the last key to the first, until
+    /// `visit` returns false.
+    fn scan_rev(&self, table: &str, visit: &mut dyn FnMut(&str, &[u8]) -> bool) -> Result<()>;
+
     /// Number of entries in a table.
     fn len(&self, table: &str) -> Result<u64>;
 }
@@ -233,11 +237,22 @@ pub fn u64_or_zero(bytes: &[u8]) -> u64 {
 mod tests {
     use super::*;
 
+    /// The keys `scan_rev` visits, until `limit` of them.
+    fn keys_rev(tx: &(impl ReadOps + ?Sized), table: &str, limit: usize) -> Result<Vec<String>> {
+        let mut keys = Vec::new();
+        tx.scan_rev(table, &mut |k, _| {
+            keys.push(k.to_string());
+            keys.len() < limit
+        })?;
+        Ok(keys)
+    }
+
     /// Runs the same checks against every backend.
     fn exercise(store: &Store) {
         // empty tables read as empty
         assert_eq!(store.read(|tx| tx.get("t", "a")).unwrap(), None);
         assert_eq!(store.read(|tx| tx.len("t")).unwrap(), 0);
+        assert!(store.read(|tx| keys_rev(tx, "t", 9)).unwrap().is_empty());
 
         store
             .write(|tx| {
@@ -267,11 +282,25 @@ mod tests {
             })
             .unwrap();
         assert_eq!(seen, 1);
+        // backward scans start at the last key and stop when asked
+        assert_eq!(store.read(|tx| keys_rev(tx, "t", 9)).unwrap(), ["user|b", "user|a", "other"]);
+        assert_eq!(store.read(|tx| keys_rev(tx, "t", 1)).unwrap(), ["user|b"]);
+        // a table that exists without entries reads as empty too
+        store
+            .write(|tx| {
+                tx.put("e", "k", b"1")?;
+                tx.remove("e", "k")
+            })
+            .unwrap();
+        assert!(store.read(|tx| keys_rev(tx, "e", 9)).unwrap().is_empty());
 
         // a failing write changes nothing
         let failed = store.write(|tx| {
             tx.put("t", "user|c", b"3")?;
             tx.remove("t", "other")?;
+            // and sees its own changes meanwhile
+            assert_eq!(keys_rev(tx, "t", 9)?, ["user|c", "user|b", "user|a"]);
+            assert!(keys_rev(tx, "never", 9)?.is_empty());
             Err::<(), _>(StoreError::new("stop"))
         });
         assert_eq!(failed, Err(StoreError::new("stop")));

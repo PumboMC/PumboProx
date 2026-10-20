@@ -549,6 +549,7 @@ async fn run_instance(
             if let Err(msg) = host.plugin_ready(slot, desc) {
                 return InitFailed(msg);
             }
+            acc.with(|mut a| a.get().set_budget(host.cfg.plugins.budget_ms));
             host.commands.retire(&old_commands);
             slot.set_status(Status::Running);
             if let Some(r) = reply.take() {

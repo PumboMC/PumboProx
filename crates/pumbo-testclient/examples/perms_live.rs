@@ -18,15 +18,21 @@
 //! `<network dir>/footprint.log`, `PERMS_LIVE_N13_SECS`, 3600) run only when
 //! named. Their bots (`PpOp7x`, `PpPlain7x`, `PpPend7x`, `PpSlow7x`) must be
 //! ops on survival: Pumpkin kicks anyone else who sends more than about one
-//! command a second.
+//! command a second. N16 runs only when named, after the script gave the
+//! proxy a new database with 400 000 names and `memory-mb: 64`.
 //! `soak` is the long run of `tools/perms-soak.sh` (its variables are on
 //! the step).
 //! Solo steps: J1-J7; J8a and J8b are the two halves of J8 (data made by the
 //! released 0.1.2-beta, then read by this build), the script swaps the file
-//! between them. Logs are `<dir>/<proxy|lobby|survival>/console.log` and
+//! between them. J10 runs only when named, on a lone Pumpkin the script gave
+//! the same database and `max_memory_mb = 64` for PumboPerms.
+//! Logs are `<dir>/<proxy|lobby|survival>/console.log` and
 //! `<server dir>/console.log`. Each step prints `PASS <step>` or
 //! `FAIL <step>: <why>`; any failure exits with 1.
-//! `PUMBO_PROTOCOL` (777) is the protocol of the bots. Bans go through `/pb`:
+//! `PUMBO_PROTOCOL` (777) is the protocol of the bots. On Pumpkin 0.1.0-dev
+//! (776) every player gets the whole command tree, so N4, N5, N5b and N10
+//! skip their checks of the tree there and keep the rest (refused commands,
+//! `/pp` answers). Bans go through `/pb`:
 //! on Pumpkin 0.2.0 the `/ban` shortcut of PumboBans keeps the vanilla
 //! permission (`minecraft:command.ban`) in the command tree.
 
@@ -56,6 +62,10 @@ const STRANGER: &str = "PpNew7x";
 /// per address by default and the admin takes one.
 const LOAD: [&str; 4] = [OP, PLAIN, PENDING, SLOW];
 const LOGS: [&str; 3] = ["proxy", "lobby", "survival"];
+/// Names in the database of N16 and J10, as `names_fixture` of
+/// pumbo-perms-core writes them: `Player<i>` with the UUID
+/// `00000000-0000-4000-8000-<i in 12 digits>`.
+const NAMES: u32 = 400_000;
 
 fn env_secs(var: &str, default: u64) -> u64 {
     std::env::var(var)
@@ -136,7 +146,7 @@ impl Live {
     }
 
     /// No trapped plugin call on the proxy and no failed Wasm call on the
-    /// servers since `ends`.
+    /// servers since `ends`. A lone Pumpkin has one log: give one end.
     fn no_plugin_errors(&self, ends: &[usize]) -> Step {
         for (who, from) in LOGS.iter().zip(ends) {
             let log = self.log(who);
@@ -145,10 +155,25 @@ impl Live {
                 l.contains("time budget exceeded") || (l.contains("Wasm") && l.contains("failed"))
             };
             if let Some(line) = new.lines().find(bad) {
+                let who = if self.solo { "server" } else { *who };
                 return Err(format!("the {who} log has: {line}"));
             }
         }
         Ok(())
+    }
+
+    /// Whether the command tree shows a player's rights. Pumpkin 0.1.0-dev
+    /// (protocol 776) sends every player its whole tree and checks the rights
+    /// only when a command runs (`command/client_suggestions.rs`), so there
+    /// `step` checks the refused command alone and says so.
+    fn tree_shows_rights(&self, step: &str) -> bool {
+        if self.module.protocol() != ProtocolVersion::V776 {
+            return true;
+        }
+        println!(
+            "{step}: Pumpkin 0.1.0-dev sends every player its whole command tree, so the step checks the refused command, not the tree"
+        );
+        false
     }
 
     fn pid(&self, who: &str) -> Result<String, String> {
@@ -164,6 +189,25 @@ async fn pump(p: &mut Player, ms: u64, until: impl FnMut(&Player) -> bool) -> Re
     p.pump(Duration::from_millis(ms), until)
         .await
         .map_err(|e| format!("{}: {e}", p.opts.name))
+}
+
+/// Waits up to 5 s for the server to announce the join of `p`: Pumpkin
+/// 0.1.0-dev finishes a join, and so learns the name, some time after the
+/// play login.
+async fn until_joined(p: &mut Player) -> Step {
+    match pump(p, 5000, |p| {
+        p.messages
+            .iter()
+            .any(|m| m.contains("multiplayer.player.joined"))
+    })
+    .await?
+    {
+        true => Ok(()),
+        false => Err(format!(
+            "{}: no join message 5 s after the login",
+            p.opts.name
+        )),
+    }
 }
 
 /// Keeps every bot answering while time passes.
@@ -338,7 +382,8 @@ async fn n3(l: &Live) -> Step {
 async fn n4(l: &Live) -> Step {
     let mut admin = l.bot(ADMIN).await?;
     let mut moderator = l.on_survival(MODERATOR).await?;
-    if !tree_has(&moderator, "tempban") {
+    let tree = l.tree_shows_rights("N4");
+    if tree && !tree_has(&moderator, "tempban") {
         return Err(format!("{MODERATOR} has no /ban before the change"));
     }
     let trees = saw(&moderator, Phase::Play, PacketKind::Commands);
@@ -347,12 +392,16 @@ async fn n4(l: &Live) -> Step {
         &format!("pp user {MODERATOR} parent remove mod"),
     )
     .await?;
+    // PumboBridge sends the command list again once the change is set.
     let fresh = pump(&mut moderator, 2000, |p| {
-        saw(p, Phase::Play, PacketKind::Commands) > trees && !tree_has(p, "tempban")
+        saw(p, Phase::Play, PacketKind::Commands) > trees && !(tree && tree_has(p, "tempban"))
     })
     .await?;
     if !fresh {
-        return Err(format!("{MODERATOR} still has /ban 2 s after the change"));
+        return Err(match tree {
+            true => format!("{MODERATOR} still has /ban 2 s after the change"),
+            false => format!("{MODERATOR} got no command list 2 s after the change"),
+        });
     }
     must_fail(&mut moderator, &format!("pb ban {VICTIM} test")).await?;
     moderator.close().await;
@@ -369,10 +418,11 @@ async fn n5(l: &Live) -> Step {
         return Err(format!("the reload was not confirmed: {lines:?}"));
     }
     // Online through the restart: the tree never offers /ban.
+    let tree = l.tree_shows_rights("N5");
     let until = tokio::time::Instant::now() + Duration::from_secs(5);
     while tokio::time::Instant::now() < until {
         pump(&mut admin, 100, |_| false).await?;
-        if pump(&mut moderator, 100, |p| tree_has(p, "tempban")).await? {
+        if pump(&mut moderator, 100, |p| tree && tree_has(p, "tempban")).await? {
             return Err(format!("{MODERATOR} got /ban back during the reload"));
         }
     }
@@ -395,7 +445,7 @@ async fn n5b(l: &Live) -> Step {
         for s in ["lobby", "survival"] {
             l.log_lacks(s, "takes over the permissions here again")?;
         }
-        if tree_has(&moderator, "tempban") {
+        if l.tree_shows_rights("N5b") && tree_has(&moderator, "tempban") {
             return Err(format!("{MODERATOR} got /ban back with the provider down"));
         }
         must_fail(&mut moderator, &format!("pb ban {VICTIM} test")).await?;
@@ -679,16 +729,17 @@ async fn n11p(l: &Live) -> Step {
     n10p(l).await
 }
 
+/// The last "database opened in <n> ms" of PumboPerms in a log.
+fn opened_ms(log: &str) -> Option<u64> {
+    log.lines().rev().find_map(|line| {
+        let (_, after) = line.split_once("database opened in ")?;
+        after.split_whitespace().next()?.parse().ok()
+    })
+}
+
 async fn opened_fast(l: &Live) -> Step {
     l.wait_log("proxy", "loaded:", 60).await?;
-    let log = l.log("proxy");
-    let ms: u64 = log
-        .lines()
-        .rev()
-        .find_map(|line| {
-            let (_, after) = line.split_once("database opened in ")?;
-            after.split_whitespace().next()?.parse().ok()
-        })
+    let ms = opened_ms(&l.log("proxy"))
         .ok_or("the proxy log does not say how long opening the database took")?;
     println!("N11: PumboPerms opened its database in {ms} ms after the SIGKILL");
     if ms >= 1000 {
@@ -710,7 +761,9 @@ async fn n10p(l: &Live) -> Step {
 async fn n10(l: &Live) -> Step {
     let mut admin = l.bot(ADMIN).await?;
     let moderator = l.on_survival(MODERATOR).await?;
-    if tree_has(&moderator, "tempban") || check_true(&mut admin, MODERATOR, "group.mod").await? {
+    if (l.tree_shows_rights("N10") && tree_has(&moderator, "tempban"))
+        || check_true(&mut admin, MODERATOR, "group.mod").await?
+    {
         return Err(format!("{MODERATOR} is in mod again"));
     }
     if !check_true(&mut admin, VICTIM, "group.mod").await? {
@@ -724,11 +777,12 @@ async fn n10(l: &Live) -> Step {
 
 /// Load: the four bots send 100 commands a second each on survival (the 400
 /// of eight bots at 50 in the plan) and the admin 20 `/pp` changes a second
-/// in `default`. Nobody is disconnected, no plugin call traps or fails, and
-/// the last change holds afterwards.
+/// in `default`. Nobody is disconnected or leaves survival, no plugin call
+/// traps or fails, and the last change holds afterwards.
 async fn n12(l: &Live) -> Step {
     let secs = env_secs("PERMS_LIVE_N12_SECS", 300);
     let ends = l.log_ends();
+    let survival_from = l.log("survival").len();
     // The proxy lets 3 connections a second in from one address, and the step before just joined some.
     let pace = || tokio::time::sleep(Duration::from_millis(400));
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -738,6 +792,8 @@ async fn n12(l: &Live) -> Step {
         pace().await;
         load.push(l.on_survival(name).await?);
     }
+    // A bot kicked from survival goes to lobby: one play login more.
+    let joined: Vec<usize> = load.iter().map(|p| p.logins.len()).collect();
     let node = "pumbo.load.node";
     let tick = Duration::from_millis(10);
     let started = tokio::time::Instant::now();
@@ -782,6 +838,15 @@ async fn n12(l: &Live) -> Step {
                 "{} was disconnected under load: {:?}{hint}",
                 p.opts.name, p.disconnect
             ));
+        }
+        if let Some((p, _)) = load.iter().zip(&joined).find(|(p, n)| p.logins.len() > **n) {
+            let spam = format!("Player {} kicked for spamming", p.opts.name);
+            let log = l.log("survival");
+            let hint = match log.get(survival_from..).unwrap_or_default().contains(&spam) {
+                true => " (survival kicked it for spamming: make it an op there)",
+                false => "",
+            };
+            return Err(format!("{} left survival under load{hint}", p.opts.name));
         }
         answers += admin.messages.len();
         for p in load.iter_mut().chain(std::iter::once(&mut admin)) {
@@ -1088,6 +1153,48 @@ async fn n14(l: &Live) -> Step {
     Ok(())
 }
 
+/// Waits until PumboPerms opened its database (in the log of `who`) and
+/// prints how long that took with the `NAMES` of N16 and J10.
+async fn print_opened(l: &Live, step: &str, who: &str) -> Step {
+    l.wait_log(who, "database opened in ", 60).await?;
+    let ms = opened_ms(&l.log(who))
+        .ok_or_else(|| format!("the {who} log does not say how long opening the database took"))?;
+    println!("{step}: database with {NAMES} names opened in {ms} ms");
+    Ok(())
+}
+
+/// `/pp user` finds the last of the `NAMES`, with its UUID.
+async fn last_name_found(admin: &mut Player) -> Step {
+    let last = NAMES - 1;
+    let uuid = format!("00000000-0000-4000-8000-{last:012}");
+    let line = format!("pp user Player{last} info");
+    let lines = ask(admin, &line).await?;
+    match lines.iter().any(|m| m.contains(&uuid)) {
+        true => Ok(()),
+        false => Err(format!("/{line} does not show {uuid}: {lines:?}")),
+    }
+}
+
+/// After the script gave the proxy a new database with `NAMES` names and
+/// `memory-mb: 64`, and started the network again with fresh logs. The new
+/// database has no ledger of permissions.yml, so PumboPerms imports the file
+/// again; the admin's `*` comes from it.
+async fn n16(l: &Live) -> Step {
+    print_opened(l, "N16", "proxy").await?;
+    l.wait_log("proxy", "Imported file", 60).await?;
+    let mut admin = l.bot(ADMIN).await?;
+    last_name_found(&mut admin).await?;
+    let (rss, footprint) = memory(&l.pid("proxy")?);
+    let kb = |v: Option<u64>| v.map_or("?".into(), |k| k.to_string());
+    println!(
+        "N16: proxy memory {} KB RSS, {} KB footprint",
+        kb(rss),
+        kb(footprint)
+    );
+    admin.close().await;
+    l.no_plugin_errors(&[0; LOGS.len()])
+}
+
 // ------------------------------------------------------------------ solo
 
 async fn j1(l: &Live) -> Step {
@@ -1104,6 +1211,7 @@ async fn j2(l: &Live) -> Step {
     let mut admin = l.bot(ADMIN).await?;
     // `/pp user <nick>` finds only players who joined once.
     let mut moderator = l.bot(MODERATOR).await?;
+    until_joined(&mut moderator).await?;
     for line in [
         "pp creategroup mod".to_string(),
         "pp group mod permission set pumbo.bans.* true".into(),
@@ -1282,7 +1390,8 @@ async fn j7(l: &Live) -> Step {
 async fn j8a(l: &Live) -> Step {
     let mut admin = l.bot(ADMIN).await?;
     // `/pp user <nick>` finds only players who joined once.
-    let moderator = l.bot(MODERATOR).await?;
+    let mut moderator = l.bot(MODERATOR).await?;
+    until_joined(&mut moderator).await?;
     for line in [
         "pp creategroup helper".to_string(),
         "pp creategroup mod".into(),
@@ -1340,6 +1449,17 @@ async fn j8_same(admin: &mut Player) -> Step {
     Ok(())
 }
 
+/// A lone Pumpkin with a database of `NAMES` names and `max_memory_mb = 64`
+/// for PumboPerms (the script writes both): the database opens, the last
+/// name resolves and no Wasm call fails.
+async fn j10(l: &Live) -> Step {
+    print_opened(l, "J10", "server").await?;
+    let mut admin = l.bot(ADMIN).await?;
+    last_name_found(&mut admin).await?;
+    admin.close().await;
+    l.no_plugin_errors(&[0])
+}
+
 // ------------------------------------------------------------------ main
 
 fn solo_uuid(nick: &str) -> Option<Uuid> {
@@ -1368,6 +1488,7 @@ async fn run(l: &Live, step: &str) -> Step {
         "N13" => n13(l).await,
         "N14" => n14(l).await,
         "N15" => n15(l).await,
+        "N16" => n16(l).await,
         "soak" => soak(l).await,
         "J1" => j1(l).await,
         "J2" => j2(l).await,
@@ -1378,6 +1499,7 @@ async fn run(l: &Live, step: &str) -> Step {
         "J7" => j7(l).await,
         "J8a" => j8a(l).await,
         "J8b" => j8b(l).await,
+        "J10" => j10(l).await,
         other => Err(format!("unknown step {other}")),
     }
 }

@@ -36,6 +36,9 @@ pub(crate) struct PlayerPerms {
     /// Bumped by every `permissions.replace`: a load started before it is
     /// older than the set the provider pushed since.
     pub epoch: u64,
+    /// Provider loads of the player now running; the retry and the
+    /// provider's start leave such a player to them.
+    pub loading: u32,
 }
 
 impl PlayerPerms {
@@ -153,9 +156,21 @@ impl Permissions {
         self.players(|p| p.eligible)
     }
 
-    /// Players past the point of loading without a set from the provider.
+    /// Players past the point of loading without a set from the provider
+    /// and without a load running.
     pub fn unloaded(&self) -> Vec<PlayerId> {
-        self.players(|p| p.eligible && !p.loaded)
+        self.players(|p| p.eligible && !p.loaded && p.loading == 0)
+    }
+
+    /// Players past the point of loading without a load running.
+    pub fn idle_eligible(&self) -> Vec<PlayerId> {
+        self.players(|p| p.eligible && p.loading == 0)
+    }
+
+    /// Counts a provider load of the player as running until the guard drops.
+    pub fn start_load(&self, id: PlayerId) -> LoadGuard<'_> {
+        self.with(id, |p| p.loading += 1);
+        LoadGuard { perms: self, id }
     }
 
     fn players(&self, f: impl Fn(&PlayerPerms) -> bool) -> Vec<PlayerId> {
@@ -186,6 +201,19 @@ impl Permissions {
         if let Ok(mut o) = self.online.write() {
             o.remove(&id);
         }
+    }
+}
+
+/// Ends a running provider load of a player when dropped.
+pub(crate) struct LoadGuard<'a> {
+    perms: &'a Permissions,
+    id: PlayerId,
+}
+
+impl Drop for LoadGuard<'_> {
+    fn drop(&mut self) {
+        self.perms
+            .with(self.id, |p| p.loading = p.loading.saturating_sub(1));
     }
 }
 
@@ -691,9 +719,13 @@ impl crate::HostInner {
 
     /// The provider (re)started: it gets `permissions.yml` to take over,
     /// then the players online are loaded from it again.
-    pub(crate) async fn provider_started(&self) {
+    /// Loads again the `players` that were past the point of loading when the
+    /// provider started. A player who logged in since is loaded by the login,
+    /// and a load still running for a player is left to finish.
+    pub(crate) async fn provider_started(&self, players: Vec<crate::wit::types::PlayerId>) {
         self.hand_file(true).await;
-        for id in self.perms.eligible() {
+        let idle = self.perms.idle_eligible();
+        for id in players.into_iter().filter(|id| idle.contains(id)) {
             if let Err(t) = self.load_provider_permissions(id).await {
                 tracing::warn!(player = id, "permissions not reloaded: {}", t.plain_text());
             }
@@ -749,6 +781,7 @@ impl crate::HostInner {
             return Ok(());
         };
         self.perms.mark_eligible(id);
+        let _loading = self.perms.start_load(id);
         let Some(slot) = self.provider_slot() else {
             self.warn_provider_down("is not running");
             return self.load_failed();

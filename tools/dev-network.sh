@@ -20,7 +20,8 @@
 # .wasm there goes to the proxy.
 #
 # Variables: PUMBO_PORT (25565; the servers get PORT+1 and PORT+2, the bridge PORT+3),
-# PUMBO_PROTOCOL of the servers (777 or 776), PUMBO_PLUGINS_DIR (dist),
+# PUMBO_PROTOCOL of the servers (777 or 776), PUMBO_ONLINE_MODE of the proxy
+# config that up writes (per-player), PUMBO_PLUGINS_DIR (dist),
 # PUMBO_NETWORK_DIR (target/dev-network).
 set -euo pipefail
 shopt -s nullglob
@@ -31,6 +32,7 @@ DIR=$(abs "${PUMBO_NETWORK_DIR:-$ROOT/target/dev-network}")
 PLUGINS=$(abs "${PUMBO_PLUGINS_DIR:-$ROOT/dist}")
 PORT=${PUMBO_PORT:-25565}
 PROTOCOL=${PUMBO_PROTOCOL:-777}
+ONLINE_MODE=${PUMBO_ONLINE_MODE:-per-player}
 SERVERS="lobby survival"
 case $PROTOCOL in
   777) VARIANT=26.3 ;;
@@ -105,7 +107,7 @@ listener:
 status:
   motd: "&6PumboProx &7dev network"
 login:
-  online-mode: per-player      # per-player | true | false
+  online-mode: $ONLINE_MODE      # per-player | true | false
 servers:
   lobby: { address: "127.0.0.1:$((PORT + 1))", protocol: $PROTOCOL }
   survival: { address: "127.0.0.1:$((PORT + 2))", protocol: $PROTOCOL }

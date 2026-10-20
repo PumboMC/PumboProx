@@ -79,6 +79,9 @@ pub struct PluginsConfig {
     pub memory_mb: u32,
     /// Continuous guest work without returning to the host (D-E0-2).
     pub budget_ms: u32,
+    /// The same while a plugin loads (`init` and `describe`, also after a
+    /// reload or restart), when it may read and prepare its data in one go.
+    pub load_budget_ms: u32,
     /// How long gate events wait for a reloading or restarting gate plugin.
     pub gate_reload_wait_ms: u64,
     /// Hard limit of one gate, per gate name (default `gate-timeout-ms`).
@@ -119,6 +122,7 @@ impl Default for PluginsConfig {
             required_plugins: Vec::new(),
             memory_mb: 256,
             budget_ms: 200,
+            load_budget_ms: 2_000,
             gate_reload_wait_ms: 10_000,
             gate_timeout_ms: 300_000,
             gate_timeouts: BTreeMap::new(),

@@ -363,6 +363,11 @@ async fn unloading_the_holding_gate_kicks() {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    assert_eq!(
+        slot.status(),
+        pumbo_host::Status::Running,
+        "auth did not start again"
+    );
     let after = login(addr, "deny_steve").await.unwrap_or_default();
     assert_eq!(after, "denied by test gate");
 }

@@ -111,6 +111,10 @@ wit-bindgen = "=0.62.0"
 lto = "thin"
 codegen-units = 1
 
+# wasmtime without optimizations compiles plugins too slowly for the timed plugin tests.
+[profile.dev.package."*"]
+opt-level = 2
+
 # WASM plugins (wasm32-wasip2): small and quick to build.
 [profile.plugin]
 inherits = "release"
