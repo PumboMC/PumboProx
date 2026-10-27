@@ -6,7 +6,7 @@ PumboProx is in beta. Security fixes go into the newest release only, so update 
 
 | Version | Supported |
 | --- | --- |
-| newest 0.1.0 beta | yes |
+| the newest release | yes |
 | older builds | no |
 
 ## Reporting a vulnerability
