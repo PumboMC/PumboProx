@@ -1,4 +1,4 @@
-//! Installing a plugin like a `.jar` on Velocity or Paper: one `.wasm` with
+//! Installing a plugin like a `.jar` on a Java server: one `.wasm` with
 //! the manifest built in, the default config and language files written at
 //! the first start and kept once changed, a `<id>.yml` next to the module
 //! overriding the built-in manifest, a bad plugin skipped, an update asking
@@ -197,7 +197,7 @@ async fn module_without_a_manifest() {
 }
 
 /// Like a `.jar`: the file name is free, the id comes from the built-in
-/// manifest; two files with one id are both skipped (Velocity does the same).
+/// manifest; two files with one id are both skipped.
 #[tokio::test(flavor = "multi_thread")]
 async fn any_file_name_and_duplicate_ids() {
     let env = Env::new("file-name");
@@ -311,7 +311,7 @@ fn pumbo_list(host: &Host) -> String {
     }
 }
 
-/// Like Velocity: a plugin that does not load is skipped (reason in the log
+/// A plugin that does not load is skipped (reason in the log
 /// and in `/pumbo`), the others run. A required one stops the start.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_bad_plugin_does_not_stop_the_proxy() {

@@ -4,7 +4,7 @@ use base64::Engine as _;
 use pumbo_text::{Component, TextFormat};
 use serde_json::json;
 
-/// Default `status.favicon`: next to the config, like Velocity and Paper.
+/// Default `status.favicon`: next to the config.
 pub const DEFAULT_FAVICON: &str = "server-icon.png";
 
 /// The status answer is one string of at most 32767 characters; the icon

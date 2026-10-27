@@ -6,7 +6,7 @@
 
 <img src="../assets/diagram.webp" alt="PumboProx: the core, PumboAPI and plugins/ on the proxy; forwarding and the bridge to lobby, survival and skyblock, each with PumboBridge" width="100%">
 
-Players connect to the proxy. It checks them, logs them in and sends them to a server with Velocity forwarding, so every server sees the real UUID, IP and skin. Moving players between servers needs nothing more. Every server also runs [PumboBridge](bridge.md), so the proxy can act inside it as well: teleport players within the world, change game modes and apply its ranks there.
+Players connect to the proxy. It checks them, logs them in and sends them to a server with modern forwarding, so every server sees the real UUID, IP and skin. Moving players between servers needs nothing more. Every server also runs [PumboBridge](bridge.md), so the proxy can act inside it as well: teleport players within the world, change game modes and apply its ranks there.
 
 Plugins from the Pumpkin market keep working on your servers as usual. The proxy only adds what a network needs on top.
 

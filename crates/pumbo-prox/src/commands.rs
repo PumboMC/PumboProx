@@ -411,7 +411,7 @@ pub fn run(proxy: &Arc<Proxy>, rt: &Runtime, source: &Source<'_>, line: &str) ->
     })
 }
 
-/// `/prox` (like `/velocity`): the help, the version, a config reload, the
+/// `/prox`: the help, the version, a config reload, the
 /// plugins, the bridge, servers from the proxy, the route, developer tools.
 fn prox(
     proxy: &Arc<Proxy>,

@@ -9,7 +9,7 @@ use pumbo_core::routing::{BackendInfo, BackendSelector, SelectContext, SelectRea
 pub const NAME: &str = "try";
 
 /// Order from the config, or the forced host's list when the player joined
-/// through that host (also for fallback, like Velocity); skips servers that are
+/// through that host (also for fallback); skips servers that are
 /// offline and (on fallback) the server the player dropped from. Whether a
 /// server's protocol suits the client is the translation chain's decision
 /// (the session asks it per candidate).

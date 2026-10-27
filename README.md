@@ -19,7 +19,7 @@
 
 <p align="center">
   <b>PumboProx</b> is a Minecraft proxy written 100% in Rust for the best performance with low resource use: about 20 MB of RAM.<br>
-  It sits in front of your <a href="https://github.com/Pumpkin-MC/Pumpkin">Pumpkin</a> servers, the way Velocity sits in front of Paper.<br>
+  It sits in front of your <a href="https://github.com/Pumpkin-MC/Pumpkin">Pumpkin</a> servers and moves players between them.<br>
   Plugins run on the proxy as small WebAssembly files.<br>
   It also downloads and runs your Pumpkin servers; installing other server software and plugins (with PumboPM) straight from the proxy is planned.
 </p>
@@ -103,7 +103,7 @@ Every change: [changelog](CHANGELOG.md).
 | ⚙️ | **Written in Rust** | One small program, no Java. About 20 MB of RAM on its own; each plugin adds about 20 MB, so about 100 MB with Filter, Auth, Bans and Perms. |
 | 🧱 | **Versions 1.21 – 26.3** | Players on older clients join your 26.3 servers. The proxy translates the protocol. |
 | 👤 | **Premium and offline together** | Mojang accounts log in automatically, everyone else uses a password (with PumboAuth). Decided per player; without PumboAuth keep `online-mode: true`. |
-| ➡️ | **Velocity modern forwarding** | The real UUID, IP and skin reach every server. Pumpkin supports it out of the box. |
+| ➡️ | **Modern forwarding** | The real UUID, IP and skin reach every server. Pumpkin supports it out of the box. |
 | 🔀 | **Server switching** | `/server`, `/glist`, `/send`, `/find`, `/alert`, a fallback server when one goes down, forced hosts. |
 | 🧩 | **PumboAPI** | One API for every plugin: services, placeholders, permissions, per-server and per-group config. |
 | 🌌 | **PumboVir** | Virtual worlds on the proxy. Bot checks and logins happen before a player reaches any server. |
@@ -226,7 +226,7 @@ Every command and permission: [Commands](docs/commands.md).
 | ✅ | Run and play: the Pumbox, `/prox claim`, a config written on the first start | released (0.2.5-beta) |
 | 🔜 | Paper servers from the proxy: download and run them like Pumpkin | planned |
 | 🔜 | HTTP API for panels and hosting: servers, players, bans | planned |
-| 🔜 | Pterodactyl and Pelican egg, setup wizard, signed Windows files | planned |
+| 🔜 | Ready templates for hosting panels, setup wizard, signed Windows files | planned |
 | 🔜 | Translation in both directions (newer clients on older servers) | planned |
 | 🔜 | PumboPM, PumboPHAPI, PumboTabasco, PumboDB, PumboCore, PumboGuard | planned |
 | 🔜 | Web panel built into the proxy | planned |

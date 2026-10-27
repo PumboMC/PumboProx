@@ -36,10 +36,10 @@ fn modules_from_config() {
 
 #[test]
 fn unknown_module_is_an_error() {
-    let cfg = Config::parse(&SAMPLE.replace("mode: none", "mode: bungeeguard")).unwrap();
+    let cfg = Config::parse(&SAMPLE.replace("mode: none", "mode: shared-token")).unwrap();
     let reg = modules::builtin().unwrap();
     let err = modules::build(&reg, &cfg).unwrap_err().to_string();
-    assert!(err.contains("bungeeguard"), "{err}");
+    assert!(err.contains("shared-token"), "{err}");
     assert!(err.contains("modern"), "{err}");
 }
 

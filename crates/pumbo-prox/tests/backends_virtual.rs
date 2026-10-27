@@ -15,7 +15,7 @@
 //!   `PUMBO_JARS` (default `~/.cache/pumbo-datagen`). `PUMBO_ONLY=767,777`
 //!   picks protocols.
 //! - `pumpkin_release`: official Pumpkin 0.2.0 (26.3, `PUMBO_PUMPKIN_BIN`,
-//!   base config `PUMBO_PUMPKIN_BASE` with telemetry off) with Velocity modern
+//!   base config `PUMBO_PUMPKIN_BASE` with telemetry off) with modern
 //!   forwarding on 25646; clients 777, 775 and 767 (767 and 775 through the
 //!   built-in translator) are released there from the virtual world.
 //!
@@ -347,7 +347,7 @@ fn pumpkin_release() {
     );
     let secret = "e6-virtual-world-test-secret-0123456789";
     let port = 25646;
-    // The Java listener and the Velocity secret of the base config.
+    // The Java listener and the forwarding secret of the base config.
     let java = base.find("[networking.java]").unwrap();
     let at = java + base[java..].find("address = ").unwrap();
     let end = at + base[at..].find('\n').unwrap();

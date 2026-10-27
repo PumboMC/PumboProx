@@ -64,7 +64,7 @@ tools/dev-network.sh reset                  # stop and delete the network (world
 
 Connect your client to `127.0.0.1:25565`. What `up` sets up:
 
-- the proxy from `cargo build --release -p pumbo-prox`, with Velocity modern forwarding and PumboBridge turned on;
+- the proxy from `cargo build --release -p pumbo-prox`, with modern forwarding and PumboBridge turned on;
 - two servers on 25566 and 25567, listening on `127.0.0.1` only, offline behind the proxy, telemetry off, each with its own random seed;
 - a new forwarding secret and bridge key, written into the proxy's files and into every server's `pumpkin.toml` and PumboBridge `config.yml`;
 - plugins from `dist/`: `PumboBridge*.wasm` goes to both servers, every other `.wasm` to the proxy. Download them from the plugin releases or build them in the plugin repositories, and put only the PumboBridge build that matches your Pumpkin version there. Without PumboBridge the servers run without the bridge.

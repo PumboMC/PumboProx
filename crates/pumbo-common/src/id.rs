@@ -94,8 +94,8 @@ impl FromStr for Uuid {
 }
 
 /// Whether a profile was authenticated by Mojang: a version 4 UUID with a signed
-/// skin. A server in online mode and authenticated proxy forwarding (Velocity
-/// modern, Vine, BungeeGuard) give exactly that; an offline login always gets a
+/// skin. A server in online mode and authenticated proxy forwarding (modern
+/// forwarding with a shared secret) give exactly that; an offline login always gets a
 /// version 3 UUID without a signature, so a client cannot fake it there.
 pub fn is_authenticated_profile(uuid: &str, signed_skin: bool) -> bool {
     signed_skin && Uuid::parse(uuid).is_some_and(|u| u.version() == 4)

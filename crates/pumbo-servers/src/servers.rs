@@ -9,7 +9,7 @@ use serde::Deserialize;
 /// What the servers are told about the proxy's network.
 #[derive(Debug, Clone, Default)]
 pub struct Network {
-    /// Velocity modern forwarding secret; `None`: no forwarding.
+    /// Modern forwarding secret; `None`: no forwarding.
     pub velocity_secret: Option<String>,
     /// PumboBridge: address the bridges connect to and the key.
     pub bridge: Option<(String, String)>,
@@ -149,7 +149,7 @@ pub fn random_seed() -> Result<String, String> {
 }
 
 /// `pumpkin.toml` of a new server: loopback only, offline behind the proxy,
-/// Velocity forwarding with the proxy's secret, no console TTY.
+/// Modern forwarding with the proxy's secret, no console TTY.
 pub fn pumpkin_toml(name: &str, port: u16, secret: Option<&str>, seed: &str) -> String {
     let velocity = match secret {
         Some(s) => format!(

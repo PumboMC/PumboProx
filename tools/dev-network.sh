@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # A test network on this machine: PumboProx from this checkout and two Pumpkin
-# servers behind it (lobby, survival) with Velocity forwarding and PumboBridge.
+# servers behind it (lobby, survival) with modern forwarding and PumboBridge.
 #
 # Usage: tools/dev-network.sh up [path/to/pumpkin] | down | reset | logs [proxy|lobby|survival]
 #

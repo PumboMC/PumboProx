@@ -20,7 +20,8 @@ managed-servers:
   enabled: true
   download-from-game: true
 
-# Velocity modern forwarding; servers need the secret from this file.
+# Modern forwarding; servers need the secret from this file (Pumpkin:
+# [networking.proxy.velocity] in pumpkin.toml, Paper: proxies.velocity).
 forwarding:
   mode: modern
   secret-file: forwarding.secret

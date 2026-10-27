@@ -160,7 +160,7 @@ impl Packet for LoginAcknowledged {
     }
 }
 
-/// `custom_query` (Login Plugin Request), used by Velocity forwarding.
+/// `custom_query` (Login Plugin Request), used by modern forwarding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CustomQuery {
     pub message_id: i32,

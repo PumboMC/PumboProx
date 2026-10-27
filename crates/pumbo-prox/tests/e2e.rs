@@ -1,5 +1,5 @@
 //! End-to-end tests of the proxy without external servers: `pumbo-testclient`
-//! as the player, a scripted backend that checks Velocity modern forwarding,
+//! as the player, a scripted backend that checks modern forwarding,
 //! and a fake Mojang API (test builds only, feature `test-endpoints`).
 #![allow(
     clippy::unwrap_used,
@@ -493,7 +493,7 @@ async fn offline_login_with_forwarding_proxy_header_and_keep_alives() {
     let f = &l.forwarded[0];
     assert_eq!(
         f.version, 4,
-        "Velocity modern, lazy session (backend asked for 4)"
+        "modern forwarding, lazy session (backend asked for 4)"
     );
     assert_eq!(f.ip, "203.0.113.7");
     assert_eq!(f.uuid, pumbo_identity::offline_uuid("Steve"));

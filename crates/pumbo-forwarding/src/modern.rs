@@ -1,4 +1,4 @@
-//! Velocity "modern" forwarding, implemented from the protocol description
+//! Modern forwarding, implemented from the protocol description
 //! (plan §3.1).
 //!
 //! Answer to a `custom_query` on the `velocity:player_info` channel:

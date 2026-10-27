@@ -1357,8 +1357,7 @@ async fn plugin_host_in_play() {
 
 /// The client gets nothing of the play state while it has no level: none of
 /// the old server's packets after `start_configuration`, and none of the new
-/// server's before its play `login` (Velocity's TransitionSessionHandler
-/// drops those too). Pumpkin 0.2.0 can send a sound before the login, as it
+/// server's before its play `login`. Pumpkin 0.2.0 can send a sound before the login, as it
 /// adds a joining player to the world first; vanilla 26.3 then disconnects
 /// with "Network Protocol Error" (`ClientboundSoundPacket`, no level).
 #[tokio::test(flavor = "multi_thread")]

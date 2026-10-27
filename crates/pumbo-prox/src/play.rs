@@ -2580,7 +2580,7 @@ impl Play<'_> {
                 self.before_finish()?;
                 if let Some(b) = self.backend.as_mut() {
                     // The backend sends play packets only after the client's
-                    // acknowledgement, so the stream switches here (as Velocity does).
+                    // acknowledgement, so the stream switches here.
                     b.phase = Phase::Play;
                 }
                 self.out_phase = Phase::Play;
@@ -2618,7 +2618,7 @@ impl Play<'_> {
             // Nothing else before its play `login`: the client has no level
             // yet, and vanilla disconnects on a world packet. Pumpkin 0.2.0
             // can send a sound first (it adds a joining player to the world
-            // before the login). Velocity's TransitionSessionHandler drops them too.
+            // before the login).
             (Phase::Play, _) if !joined => {
                 if let Some(b) = &self.backend
                     && self.proxy.first_report("before_login", &b.name)

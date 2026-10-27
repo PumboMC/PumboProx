@@ -95,7 +95,8 @@ managed-servers:
   enabled: true
   download-from-game: true
 
-# Velocity modern forwarding; servers need the secret from this file.
+# Modern forwarding; servers need the secret from this file (Pumpkin:
+# [networking.proxy.velocity] in pumpkin.toml, Paper: proxies.velocity).
 forwarding:
   mode: modern
   secret-file: forwarding.secret
@@ -131,7 +132,7 @@ A server cannot send players to another address with a `transfer` (the `/transfe
 > [!TIP]
 > Run your servers on Pumpkin 0.2.0 (Minecraft 26.3): then players on every version from 1.21 to 26.3 can join.
 
-In each server's `pumpkin.toml`, turn on Velocity forwarding with the secret from `forwarding.secret`, and let the server listen on `127.0.0.1` only:
+In each server's `pumpkin.toml`, turn on modern forwarding with the secret from `forwarding.secret`, and let the server listen on `127.0.0.1` only:
 
 ```toml
 [networking.proxy]

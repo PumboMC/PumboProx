@@ -499,7 +499,7 @@ impl Paper {
     }
 }
 
-/// A Paper directory with Velocity forwarding; the first run writes the
+/// A Paper directory with modern forwarding; the first run writes the
 /// default configs, which are then patched.
 fn prepare_paper(dir: &Path, jar: &Path, secret: &str, enforce: bool) {
     std::fs::create_dir_all(dir.join("plugins/bStats")).unwrap();
@@ -777,7 +777,7 @@ fn chat_ack_backends() {
 // ---------------------------------------------------------------- Pumpkin
 
 /// Two Pumpkin servers (`PUMBO_PUMPKIN_BIN`, template `PUMBO_PUMPKIN_TEMPLATE`)
-/// with Velocity forwarding: `/server` there and back, reconnects, and a
+/// with modern forwarding: `/server` there and back, reconnects, and a
 /// stopped server with fallback (Pumpkin's "Server stopped" kick).
 #[test]
 #[ignore = "starts two Pumpkin binaries"]

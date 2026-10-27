@@ -2,7 +2,7 @@
 //! backend login with forwarding, then relaying configuration and play
 //! (plan §2.2, §2.7, §2.9, §3.1).
 //!
-//! The order of the first join follows Velocity: the client finishes login
+//! The order of the first join: the client finishes login
 //! with the proxy and waits in configuration while the proxy logs in to the
 //! backend; the play part (relaying, switching) is in `play`.
 
@@ -882,7 +882,7 @@ pub(crate) async fn backend_login(
                 if forwarding.expects_login_query() {
                     if !forwarded {
                         return Err(BackendFail::Unavailable(
-                            "backend did not ask for the player's identity; enable Velocity modern forwarding on it".into(),
+                            "backend did not ask for the player's identity; enable modern forwarding on it (Pumpkin: [networking.proxy.velocity], Paper: proxies.velocity)".into(),
                         ));
                     }
                     if seen.id != player.profile.id || seen.name != player.profile.name {

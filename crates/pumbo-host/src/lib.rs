@@ -983,8 +983,8 @@ impl HostInner {
     }
 }
 
-/// A plugin file that did not load. The proxy starts without it, like
-/// Velocity skips a bad plugin, unless it is required (D-STD-4).
+/// A plugin file that did not load. The proxy starts without it,
+/// unless it is required.
 #[derive(Debug, Clone)]
 pub struct LoadFailure {
     /// The file in the plugin directory.

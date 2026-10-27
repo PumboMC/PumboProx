@@ -86,7 +86,7 @@ Add your own next to it (for example `minigames` on another version) and pick it
 ## How it works
 
 - Downloads come only from the Pumpkin-MC/Pumpkin GitHub releases, with the file for this machine, and are checked against the release's `checksums.sha256`. Development builds (canary, nightly) have no checksums and are refused unless `allow-unverified: true`.
-- Each new server gets its own `pumpkin.toml`: a random seed, `127.0.0.1` and a free port of `ports`, offline mode behind the proxy, Velocity forwarding with the proxy's secret. Telemetry stays at Pumpkin's default; the file says how to turn it off. With the bridge on, PumboBridge gets its `config.yml` (address and key).
+- Each new server gets its own `pumpkin.toml`: a random seed, `127.0.0.1` and a free port of `ports`, offline mode behind the proxy, modern forwarding with the proxy's secret. Telemetry stays at Pumpkin's default; the file says how to turn it off. With the bridge on, PumboBridge gets its `config.yml` (address and key).
 - A server is `ready` when its port answers. A crashed server is restarted after 1, 5 and 15 seconds, at most `restart-on-crash` times in 10 minutes.
 - When the proxy stops, it stops its servers (`stop` on their console, a kill after `stop-timeout-secs`). If the proxy itself dies, the servers keep running and the next start takes them over (their PID is in `servers/servers.yml`).
 - The player who starts a download sees its progress on a boss bar (percent, speed, size); the console logs it every 10%. A stopped download leaves no partial file.

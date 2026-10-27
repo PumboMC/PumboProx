@@ -2,7 +2,7 @@
 //! premium-name lookup for `online-mode: per-player` (plan §2.7).
 //!
 //! The flow follows the protocol description ("Protocol encryption" on
-//! minecraft.wiki) and Velocity's login handler: HTTP 200 with a profile means
+//! minecraft.wiki): HTTP 200 with a profile means
 //! authenticated, 204 means the client did not join, anything else is an
 //! outage (the proxy then refuses the login: fail-closed).
 

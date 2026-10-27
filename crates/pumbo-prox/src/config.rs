@@ -109,8 +109,8 @@ pub struct StatusConfig {
     pub max_players: u32,
     /// Version name in the server list; empty = "PumboProx <oldest>-<newest>".
     pub version_name: String,
-    /// Server icon: a 64x64 PNG (like `server-icon.png` of Velocity and
-    /// Paper); empty = none.
+    /// Server icon: a 64x64 PNG (`server-icon.png` by default); empty =
+    /// none.
     pub favicon: String,
 }
 

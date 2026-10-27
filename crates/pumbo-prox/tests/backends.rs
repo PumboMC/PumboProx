@@ -8,7 +8,7 @@
 //!   `pumbo-datagen tables`), servers in `PUMBO_E3_WORK/vanilla`, ports 25600–25603.
 //! - `pumpkin_forwarding`: a Pumpkin binary (`PUMBO_PUMPKIN_BIN`, its config
 //!   template `PUMBO_PUMPKIN_TEMPLATE`, protocol `PUMBO_PUMPKIN_PROTOCOL`)
-//!   with Velocity modern forwarding, in `PUMBO_E3_WORK/pumpkin-<protocol>`,
+//!   with modern forwarding, in `PUMBO_E3_WORK/pumpkin-<protocol>`,
 //!   ports 25604–25605.
 //!
 //! `cargo test -p pumbo-prox --test backends -- --ignored --nocapture --test-threads=1`

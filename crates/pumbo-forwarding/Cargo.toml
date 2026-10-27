@@ -1,6 +1,6 @@
 [package]
 name = "pumbo-forwarding"
-description = "Forwarding modules: Velocity modern and none"
+description = "Forwarding modules: modern and none"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

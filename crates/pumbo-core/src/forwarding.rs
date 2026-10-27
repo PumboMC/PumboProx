@@ -10,7 +10,7 @@ pub enum ForwardingError {
     Other(String),
 }
 
-/// How the identity is passed on (Velocity modern, legacy, none, future ones).
+/// How the identity is passed on (modern, legacy, none, future ones).
 /// The module gets two hooks in the login to the backend; both default to
 /// "change nothing", so a new mode implements only what it uses.
 pub trait ForwardingMode: Send + Sync + std::fmt::Debug {
