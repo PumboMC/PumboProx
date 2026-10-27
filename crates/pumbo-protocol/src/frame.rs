@@ -5,6 +5,8 @@
 //! against the limit before anything is inflated, inflation stops at that
 //! length, and frames that break the threshold rules are protocol errors.
 
+use std::cell::RefCell;
+
 use bytes::{Buf, Bytes, BytesMut};
 use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress, Status};
 use thiserror::Error;
@@ -193,10 +195,25 @@ pub fn decode_body(body: Bytes, cfg: &FrameConfig) -> Result<RawFrame, FrameErro
     })
 }
 
+thread_local! {
+    // A fresh zlib state per frame costs an allocation of about 256 KB for
+    // deflate and 40 KB for inflate. Encoding and decoding are synchronous, so
+    // one state per worker thread is enough, and memory stays bounded by the
+    // thread count instead of growing with the number of connections.
+    static INFLATE: RefCell<Decompress> = RefCell::new(Decompress::new(true));
+    static DEFLATE: RefCell<Option<(u32, Compress)>> = const { RefCell::new(None) };
+}
+
 /// Inflates exactly `size` bytes; more or less is an error.
 fn inflate(input: &[u8], size: usize) -> Result<Vec<u8>, FrameError> {
+    INFLATE.with_borrow_mut(|d| inflate_with(d, input, size))
+}
+
+fn inflate_with(d: &mut Decompress, input: &[u8], size: usize) -> Result<Vec<u8>, FrameError> {
+    // Reset before use, not after: the error returns below leave the state
+    // mid-stream, and the offsets come from `total_in()`.
+    d.reset(true);
     let mut out = Vec::with_capacity(size);
-    let mut d = Decompress::new(true);
     loop {
         let before_in = d.total_in();
         let before_out = d.total_out();
@@ -228,7 +245,19 @@ fn inflate(input: &[u8], size: usize) -> Result<Vec<u8>, FrameError> {
 }
 
 fn deflate(input: &[u8], level: u32) -> Result<Vec<u8>, FrameError> {
-    let mut c = Compress::new(Compression::new(level.min(9)), true);
+    let level = level.min(9);
+    DEFLATE.with_borrow_mut(|slot| {
+        if slot.as_ref().is_some_and(|(l, _)| *l != level) {
+            *slot = None;
+        }
+        let (_, c) =
+            slot.get_or_insert_with(|| (level, Compress::new(Compression::new(level), true)));
+        deflate_with(c, input)
+    })
+}
+
+fn deflate_with(c: &mut Compress, input: &[u8]) -> Result<Vec<u8>, FrameError> {
+    c.reset();
     let mut out = Vec::with_capacity(input.len() / 2 + 64);
     loop {
         let consumed = usize::try_from(c.total_in()).map_err(|_| FrameError::Corrupt)?;
@@ -401,6 +430,36 @@ mod tests {
         ));
         let mut buf = BytesMut::from(&[0u8][..]);
         assert_eq!(decode(&mut buf, &c), Err(FrameError::Empty));
+    }
+
+    #[test]
+    fn shared_state_recovers_after_bad_frames() {
+        let c = cfg(Some(256));
+        let mut good = BytesMut::new();
+        encode(&mut good, 4, &[3u8; 700], &c).unwrap();
+        let good = good.freeze();
+        // Declares 1000 bytes but inflates further: stops mid-stream.
+        let mut bomb = Vec::new();
+        bomb.put_varint(1000);
+        bomb.extend_from_slice(&deflate(&vec![0u8; 1 << 16], 6).unwrap());
+        // A valid zlib header followed by garbage.
+        let mut corrupt = Vec::new();
+        corrupt.put_varint(300);
+        corrupt.extend_from_slice(&[0x78, 0x9C, 0xFF, 0xFF, 0xFF, 0xFF]);
+        for bad in [bomb, corrupt] {
+            assert!(decode_body(Bytes::from(bad), &c).is_err());
+            let f = decode(&mut BytesMut::from(&good[..]), &c).unwrap().unwrap();
+            assert_eq!((f.id, f.payload.as_ref()), (4, &[3u8; 700][..]));
+        }
+    }
+
+    #[test]
+    fn level_change_takes_effect() {
+        let data = vec![5u8; 4000];
+        let stored = deflate(&data, 0).unwrap();
+        let packed = deflate(&data, 9).unwrap();
+        assert!(stored.len() > data.len() && packed.len() < 100);
+        assert_eq!(deflate(&data, 0).unwrap(), stored);
     }
 
     proptest! {
