@@ -117,6 +117,8 @@ servers:
   lobby: { address: "127.0.0.1:25566", protocol: 777 }
 ```
 
+A server cannot send players to another address with a `transfer` (the `/transfer` command): one to another server of the network becomes a normal switch, any other is dropped. Add `allow-transfers: true` to a server to let its transfers through.
+
 > [!TIP]
 > Run your servers on Pumpkin 0.2.0 (Minecraft 26.3): then players on every version from 1.21 to 26.3 can join.
 

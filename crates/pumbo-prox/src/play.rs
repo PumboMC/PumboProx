@@ -30,7 +30,7 @@ use pumbo_protocol::packets::commands::{
 use pumbo_protocol::packets::common::{
     self as pc, ClearDialog, ClientboundCustomPayload, CustomClickAction, CustomReportDetails,
     Disconnect, KeepAlive, Ping, Pong, ResourcePackPop, ResourcePackPush, ResourcePackResponse,
-    ServerLinks, ServerboundCustomPayload,
+    ServerLinks, ServerboundCustomPayload, Transfer,
 };
 use pumbo_protocol::packets::play::{
     BossAction, BossEvent, BundleDelimiter, Chat, ChatAck, ChatCommand, ChatCommandSigned,
@@ -47,7 +47,7 @@ use uuid::Uuid;
 
 use crate::bungee;
 use crate::commands::{self, Source};
-use crate::config::{PacksOnSwitch, SignedChatCancel};
+use crate::config::{PacksOnSwitch, SignedChatCancel, split_host_port};
 use crate::conn::{Conn, ConnError, WRITE_TIMEOUT};
 use crate::limits::TokenBucket;
 use crate::metrics::{GaugeGuard, Metrics};
@@ -1129,6 +1129,12 @@ impl Play<'_> {
         let m = &*module;
         let limit = self.rt.config.switching.config_buffer_bytes;
         let cb = ctx(m, Direction::Clientbound);
+        let target = self
+            .request
+            .as_ref()
+            .map(|r| r.target.clone())
+            .unwrap_or_default();
+        let transfers = self.transfers_allowed(&target);
         loop {
             let Next::Ready {
                 conn,
@@ -1163,6 +1169,21 @@ impl Play<'_> {
                         .unwrap_or_else(|| Component::text("Disconnected"));
                     self.next_failed(format!("kicked in configuration: {}", text.plain_text()));
                     self.refused(text);
+                    return self.try_next();
+                }
+                // The server waits for the client to leave: a failed connect,
+                // or a redirect when it names a server of this proxy.
+                Some(PacketKind::Transfer) if !transfers => {
+                    let to = packets::decode::<Transfer>(&f.payload, &cb)
+                        .ok()
+                        .and_then(|t| self.transfer_blocked(&target, &t));
+                    self.next_failed("sent a transfer in configuration".into());
+                    if let (Some(to), Some(req)) = (to, self.request.as_mut())
+                        && req.redirects < MAX_REDIRECTS
+                    {
+                        req.redirects += 1;
+                        req.candidates.push_front(to);
+                    }
                     return self.try_next();
                 }
                 _ => {
@@ -2635,8 +2656,77 @@ impl Play<'_> {
                 Step::Forward
             }
             (Phase::Play, Some(PacketKind::LevelParticles)) => self.level_particles(f)?,
+            (_, Some(PacketKind::Transfer)) => self.backend_transfer(phase, f)?,
             _ => Step::Forward,
         })
+    }
+
+    /// Whether `servers.<name>.allow-transfers` lets this server's
+    /// `transfer` reach the client (GAP2-01); servers from the proxy never do.
+    fn transfers_allowed(&self, server: &str) -> bool {
+        self.rt
+            .config
+            .servers
+            .get(server)
+            .is_some_and(|s| s.allow_transfers)
+    }
+
+    /// A `transfer` the client does not get: counted, reported once per
+    /// server; returns the server of this proxy it names, if any.
+    fn transfer_blocked(&self, from: &str, t: &Transfer) -> Option<String> {
+        let to = transfer_server(&self.rt.backends, &t.host, t.port);
+        Metrics::inc(if to.is_some() {
+            &self.proxy.metrics.transfers_switched
+        } else {
+            &self.proxy.metrics.transfers_blocked
+        });
+        if self.proxy.first_report("transfer", from) {
+            warn!(
+                "{from} tried to transfer {} to {}:{}; the proxy {} (set servers.{from}.allow-transfers: true to let its transfers through)",
+                self.player.profile.name,
+                t.host,
+                t.port,
+                match &to {
+                    Some(name) => format!("switches the player to {name} instead"),
+                    None => "dropped it".into(),
+                }
+            );
+        }
+        to
+    }
+
+    /// `transfer` from the current server. One to a server of this proxy
+    /// becomes a switch; any other is dropped. In configuration the server
+    /// waits for the client to leave, so it counts as lost and a join or
+    /// switch goes on with the named server or the next candidate.
+    fn backend_transfer(&mut self, phase: Phase, f: &RawFrame) -> Result<Step, Fail> {
+        let Some(from) = self.backend.as_ref().map(|b| b.name.clone()) else {
+            return Ok(Step::Drop);
+        };
+        if self.transfers_allowed(&from) {
+            return Ok(Step::Forward);
+        }
+        let t: Transfer = packets::decode(&f.payload, &ctx(&*self.module, Direction::Clientbound))?;
+        let to = self.transfer_blocked(&from, &t);
+        if phase == Phase::Configuration {
+            // A join or switch in progress tries the named server next.
+            if let (Some(to), Some(req)) = (&to, self.request.as_mut())
+                && req.redirects < MAX_REDIRECTS
+            {
+                req.redirects += 1;
+                req.candidates.push_front(to.clone());
+            }
+            return Ok(Step::Lost(Box::new(Component::text(
+                "The server tried to transfer you elsewhere.",
+            ))));
+        }
+        // A transfer during a switch or before the login is dropped.
+        if let Some(to) = to
+            && self.on_server()
+        {
+            let _ = self.switch_to(&to, true);
+        }
+        Ok(Step::Drop)
     }
 
     /// Pumpkin's `trail` particle without options kicks the client (Pumpkin
@@ -2919,6 +3009,18 @@ fn pumpkin_trail(v: pumbo_protocol::ProtocolVersion) -> Option<i32> {
         .registry("particle_type")?
         .id("trail")?;
     i32::try_from(id).ok()
+}
+
+/// The server whose address a `transfer` names: the same host (no DNS
+/// lookup) and port, 25565 for an address without one.
+fn transfer_server(backends: &[BackendInfo], host: &str, port: i32) -> Option<String> {
+    backends
+        .iter()
+        .find(|b| {
+            let (h, p) = split_host_port(&b.address).unwrap_or((b.address.as_str(), 25565));
+            h.eq_ignore_ascii_case(host) && i32::from(p) == port
+        })
+        .map(|b| b.name.clone())
 }
 
 fn millis(since: Instant) -> u32 {

@@ -79,6 +79,9 @@ metrics! {
     auth_micros: counter "pumboprox_auth_request_microseconds_total" "";
     players_online: gauge "pumboprox_players_online" "";
     pending_logins: gauge "pumboprox_pending_logins" "";
+    /// `transfer` packets from servers without `allow-transfers` (GAP2-01).
+    transfers_blocked: counter "pumboprox_transfers_total" "{result=\"blocked\"}";
+    transfers_switched: counter "pumboprox_transfers_total" "{result=\"switched\"}";
 }
 
 impl Metrics {

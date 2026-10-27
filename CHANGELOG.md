@@ -2,6 +2,12 @@
 
 All notable changes to PumboProx, one section per release. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Security
+
+- A server's `transfer` packet (for example from the `/transfer` command) no longer reaches the player: one to another server of the network becomes a switch inside the proxy, any other is dropped and logged once per server. `servers.<name>.allow-transfers: true` lets a server's transfers through.
+
 ## [0.2.5-beta] - 2026-10-11
 
 Run and play: start `pumboprox` in an empty folder, join, and set up the whole network from the game.

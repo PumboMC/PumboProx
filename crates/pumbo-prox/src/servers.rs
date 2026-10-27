@@ -229,6 +229,7 @@ pub fn backends(proxy: &Proxy, m: &Manager) -> BTreeMap<String, ServerConfig> {
                 protocol,
                 chat_session_forwarding: true,
                 signed_chat_cancel: SignedChatCancel::default(),
+                allow_transfers: false,
             };
             (name, backend)
         })

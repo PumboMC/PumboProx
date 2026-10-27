@@ -24,7 +24,7 @@ use pumbo_protocol::frame::FrameConfig;
 use pumbo_protocol::packets::commands::{Commands, FLAG_EXECUTABLE, NODE_LITERAL, NODE_ROOT, Node};
 use pumbo_protocol::packets::common::{
     ClientboundCustomPayload, Disconnect, KeepAlive, ResourcePackPush, ResourcePackResponse,
-    ServerboundCustomPayload,
+    ServerboundCustomPayload, Transfer,
 };
 use pumbo_protocol::packets::configuration::FinishConfiguration;
 use pumbo_protocol::packets::login::{
@@ -73,6 +73,8 @@ struct Spec {
     noisy: bool,
     /// A sound right before its play `login`, as Pumpkin 0.2.0 can send one.
     sound_before_login: bool,
+    /// A `transfer` to this host and port instead of finishing configuration.
+    config_transfer: Option<(String, i32)>,
 }
 
 /// Commands from the test to the backend's latest connection.
@@ -82,6 +84,7 @@ enum Ctl {
     Close,
     Payload(&'static str, Vec<u8>),
     Bundle,
+    Transfer(String, i32),
 }
 
 #[derive(Debug, Default)]
@@ -311,6 +314,14 @@ async fn serve(
         );
     }
     c.flush().await.map_err(e)?;
+    if let Some((host, port)) = spec.config_transfer.clone() {
+        // Like vanilla: the server waits for the client to go.
+        send(&mut c, m, cfg, &Transfer { host, port });
+        c.flush().await.map_err(e)?;
+        loop {
+            c.fill().await.map_err(e)?;
+        }
+    }
     // Slow configuration: keep-alives that must be answered.
     let until = tokio::time::Instant::now() + spec.slow_config;
     let mut pending: Option<(i64, tokio::time::Instant)> = None;
@@ -440,6 +451,10 @@ async fn serve(
                 }
                 Some(Ctl::Bundle) => {
                     send(&mut c, m, p, &BundleDelimiter);
+                    c.flush().await.map_err(e)?;
+                }
+                Some(Ctl::Transfer(host, port)) => {
+                    send(&mut c, m, p, &Transfer { host, port });
                     c.flush().await.map_err(e)?;
                 }
             },
@@ -1404,4 +1419,100 @@ async fn no_play_packets_reach_a_client_without_a_level() {
         "{:?}",
         &got[finish..]
     );
+}
+
+fn transfers(p: &Player) -> usize {
+    p.kinds
+        .iter()
+        .filter(|(_, k)| *k == PacketKind::Transfer)
+        .count()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn backend_transfers_are_blocked_or_become_switches() {
+    let lobby = Backend::start(spec("lobby")).await;
+    let games = Backend::start(spec("games")).await;
+    let (proxy, addr) = start_proxy(&config(&[("lobby", &lobby), ("games", &games)], "")).await;
+    let mut p = join(addr, "Transferred").await;
+    // Elsewhere: dropped, the player stays.
+    lobby.ctl(Ctl::Transfer("evil.example".into(), 25565));
+    lobby.ctl(Ctl::Payload("pumbo:after", vec![1]));
+    assert!(
+        p.pump(WAIT, |p| p.payloads.iter().any(|(c, _)| c == "pumbo:after"))
+            .await
+            .unwrap()
+    );
+    assert_eq!(transfers(&p), 0);
+    assert!(p.disconnect.is_none());
+    // To a server of this proxy: a switch inside the proxy.
+    let to = games.addr;
+    lobby.ctl(Ctl::Transfer(to.ip().to_string(), i32::from(to.port())));
+    next_login(&mut p).await;
+    assert_eq!(
+        proxy.find_player("transferred").unwrap().server.as_deref(),
+        Some("games")
+    );
+    assert_eq!(transfers(&p), 0);
+    let metrics = proxy.metrics.render();
+    assert!(
+        metrics.contains("pumboprox_transfers_total{result=\"blocked\"} 1")
+            && metrics.contains("pumboprox_transfers_total{result=\"switched\"} 1"),
+        "{metrics}"
+    );
+    p.close().await;
+    proxy.stop();
+
+    // allow-transfers passes them on.
+    let cfg = config(&[("lobby", &lobby)], "").replace(
+        &format!("protocol: {PROTOCOL} }}"),
+        &format!("protocol: {PROTOCOL}, allow-transfers: true }}"),
+    );
+    let (proxy, addr) = start_proxy(&cfg).await;
+    let mut p = join(addr, "Allowed").await;
+    lobby.ctl(Ctl::Transfer("elsewhere.example".into(), 25565));
+    assert!(p.pump(WAIT, |p| transfers(p) == 1).await.unwrap());
+    p.close().await;
+    proxy.stop();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_transfer_in_configuration_is_a_failed_connect() {
+    let lobby = Backend::start(spec("lobby")).await;
+    let games = Backend::start(spec("games")).await;
+    let away = Backend::start(Spec {
+        config_transfer: Some(("evil.example".into(), 25565)),
+        ..spec("away")
+    })
+    .await;
+    let to_lobby = Backend::start(Spec {
+        config_transfer: Some((lobby.addr.ip().to_string(), i32::from(lobby.addr.port()))),
+        ..spec("redirect")
+    })
+    .await;
+    // Elsewhere: the next server in the list gets the player.
+    let servers = [("away", &away), ("games", &games), ("lobby", &lobby)];
+    let (proxy, addr) = start_proxy(&config(&servers, "")).await;
+    let p = join(addr, "Configured").await;
+    assert_eq!(
+        proxy.find_player("configured").unwrap().server.as_deref(),
+        Some("games")
+    );
+    assert_eq!(transfers(&p), 0);
+    p.close().await;
+    proxy.stop();
+    // To a server of this proxy: the player goes there.
+    let servers = [
+        ("redirect", &to_lobby),
+        ("games", &games),
+        ("lobby", &lobby),
+    ];
+    let (proxy, addr) = start_proxy(&config(&servers, "")).await;
+    let p = join(addr, "Redirected").await;
+    assert_eq!(
+        proxy.find_player("redirected").unwrap().server.as_deref(),
+        Some("lobby")
+    );
+    assert_eq!(transfers(&p), 0);
+    p.close().await;
+    proxy.stop();
 }

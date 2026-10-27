@@ -245,6 +245,11 @@ pub struct ServerConfig {
     /// player's chat session (§2.8 point 5, result of the E4 test).
     #[serde(default)]
     pub signed_chat_cancel: SignedChatCancel,
+    /// Pass this server's `transfer` packets on to the client. Without it
+    /// the proxy drops them, or switches the player when one names a server
+    /// of this proxy: a transfer could send players to any host.
+    #[serde(default)]
+    pub allow_transfers: bool,
 }
 
 /// Cancelling a signed message leaves a gap in the signature chain. Vanilla
