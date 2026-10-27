@@ -54,6 +54,10 @@ struct Container<'a> {
     remap: &'a dyn Fn(i32) -> i32,
 }
 
+/// Widest entry a container may claim; ids are 32-bit, and wider values would
+/// leave no entries per long.
+const MAX_BITS: u8 = 32;
+
 const fn long_count(entries: usize, bits: u8) -> usize {
     if bits == 0 {
         return 0;
@@ -78,6 +82,9 @@ fn container(
     format: PaletteFormat,
 ) -> Option<usize> {
     let bits = r.get_u8()?;
+    if bits > MAX_BITS {
+        return None;
+    }
     if bits == 0 {
         let id = r.get_var_int()?;
         out.put_u8(0);
@@ -554,6 +561,9 @@ impl Read {
 
 fn read_container(r: &mut &[u8], entries: usize, max_indirect: u8) -> Option<Read> {
     let bits = r.get_u8()?;
+    if bits > MAX_BITS {
+        return None;
+    }
     if bits == 0 {
         let single = r.get_var_int()?;
         return Some(Read {
@@ -630,6 +640,26 @@ mod tests {
         let packed = repack(&pack(&values, 6), 64, 6, 7, &|v| v + 1);
         let expected = pack(&values.iter().map(|v| v + 1).collect::<Vec<_>>(), 7);
         assert_eq!(packed, expected);
+    }
+
+    #[test]
+    fn oversized_palette_width_is_rejected() {
+        let c = Container {
+            entries: 4096,
+            max_indirect_bits: 8,
+            server_bits: 15,
+            client_bits: 15,
+            remap: &|v| v,
+        };
+        for bits in [33u8, 64, 65, 200, 255] {
+            let data = [bits, 0, 0];
+            let mut out = Vec::new();
+            assert_eq!(
+                container(&mut &data[..], &mut out, &c, PaletteFormat::V1_21_5),
+                None
+            );
+            assert!(read_container(&mut &data[..], 4096, 8).is_none());
+        }
     }
 
     #[test]

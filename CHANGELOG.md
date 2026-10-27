@@ -34,6 +34,7 @@ All notable changes to PumboProx, one section per release. The format follows [K
 - `reload` checks the whole file, the plugin host sections and the permissions file too, before it changes anything, and keeps the old config on any error. It applies `logging.level` at once and names the changed settings that only take effect after a restart, instead of reporting success for them.
 - A connection lost for a reason other than a plain quit (for example a write timeout) is logged with the error instead of as `left`.
 - The warning that the permission provider is down and new logins are refused no longer shows on a plugin reload, a restart after a crash or when the proxy stops; it shows when the provider stays down.
+- A malformed chunk from a server no longer ends the session of a player on an older version; the chunk is dropped instead.
 
 ## [0.2.5-beta] - 2026-10-11
 
