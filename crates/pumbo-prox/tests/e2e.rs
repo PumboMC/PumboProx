@@ -786,6 +786,35 @@ async fn packet_flood_is_kicked_and_suggestion_flood_dropped() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn decompressed_bytes_are_limited_too() {
+    let (backend, _) = fake_backend(BackendOpts::default()).await;
+    let (proxy, addr) = start_proxy(&config(backend, "")).await;
+    let mut c = login_to_play(addr, "Inflater").await;
+    let id = module(777)
+        .packet_id(Phase::Play, Direction::Serverbound, PacketKind::Pong)
+        .unwrap();
+    // 40 packets of 512 KiB zeros: about 20 KiB on the wire (under the
+    // 1 MiB/s byte limit and the packet limit), 20 MiB to inflate.
+    let zeros = vec![0u8; 512 * 1024];
+    for _ in 0..40 {
+        if c.send_raw(id, &zeros).await.is_err() {
+            break;
+        }
+    }
+    assert_eq!(
+        wait_kick(&mut c, Duration::from_secs(5)).await.as_deref(),
+        Some("Too many packets.")
+    );
+    assert!(
+        proxy
+            .metrics
+            .kicked_packet_rate
+            .load(std::sync::atomic::Ordering::Relaxed)
+            >= 1
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn compression_bomb_and_oversized_frames_close_the_connection() {
     let (backend, _) = fake_backend(BackendOpts::default()).await;
     let (proxy, addr) = start_proxy(&config(backend, "")).await;

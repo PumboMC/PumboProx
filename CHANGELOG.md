@@ -13,6 +13,7 @@ All notable changes to PumboProx, one section per release. The format follows [K
 - A plugin that changes permissions now needs the owner's consent: `plugins.<id>.grants: [permissions-write]` in `pumboprox.yml` besides the request in its manifest. It can only set its own nodes, never `*`, `pumbo.proxy.`, `minecraft:` or `group.` nodes, and every change is logged. A plugin that asks without the grant gets a warning at start; a new grant needs a restart, not `reload`.
 - The proxy no longer follows a link out of a plugin's data folder when it writes the plugin's default files or loads its structures. Structure files must be regular files of at most 16 MiB.
 - A dialog click (`custom_click_action`) sent by a player in play is checked against the same size and NBT depth limits as in configuration instead of passing to the server unread.
+- `limits.client-bytes-per-second` counted only compressed data, so a player could make the proxy decompress far more. Decompressed data now has its own limit, four times that value, with the same kick.
 
 ### Added
 

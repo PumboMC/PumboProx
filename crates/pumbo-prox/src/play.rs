@@ -76,6 +76,9 @@ type KickFuture =
     Pin<Box<dyn Future<Output = (crate::plugins::KickDecision, Box<Component>, bool)> + Send>>;
 /// Redirects by `on-server-connect` per request, against loops.
 const MAX_REDIRECTS: u8 = 3;
+/// Decompressed bytes a player may send per byte of `client-bytes-per-second`:
+/// the byte limit counts compressed data, this bounds the inflating behind it.
+const DECODED_PER_CLIENT_BYTE: f64 = 4.0;
 /// Messages and titles, action bar and boss bars waiting for a client to be
 /// in play; more are dropped.
 const MAX_DEFERRED: usize = 64;
@@ -339,6 +342,7 @@ struct Play<'a> {
     commands_changed: Arc<Notify>,
     packets: TokenBucket,
     bytes: TokenBucket,
+    decoded: TokenBucket,
     suggestions: TokenBucket,
     last_client: Instant,
     pending_kick: Option<KickFuture>,
@@ -425,6 +429,10 @@ pub(crate) async fn run(
         cmds,
         packets: TokenBucket::new(limits.client_packets_per_second),
         bytes: TokenBucket::new(limits.client_bytes_per_second),
+        decoded: {
+            let rate = f64::from(limits.client_bytes_per_second) * DECODED_PER_CLIENT_BYTE;
+            TokenBucket::with_burst(rate, rate)
+        },
         suggestions: TokenBucket::new(limits.command_suggestions_per_second),
         last_client: now,
         vworld: None,
@@ -2122,7 +2130,7 @@ impl Play<'_> {
                 Ok(None) => return None,
                 Err(e) => return Some(End::Protocol(e.to_string())),
             };
-            if !self.packets.take(1.0) {
+            if !self.packets.take(1.0) || !self.decoded.take(f.payload.len() as f64) {
                 Metrics::inc(&self.proxy.metrics.kicked_packet_rate);
                 return Some(end_kick("Too many packets."));
             }

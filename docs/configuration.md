@@ -152,7 +152,7 @@ Protection built into the proxy, before any plugin. The per-address limits count
 | `max-pending-logins` | `2000` | Connections still logging in, for the whole proxy; must be more than 0 | reload |
 | `max-concurrent-has-joined` | `64` | Premium checks in progress at once, for the whole proxy; must be more than 0 | reload |
 | `client-packets-per-second` | `500` | Packets from one player per second | reload (new players) |
-| `client-bytes-per-second` | `1048576` | Bytes from one player per second | reload (new players) |
+| `client-bytes-per-second` | `1048576` | Bytes from one player per second, as sent; after decompression a player may send four times this | reload (new players) |
 | `command-suggestions-per-second` | `10` | Command completion requests from one player per second | reload (new players) |
 | `handshake-timeout-ms` | `5000` | Time for the first packet of a connection | reload |
 | `login-timeout-ms` | `30000` | Time for the whole login | reload |
