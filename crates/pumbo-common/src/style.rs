@@ -114,7 +114,7 @@ pub fn prefix_code(plugin: &str, accent: Color) -> String {
     format!("{}{pumbo}{rest_code}{rest} {}» ", code(BRAND), code(MUTED))
 }
 
-/// The short tag in front of every chat line, as LuckPerms does with `[LP]`:
+/// The short tag in front of every chat line:
 /// the first letter of "Pumbo" in [`BRAND`] and the first letter of the rest of
 /// the name in the plugin's `accent`, both bold, in plain dark grey brackets (a
 /// colour code ends bold: `&8[&#f28c28&lP&#ffd54f&lP&8] ` for PumboPerms).

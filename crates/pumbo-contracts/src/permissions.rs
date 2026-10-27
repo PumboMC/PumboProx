@@ -6,7 +6,6 @@
 //! longest matching `a.b.*`, before `*`; on a tie a session node (set by a
 //! plugin until the player leaves) wins over the file, the file wins over the
 //! provider (the administrator has the last word) and `false` wins over `true`.
-//! Resolution order modelled on the public LuckPerms documentation (MIT).
 
 use std::collections::{BTreeMap, BTreeSet};
 
