@@ -298,6 +298,42 @@ fn a_server_left_by_a_crashed_proxy_is_taken_over() {
     }
 }
 
+/// A process with the recorded PID but another start time (the PID was
+/// reused) gets no signal and is not taken over.
+#[test]
+fn a_reused_pid_is_left_alone() {
+    let cfg = config("reused", 25650);
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let pid = rt.block_on(async {
+        let m = manager(cfg.clone());
+        create(&m, "arena").await;
+        m.start("arena").unwrap();
+        wait("ready", 20, || m.state("arena") == State::Ready).await;
+        pid_of(&m, "arena").unwrap()
+    });
+    rt.shutdown_timeout(Duration::from_secs(1));
+    assert!(alive(pid));
+    let yml = cfg.dir.join("servers.yml");
+    let text = std::fs::read_to_string(&yml).unwrap();
+    let (head, tail) = text.split_once("    started: ").unwrap();
+    let rest = tail.split_once('\n').unwrap().1;
+    std::fs::write(
+        &yml,
+        format!("{head}    started: \"Thu Jan  1 00:00:00 1970\"\n{rest}"),
+    )
+    .unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let m = manager(cfg);
+        m.boot();
+        assert_eq!(m.state("arena"), State::Stopped);
+        assert_eq!(m.entry("arena").unwrap().pid, None);
+        m.shutdown().await;
+    });
+    assert!(alive(pid), "no signal for a process that is not ours");
+    kill(pid);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn autostart_and_a_stale_pid() {
     let mut cfg = config("boot", 25790);

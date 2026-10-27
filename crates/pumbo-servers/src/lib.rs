@@ -259,6 +259,7 @@ impl Manager {
             port,
             autostart: tpl.autostart,
             pid: None,
+            started: None,
         };
         self.edit(|s| s.entries.insert(name.to_string(), entry.clone()))?;
         tracing::info!(

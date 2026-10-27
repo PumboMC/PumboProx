@@ -31,6 +31,10 @@ pub struct Entry {
     /// The last process, for taking it over after a proxy crash.
     #[serde(default)]
     pub pid: Option<u32>,
+    /// Start time of that process ([`crate::runtime::Identity::started`]),
+    /// so a later process with the same PID is not taken for it.
+    #[serde(default)]
+    pub started: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -97,6 +101,9 @@ fn render(entries: &BTreeMap<String, Entry>) -> String {
         ));
         if let Some(pid) = e.pid {
             out.push_str(&format!("    pid: {pid}\n"));
+        }
+        if let Some(started) = &e.started {
+            out.push_str(&format!("    started: {}\n", q(started)));
         }
     }
     out
@@ -363,12 +370,14 @@ ask_permission_confirmation = false
             port: 25700,
             autostart: true,
             pid: Some(4242),
+            started: Some("Tue Oct 27 05:02:15 2026".into()),
         };
         store.entries.insert("arena".into(), entry.clone());
         store.entries.insert(
             "lobby-2".into(),
             Entry {
                 pid: None,
+                started: None,
                 autostart: false,
                 ..entry.clone()
             },

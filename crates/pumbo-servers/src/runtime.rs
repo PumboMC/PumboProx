@@ -38,6 +38,15 @@ pub struct ProcStatus {
     pub rss_kib: Option<u64>,
 }
 
+/// What tells a process apart from a later one with the same PID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Identity {
+    /// Its start time as the system reports it.
+    pub started: String,
+    /// Its working directory.
+    pub cwd: PathBuf,
+}
+
 pub trait Runner: Send + Sync {
     /// Starts `launch` in `dir`; stdout and stderr go to `log`.
     fn start(&self, dir: &Path, launch: &Launch, log: Arc<Log>) -> Result<Started, String>;
@@ -48,6 +57,8 @@ pub trait Runner: Send + Sync {
     fn write_stdin(&self, pid: u32, line: &str) -> Result<(), String>;
     /// `None` when no process has this PID.
     fn status(&self, pid: u32) -> Option<ProcStatus>;
+    /// `None` when no process has this PID or the system does not tell.
+    fn identity(&self, pid: u32) -> Option<Identity>;
 }
 
 /// Lines of a console kept for `logs`.
@@ -252,6 +263,62 @@ impl Runner for ProcessRunner {
     fn status(&self, pid: u32) -> Option<ProcStatus> {
         ps_status(pid)
     }
+
+    fn identity(&self, pid: u32) -> Option<Identity> {
+        identity(pid)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn identity(pid: u32) -> Option<Identity> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    Some(Identity {
+        started: proc_start(&stat)?,
+        cwd: std::fs::read_link(format!("/proc/{pid}/cwd")).ok()?,
+    })
+}
+
+/// `ps` for the start time (in the C locale, the same text every time) and
+/// `lsof` for the working directory.
+#[cfg(all(unix, not(target_os = "linux")))]
+fn identity(pid: u32) -> Option<Identity> {
+    let run = |program: &str, args: &[&str]| {
+        let out = std::process::Command::new(program)
+            .args(args)
+            .env("LC_ALL", "C")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    let pid = pid.to_string();
+    let started = run("ps", &["-p", &pid, "-o", "lstart="])?;
+    let started = started.split_whitespace().collect::<Vec<_>>().join(" ");
+    let cwd = run("lsof", &["-a", "-p", &pid, "-d", "cwd", "-Fn"])?;
+    let cwd = cwd.lines().find_map(|l| l.strip_prefix('n'))?;
+    (!started.is_empty()).then(|| Identity {
+        started,
+        cwd: cwd.into(),
+    })
+}
+
+#[cfg(not(unix))]
+fn identity(_: u32) -> Option<Identity> {
+    None
+}
+
+/// The start time (field 22, clock ticks after boot) of `/proc/<pid>/stat`;
+/// the program name before it is in parentheses and may hold spaces.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn proc_start(stat: &str) -> Option<String> {
+    stat.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(19)
+        .map(str::to_string)
 }
 
 /// `kill <sig> <pid>` for a process that is not our child (one PID only).
@@ -321,6 +388,13 @@ mod tests {
         );
         assert_eq!(parse_ps("88 java\n").map(|s| s.name), Some("java".into()));
         assert_eq!(parse_ps(""), None);
+    }
+
+    #[test]
+    fn proc_start_times() {
+        let stat = "4242 (a b) c) S 1 4242 4242 0 -1 4194560 100 0 0 0 5 2 0 0 20 0 30 0 987654 123 4 18446744073709551615";
+        assert_eq!(proc_start(stat).as_deref(), Some("987654"));
+        assert_eq!(proc_start("4242 (x) S 1"), None);
     }
 
     #[test]

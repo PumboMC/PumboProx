@@ -62,7 +62,7 @@ pub(crate) struct Slot {
 const BACKOFF: [u64; 3] = [1, 5, 15];
 const CRASH_WINDOW: Duration = Duration::from_secs(600);
 /// Program names of servers a crashed proxy may have left running (D-SRV-3).
-const ORPHAN_NAMES: &[&str] = &["pumpkin", "java"];
+const ORPHAN_NAMES: &[&str] = &["pumpkin"];
 
 impl Manager {
     fn slot<T>(&self, name: &str, f: impl FnOnce(&mut Slot) -> T) -> T {
@@ -98,10 +98,16 @@ impl Manager {
         }
     }
 
-    fn save_pid(&self, name: &str, pid: Option<u32>) {
+    /// The process of a server and its start time, `None` for no process.
+    fn save_pid(&self, name: &str, pid: Option<(u32, Option<String>)>) {
+        let (pid, started) = match pid {
+            Some((pid, started)) => (Some(pid), started),
+            None => (None, None),
+        };
         let r = self.edit(|s| {
             if let Some(e) = s.entries.get_mut(name) {
                 e.pid = pid;
+                e.started = started;
             }
         });
         if let Err(e) = r {
@@ -199,15 +205,33 @@ impl Manager {
         self.start(name)
     }
 
+    /// The process a crashed proxy left running for a server: its PID in
+    /// `servers.yml` is a `pumpkin` process with the recorded start time,
+    /// running in the server's folder. Any other process with that PID is
+    /// left alone.
+    fn orphan(&self, name: &str, entry: &Entry) -> Option<u32> {
+        let pid = entry.pid?;
+        let st = self.runner.status(pid)?;
+        let dir = std::fs::canonicalize(self.config.dir.join(name)).ok();
+        let ours = ORPHAN_NAMES.contains(&st.name.as_str())
+            && entry.started.is_some()
+            && self.runner.identity(pid).is_some_and(|id| {
+                Some(&id.started) == entry.started.as_ref()
+                    && std::fs::canonicalize(&id.cwd).ok() == dir
+            });
+        if !ours {
+            warn!(
+                "server {name}: pid {pid} is not the process this proxy started, leaving it alone"
+            );
+        }
+        ours.then_some(pid)
+    }
+
     /// At proxy start: takes over servers a crashed proxy left running
-    /// (their PID in `servers.yml` belongs to a `pumpkin` or `java`
-    /// process), then starts the `autostart` ones.
+    /// (see [`Manager::orphan`]), then starts the `autostart` ones.
     pub fn boot(self: &Arc<Self>) {
         for (name, entry) in self.entries() {
-            let alive = entry.pid.and_then(|pid| {
-                let st = self.runner.status(pid)?;
-                ORPHAN_NAMES.contains(&st.name.as_str()).then_some(pid)
-            });
+            let alive = self.orphan(&name, &entry);
             let r = match alive {
                 Some(pid) => {
                     info!(
@@ -263,7 +287,8 @@ impl Manager {
                 None => match self.spawn(&name) {
                     Ok(s) => {
                         self.set(&name, State::Starting, Some(s.pid));
-                        self.save_pid(&name, Some(s.pid));
+                        let started = self.runner.identity(s.pid).map(|id| id.started);
+                        self.save_pid(&name, Some((s.pid, started)));
                         tokio::spawn(self.clone().wait_ready(name.clone(), s.pid));
                         (s.pid, s.exited)
                     }
