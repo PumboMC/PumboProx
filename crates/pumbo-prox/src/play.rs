@@ -90,6 +90,28 @@ pub(crate) enum End {
     BackendKicked,
     ClientClosed,
     Protocol(String),
+    /// The client connection failed other than by a plain close.
+    ClientLost(String),
+}
+
+impl End {
+    /// A closed connection, a reset or a broken pipe is how clients usually
+    /// leave; anything else (a write timeout, say) is worth its own text.
+    fn client_lost(e: ConnError) -> Self {
+        use std::io::ErrorKind::{BrokenPipe, ConnectionAborted, ConnectionReset, UnexpectedEof};
+        match e {
+            ConnError::Closed => End::ClientClosed,
+            ConnError::Io(io)
+                if matches!(
+                    io.kind(),
+                    UnexpectedEof | ConnectionReset | ConnectionAborted | BrokenPipe
+                ) =>
+            {
+                End::ClientClosed
+            }
+            e => End::ClientLost(e.to_string()),
+        }
+    }
 }
 
 fn end_kick(text: &str) -> End {
@@ -479,6 +501,7 @@ pub(crate) async fn run(
         }
         End::BackendKicked => "kicked by the backend".into(),
         End::ClientClosed => "left".into(),
+        End::ClientLost(why) => format!("connection lost: {why}"),
         End::Protocol(why) => {
             Metrics::inc(&proxy.metrics.protocol_errors);
             format!("protocol error: {why}")
@@ -539,7 +562,10 @@ impl Play<'_> {
                 // data slowly: holding its packets back would pass them on in
                 // one burst later, over the limits of the proxy and backend.
                 r = self.client.fill_writing(client_full.then_some(CLIENT_BACKLOG)) => {
-                    let Ok(n) = r else { return End::ClientClosed };
+                    let n = match r {
+                        Ok(n) => n,
+                        Err(e) => return End::client_lost(e),
+                    };
                     // It took its backlog: the backend is read again.
                     let Some(n) = n else { continue };
                     self.last_client = Instant::now();
@@ -3146,6 +3172,22 @@ fn add_literals(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn client_errors_beyond_a_plain_quit_keep_their_text() {
+        use std::io::{Error, ErrorKind};
+        let left = |e| matches!(End::client_lost(e), End::ClientClosed);
+        assert!(left(ConnError::Closed));
+        assert!(left(Error::from(ErrorKind::ConnectionReset).into()));
+        assert!(left(Error::from(ErrorKind::BrokenPipe).into()));
+        assert!(left(Error::from(ErrorKind::UnexpectedEof).into()));
+        let text = |e| match End::client_lost(e) {
+            End::ClientLost(why) => why,
+            _ => String::new(),
+        };
+        assert_eq!(text(ConnError::WriteTimeout), "write timed out");
+        assert!(text(Error::other("no route").into()).contains("no route"));
+    }
 
     #[test]
     fn release_ranges() {
