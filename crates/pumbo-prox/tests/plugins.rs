@@ -287,6 +287,58 @@ async fn gate_plugin_holds_in_a_virtual_world() {
     }
 }
 
+/// A reload reads the whole file, the host sections too, before it changes
+/// anything: a broken host section keeps the old config. A good file applies
+/// the log level at once and names the changes that wait for a restart.
+#[tokio::test(flavor = "multi_thread")]
+async fn reload_checks_the_whole_file_first() {
+    let dir = plugin_dir("reload", false);
+    let perms = dir.join("permissions.yml");
+    let text = format!(
+        "{}\npermissions:\n  file: {:?}\n",
+        config(&dir),
+        perms.display().to_string()
+    );
+    let file = dir.join("pumboprox.yml");
+    std::fs::write(&file, &text).unwrap();
+    let (proxy, _) = common::start_proxy_at(&text, Some(file.clone())).await;
+    let plugins = Plugins::start(&text, &proxy, Vec::new())
+        .await
+        .unwrap()
+        .expect("plugin directory");
+    proxy.plugins.set(plugins).unwrap();
+
+    let more = text.replace(
+        "servers:\n",
+        "servers:\n  extra: { address: \"127.0.0.1:2\" }\n",
+    );
+    let broken = more.replace(
+        "required-gates: [auth]",
+        "required-gates: [auth]\n  memory-mb: lots",
+    );
+    std::fs::write(&file, broken).unwrap();
+    let err = proxy.reload().unwrap_err();
+    assert!(err.contains("invalid u32 at line"), "{err}");
+    assert!(!proxy.runtime().config.servers.contains_key("extra"));
+    // A permissions file that does not load: the old config stays too.
+    std::fs::write(&file, &more).unwrap();
+    std::fs::write(&perms, "groups: [").unwrap();
+    assert!(proxy.reload().is_err());
+    assert!(!proxy.runtime().config.servers.contains_key("extra"));
+    std::fs::remove_file(&perms).unwrap();
+
+    let good = more
+        .replace("127.0.0.1:0", "127.0.0.1:25659")
+        .replace("routing:", "logging:\n  level: error\n\nrouting:");
+    std::fs::write(&file, good).unwrap();
+    assert_eq!(proxy.reload().unwrap(), ["listener"]);
+    assert!(proxy.runtime().config.servers.contains_key("extra"));
+    let level_now = tracing::enabled!(tracing::Level::WARN);
+    let test_level = std::env::var("PUMBO_TEST_LOG").unwrap_or_else(|_| "warn".into());
+    pumbo_prox::logging::set_level(&test_level).unwrap();
+    assert!(!level_now, "logging.level applies with the reload");
+}
+
 /// Placeholders in the MOTD come from the host's push values and caches
 /// (§5.8.3): `%proxy_online%` and `%proxy_max%` without asking a plugin.
 #[tokio::test(flavor = "multi_thread")]

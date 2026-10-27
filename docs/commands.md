@@ -22,7 +22,7 @@
 | --- | --- | --- | --- |
 | `/prox` | `[help] [page]` | The proxy commands you may use | |
 | `/prox version` | | The version and the protocols it speaks | |
-| `/prox reload` | | Reloads `pumboprox.yml`; players stay | `pumbo.proxy.reload` |
+| `/prox reload` | | Reloads `pumboprox.yml`; players stay. Checks the whole file first and keeps the old config on any error, then names the changed settings that need a restart (`listener`, `logging.format`, `logging.log-ips`, `logging.metrics-bind`, `bridge`, `managed-servers`, and the plugin host sections except `plugins.required-gates`) | `pumbo.proxy.reload` |
 | `/prox plugins` | | Plugins, their versions and state | `pumbo.proxy.plugins` |
 | `/prox plugins reload` | `<id>` | Reloads a plugin from its file | `pumbo.proxy.plugins.manage` |
 | `/prox plugins load` | `<id>` | Loads an unloaded plugin again; a new file in `plugins/` needs a restart | `pumbo.proxy.plugins.manage` |

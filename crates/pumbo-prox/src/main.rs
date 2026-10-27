@@ -331,7 +331,12 @@ async fn console(proxy: std::sync::Arc<Proxy>) {
         match line.as_str() {
             "" => {}
             "reload" => match proxy.reload() {
-                Ok(()) => info!("config reloaded"),
+                Ok(restart) => {
+                    info!("config reloaded");
+                    if !restart.is_empty() {
+                        warn!("changed, applied after a restart: {}", restart.join(", "));
+                    }
+                }
                 Err(e) => warn!("reload failed, keeping the old config: {e}"),
             },
             "stop" | "end" => {

@@ -5,9 +5,17 @@
 use std::net::IpAddr;
 
 use aws_lc_rs::hmac;
+use std::sync::OnceLock;
+
 use tracing::level_filters::LevelFilter;
+use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::util::SubscriberInitExt as _;
+use tracing_subscriber::{Registry, reload};
 
 use crate::config::{LogFormat, LoggingConfig};
+
+/// The level filter of the subscriber [`init`] installed, for [`set_level`].
+static LEVEL: OnceLock<reload::Handle<LevelFilter, Registry>> = OnceLock::new();
 
 /// Installs the global subscriber. Called once at startup; later calls (tests)
 /// are ignored.
@@ -16,14 +24,33 @@ pub fn init(cfg: &LoggingConfig) {
         .level
         .parse::<LevelFilter>()
         .unwrap_or(LevelFilter::INFO);
-    let builder = tracing_subscriber::fmt()
-        .with_max_level(level)
+    let (filter, handle) = reload::Layer::new(level);
+    let fmt = tracing_subscriber::fmt::layer()
         .with_target(false)
         .with_writer(std::io::stderr);
-    let _ = match cfg.format {
-        LogFormat::Text => builder.try_init(),
-        LogFormat::Json => builder.json().try_init(),
+    let installed = match cfg.format {
+        LogFormat::Text => Registry::default().with(filter).with(fmt).try_init(),
+        LogFormat::Json => Registry::default().with(filter).with(fmt.json()).try_init(),
     };
+    if installed.is_ok() {
+        let _ = LEVEL.set(handle);
+    }
+}
+
+/// `logging.level` read as a filter.
+pub fn check_level(level: &str) -> Result<LevelFilter, String> {
+    level
+        .parse()
+        .map_err(|_| format!("logging.level: unknown level \"{level}\""))
+}
+
+/// Changes the level of the running logs (`reload`).
+pub fn set_level(level: &str) -> Result<(), String> {
+    let level = check_level(level)?;
+    if let Some(h) = LEVEL.get() {
+        h.modify(|f| *f = level).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// How addresses appear in logs.

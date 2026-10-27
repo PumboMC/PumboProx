@@ -74,7 +74,8 @@ The file written on the first start:
 
 ```yaml
 # PumboProx, written on the first start. Change it and type `reload` in the
-# console (listeners need a restart). Every other setting has a default.
+# console; it names the changes that need a restart, such as listeners.
+# Every other setting has a default.
 
 listener:
   - bind: "0.0.0.0:25565"

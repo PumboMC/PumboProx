@@ -445,7 +445,16 @@ fn prox(
         "op" | "deop" => op(proxy, rt, source, sub == "op", args.get(1).copied()),
         "reload" if !allowed(proxy, rt, source, "reload") => denied(),
         "reload" => match proxy.reload() {
-            Ok(()) => crate::servers::reply("<ok>Config reloaded."),
+            Ok(restart) => {
+                let mut r = crate::servers::reply("<ok>Config reloaded.");
+                if !restart.is_empty() {
+                    r.lines.push(crate::servers::line(&format!(
+                        "<warn>Changed, applied after a restart: <s>{}",
+                        restart.join(", ")
+                    )));
+                }
+                r
+            }
             Err(e) => crate::servers::reply(&format!(
                 "<err>Reload failed, keeping the old config: <s>{}",
                 pumbo_text::template::escape_mini(&e)

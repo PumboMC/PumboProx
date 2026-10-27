@@ -378,6 +378,11 @@ impl Host {
 
     /// New `plugins.required-gates` (a config reload): logins close at once
     /// while one of them is missing.
+    /// The host sections the host started with.
+    pub fn config(&self) -> &HostConfig {
+        &self.inner.cfg
+    }
+
     pub fn set_required_gates(&self, gates: Vec<String>) {
         if let Ok(mut g) = self.inner.required_gates.write() {
             *g = gates;

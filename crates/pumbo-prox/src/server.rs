@@ -111,6 +111,60 @@ impl Runtime {
     }
 }
 
+/// Whether two parsed settings differ (the config types have no `PartialEq`).
+fn differs(a: &impl std::fmt::Debug, b: &impl std::fmt::Debug) -> bool {
+    format!("{a:?}") != format!("{b:?}")
+}
+
+/// Settings of the proxy read once at start: a reload that changes them
+/// names them. Everything else applies with the reload.
+fn restart_needed(old: &Config, new: &Config) -> Vec<String> {
+    let (o, n) = (&old.logging, &new.logging);
+    [
+        ("listener", differs(&old.listener, &new.listener)),
+        ("logging.format", o.format != n.format),
+        ("logging.log-ips", o.log_ips != n.log_ips),
+        ("logging.metrics-bind", o.metrics_bind != n.metrics_bind),
+        ("bridge", differs(&old.bridge, &new.bridge)),
+        (
+            "managed-servers",
+            differs(&old.managed_servers, &new.managed_servers),
+        ),
+    ]
+    .into_iter()
+    .filter(|(_, changed)| *changed)
+    .map(|(name, _)| name.to_string())
+    .collect()
+}
+
+/// The same for the host sections, which the plugin host reads at start;
+/// only `plugins.required-gates` applies with a reload.
+fn host_restart_needed(old: &pumbo_host::HostConfig, new: &pumbo_host::HostConfig) -> Vec<String> {
+    let plugins = |c: &pumbo_host::HostConfig| {
+        let mut p = c.plugins.clone();
+        p.required_gates.clear();
+        p
+    };
+    [
+        ("plugins", differs(&plugins(old), &plugins(new))),
+        ("services", differs(&old.services, &new.services)),
+        ("permissions", differs(&old.permissions, &new.permissions)),
+        (
+            "placeholders",
+            differs(&old.placeholders, &new.placeholders),
+        ),
+        (
+            "server-group",
+            differs(&old.server_groups, &new.server_groups),
+        ),
+        ("style", differs(&old.style, &new.style)),
+    ]
+    .into_iter()
+    .filter(|(_, changed)| *changed)
+    .map(|(name, _)| name.to_string())
+    .collect()
+}
+
 /// One listener's PROXY protocol settings.
 #[derive(Debug)]
 pub struct ListenerSettings {
@@ -317,36 +371,40 @@ impl Proxy {
         self.runtime.subscribe()
     }
 
-    /// Re-reads the config file. Players keep their sessions and see the new
-    /// server list and commands at once. Listeners and logging need a restart.
-    pub fn reload(&self) -> Result<(), String> {
+    /// Re-reads the config file. The whole file, the host sections too, is
+    /// read and checked before anything changes; any error keeps the old
+    /// config. Players keep their sessions and see the new server list and
+    /// commands at once; `logging.level` and `plugins.required-gates` apply
+    /// at once too. Returns the changed settings that wait for a restart.
+    pub fn reload(&self) -> Result<Vec<String>, String> {
         let path = self
             .config_path
             .as_ref()
             .ok_or("no config file to reload")?;
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let config = Config::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+        let at = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
+        let config = Config::parse(&text).map_err(|e| at(&e))?;
+        let host = pumbo_host::HostConfig::parse(&text).map_err(|e| at(&e))?;
         let old = self.runtime();
-        let binds = |c: &Config| {
-            c.listener
-                .iter()
-                .map(|l| (l.bind.clone(), l.proxy_protocol, l.trusted_proxies.clone()))
-                .collect::<Vec<_>>()
-        };
-        if binds(&config) != binds(&old.config) {
-            warn!("listener changes take effect after a restart");
+        let mut restart = restart_needed(&old.config, &config);
+        let level = config.logging.level.clone();
+        if level != old.config.logging.level {
+            crate::logging::check_level(&level).map_err(|e| at(&e))?;
         }
+        let runtime = self.prepare(config)?;
         if let Some(p) = self.plugins.get() {
-            p.host.check_permissions()?;
-        }
-        self.replace(config)?;
-        if let Some(p) = self.plugins.get() {
-            if let Ok(host) = pumbo_host::HostConfig::parse(&text) {
-                p.host.set_required_gates(host.plugins.required_gates);
-            }
+            restart.extend(host_restart_needed(p.host.config(), &host));
+            // Last check: it applies the new permissions only when they load.
             p.host.reload_permissions()?;
+            p.host.set_required_gates(host.plugins.required_gates);
         }
-        Ok(())
+        self.commit(runtime);
+        if level != old.config.logging.level
+            && let Err(e) = crate::logging::set_level(&level)
+        {
+            warn!("{e}");
+        }
+        Ok(restart)
     }
 
     /// The config file the proxy runs with (`/prox reload`, `/prox route`).
@@ -368,7 +426,14 @@ impl Proxy {
     /// A new runtime from `config` plus the servers of `managed-servers`
     /// (a server in the config file wins over one of the same name in any
     /// letter case).
-    fn replace(&self, mut config: Config) -> Result<(), String> {
+    fn replace(&self, config: Config) -> Result<(), String> {
+        let runtime = self.prepare(config)?;
+        self.commit(runtime);
+        Ok(())
+    }
+
+    /// The runtime of [`Proxy::replace`], built and checked; nothing changes yet.
+    fn prepare(&self, mut config: Config) -> Result<Runtime, String> {
         let mut managed = Vec::new();
         if let Some(m) = self.servers.get() {
             for (name, s) in crate::servers::backends(self, m) {
@@ -394,6 +459,10 @@ impl Proxy {
         }
         let mut runtime = Runtime::build(config, &self.releases)?;
         runtime.managed = managed;
+        Ok(runtime)
+    }
+
+    fn commit(&self, runtime: Runtime) {
         // The operator code is for a fresh network only.
         if !runtime.backends.is_empty() && self.claim.lock().is_ok_and(|mut c| c.take().is_some()) {
             info!("The operator code expired: the network has a server now.");
@@ -402,7 +471,6 @@ impl Proxy {
         if let Some(p) = self.plugins.get() {
             p.servers_changed(self);
         }
-        Ok(())
     }
 
     pub fn newest(&self) -> Arc<dyn VersionModule> {
