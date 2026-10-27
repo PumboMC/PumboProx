@@ -242,6 +242,7 @@ pub const KNOWN_PACKETS: &[(Phase, Direction, PacketKind)] = &[
     (Pl, S, K::ChatSessionUpdate),
     (Pl, S, K::CommandSuggestion),
     (Pl, S, K::CustomPayload),
+    (Pl, S, K::CustomClickAction),
     (Pl, S, K::ClientInformation),
     (Pl, S, K::ResourcePack),
     (Pl, S, K::AcceptTeleportation),

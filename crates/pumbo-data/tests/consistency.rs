@@ -63,6 +63,12 @@ const ADDED_LATER: &[(Phase, Direction, PacketKind, i32)] = &[
     ),
     (
         Phase::Play,
+        Direction::Serverbound,
+        PacketKind::CustomClickAction,
+        771,
+    ),
+    (
+        Phase::Play,
         Direction::Clientbound,
         PacketKind::ShowDialog,
         771,
@@ -155,6 +161,32 @@ fn early_phases_are_fully_known() {
                     p.direction,
                     p.name
                 );
+            }
+        }
+    }
+}
+
+/// Kinds the session checks in configuration and in play alike.
+const BOTH_PHASES: &[PacketKind] = &[PacketKind::CustomClickAction];
+
+#[test]
+fn kinds_checked_in_both_phases_are_known_in_both() {
+    // Without the play entry the session sees no kind there and forwards the
+    // packet unread.
+    let known: BTreeSet<(Phase, Direction, PacketKind)> = KNOWN_PACKETS.iter().copied().collect();
+    for v in protocols() {
+        let t = tables(v).unwrap();
+        for &kind in BOTH_PHASES {
+            for phase in [Phase::Configuration, Phase::Play] {
+                for dir in [Direction::Clientbound, Direction::Serverbound] {
+                    if t.packet_id(phase, dir, kind.name()).is_some() {
+                        assert!(
+                            known.contains(&(phase, dir, kind)),
+                            "{v}: {phase:?}/{dir:?}/{} is not on the known list",
+                            kind.name()
+                        );
+                    }
+                }
             }
         }
     }
