@@ -134,6 +134,30 @@ async fn without_a_server_players_wait_in_the_pumbox_until_a_reload_brings_one()
     proxy.stop();
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn commands_in_the_pumbox_are_rate_limited() {
+    let (proxy, addr) = common::start_proxy(BASE).await;
+    let mut p = Player::join(addr, module(777), JoinOptions::new("Typist"))
+        .await
+        .unwrap();
+    assert!(
+        message(&mut p, "No server is available right now.").await,
+        "{:?}",
+        p.messages
+    );
+    for _ in 0..30 {
+        p.command("server").await.unwrap();
+    }
+    p.pump(Duration::from_secs(1), |_| false).await.unwrap();
+    assert!(p.disconnect.is_none(), "{:?}", p.disconnect);
+    let ran = proxy
+        .metrics
+        .proxy_commands
+        .load(std::sync::atomic::Ordering::Relaxed);
+    assert!((1..=8).contains(&ran), "{ran} of 30 commands ran");
+    proxy.stop();
+}
+
 #[test]
 fn a_code_makes_one_operator_and_wrong_codes_close_it() {
     let path = file("claim", BASE);

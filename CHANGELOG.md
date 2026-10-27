@@ -14,6 +14,7 @@ All notable changes to PumboProx, one section per release. The format follows [K
 - The proxy no longer follows a link out of a plugin's data folder when it writes the plugin's default files or loads its structures. Structure files must be regular files of at most 16 MiB.
 - A dialog click (`custom_click_action`) sent by a player in play is checked against the same size and NBT depth limits as in configuration instead of passing to the server unread.
 - `limits.client-bytes-per-second` counted only compressed data, so a player could make the proxy decompress far more. Decompressed data now has its own limit, four times that value, with the same kick.
+- A player waiting in the Pumbox can run five commands at once and then one a second; more are ignored. These commands are logged at `debug` instead of `info`, so they no longer flood the log.
 
 ### Added
 

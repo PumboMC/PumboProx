@@ -14,7 +14,7 @@ use pumbo_virtual::physics::{FallCheck, FallParams, FallStatus};
 use pumbo_virtual::{BlockPos, Hand, Input, MapImage, Position, World, WorldOptions};
 use tokio::sync::mpsc;
 use tokio::time::{Instant, sleep_until};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::server::{Proxy, SessionCmd};
@@ -236,6 +236,8 @@ const PUMBOX_FLOOR: i32 = 64;
 pub const PUMBOX_SPAWN: (f64, f64, f64) = (0.5, 65.0, 0.5);
 /// One long title instead of sending it again (ticks, an hour).
 const PUMBOX_TITLE_TICKS: i32 = 72_000;
+/// Commands one player may run in the Pumbox: a burst, then one a second.
+const PUMBOX_COMMAND_BURST: f64 = 5.0;
 
 /// The Pumbox: an empty world, the player on an invisible block, in
 /// adventure mode without damage (the defaults of a virtual world).
@@ -268,12 +270,16 @@ pub(crate) async fn pumbox(
             times: (10, PUMBOX_TITLE_TICKS, 20),
         },
     );
+    let mut rate = crate::limits::TokenBucket::with_burst(1.0, PUMBOX_COMMAND_BURST);
     while let Some(PlayerInput { input, .. }) = inputs.recv().await {
         let line = match input {
             Input::Command(line) => line,
             Input::Left => return,
             _ => continue,
         };
+        if !rate.take(1.0) {
+            continue;
+        }
         let say = |c: Component| proxy.send_to(id, SessionCmd::Message(Box::new(c)));
         let source = crate::commands::Source::Player { id, server: None };
         let Some(reply) = crate::commands::run(&proxy, &proxy.runtime(), &source, &line) else {
@@ -281,7 +287,7 @@ pub(crate) async fn pumbox(
             continue;
         };
         crate::metrics::Metrics::inc(&proxy.metrics.proxy_commands);
-        info!("{name} issued proxy command /{line}");
+        debug!("{name} issued proxy command /{line}");
         for l in reply.lines {
             say(l);
         }
