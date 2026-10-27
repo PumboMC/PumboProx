@@ -10,10 +10,20 @@ All notable changes to PumboProx, one section per release. The format follows [K
 - `online-mode: per-player` keeps the premium-name answers (a premium name for a day, any other for ten minutes) and limits lookups of new names for the whole proxy, so a flood of logins with random names no longer uses up the account service's limit for everyone. A refusal for too many requests (HTTP 429) has its own log line and metric.
 - A new install writes `login.online-mode: true`. With `per-player` or `false` and no `auth` gate in `plugins.required-gates`, the proxy warns at start that players without a premium account can join under any name, and names offline UUIDs in `commands.operators`.
 - `/prox claim` and `/prox op` from the game refuse an offline UUID unless the required `auth` gate runs; `prox op <uuid>` in the console still works, and `deop` always does.
+- A plugin that changes permissions now needs the owner's consent: `plugins.<id>.grants: [permissions-write]` in `pumboprox.yml` besides the request in its manifest. It can only set its own nodes, never `*`, `pumbo.proxy.`, `minecraft:` or `group.` nodes, and every change is logged. A plugin that asks without the grant gets a warning at start; a new grant needs a restart, not `reload`.
+- The proxy no longer follows a link out of a plugin's data folder when it writes the plugin's default files or loads its structures. Structure files must be regular files of at most 16 MiB.
 
 ### Changed
 
 - A `pumboprox.yml` without `login.online-mode` stays on `per-player`, now with a warning at start; set the key to keep that choice. New installs get `online-mode: true`.
+- The `/alert` help and the log hint for a server that does not ask for forwarding use neutral wording and name the setting for Pumpkin and Paper.
+
+### Fixed
+
+- A plugin stuck in a loop that keeps calling the proxy is stopped instead of holding a worker thread, and `reload`, `unload` and stopping the proxy get through while a plugin is busy.
+- A flood of player input (movement, chat, plugin messages) can no longer pile up in one batch for a plugin: low-priority input is dropped first and counted in `pumbo_virtual_inputs_dropped_total`.
+- Less work per connection: compression state is reused between packets, and a session no longer re-creates its timer on every packet, which cut lock waits with many players online.
+- A connection lost for a reason other than a plain quit (for example a write timeout) is logged with the error instead of as `left`.
 
 ## [0.2.5-beta] - 2026-10-11
 
