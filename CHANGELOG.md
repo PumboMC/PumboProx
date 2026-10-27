@@ -36,6 +36,7 @@ All notable changes to PumboProx, one section per release. The format follows [K
 - A connection lost for a reason other than a plain quit (for example a write timeout) is logged with the error instead of as `left`.
 - The warning that the permission provider is down and new logins are refused no longer shows on a plugin reload, a restart after a crash or when the proxy stops; it shows when the provider stays down.
 - A malformed chunk from a server no longer ends the session of a player on an older version; the chunk is dropped instead.
+- When the metrics endpoint cannot accept a connection (for example out of file descriptors), it logs a warning and waits briefly instead of keeping a CPU core busy.
 
 ## [0.2.5-beta] - 2026-10-11
 

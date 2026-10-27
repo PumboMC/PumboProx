@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 
 macro_rules! metrics {
     ($($(#[$doc:meta])* $field:ident: $kind:ident $name:literal $labels:literal;)*) => {
@@ -124,9 +124,26 @@ pub async fn serve(
     metrics: Arc<Metrics>,
     extra: Arc<dyn Fn() -> String + Send + Sync>,
 ) {
+    serve_from(|| listener.accept(), metrics, extra).await;
+}
+
+async fn serve_from<F, A>(
+    mut accept: F,
+    metrics: Arc<Metrics>,
+    extra: Arc<dyn Fn() -> String + Send + Sync>,
+) where
+    F: FnMut() -> A,
+    A: Future<Output = std::io::Result<(TcpStream, SocketAddr)>>,
+{
     loop {
-        let Ok((mut stream, _)) = listener.accept().await else {
-            continue;
+        let mut stream = match accept().await {
+            Ok((s, _)) => s,
+            Err(e) => {
+                // E.g. out of file descriptors: back off instead of spinning.
+                tracing::warn!("metrics accept: {e}");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            }
         };
         let metrics = metrics.clone();
         let extra = extra.clone();
@@ -172,5 +189,23 @@ mod tests {
             1
         );
         assert!(text.contains("# TYPE pumboprox_players_online gauge"));
+    }
+
+    #[tokio::test]
+    async fn failing_accept_backs_off() {
+        let tries = Arc::new(AtomicU64::new(0));
+        let counted = tries.clone();
+        let accept = move || {
+            let counted = counted.clone();
+            async move {
+                Metrics::inc(&counted);
+                tokio::task::yield_now().await;
+                Err(std::io::Error::other("out of file descriptors"))
+            }
+        };
+        let serve = serve_from(accept, Arc::default(), Arc::new(String::new));
+        let _ = tokio::time::timeout(Duration::from_millis(300), serve).await;
+        let tries = tries.load(Ordering::Relaxed);
+        assert!(tries <= 10, "{tries} accepts in 300 ms");
     }
 }
