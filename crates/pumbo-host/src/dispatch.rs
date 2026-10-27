@@ -105,8 +105,9 @@ impl HostInner {
         self.message(&self.cfg.plugins.messages.gate_failed)
     }
 
-    /// Sends a notification without waiting; the result is ignored.
-    pub(crate) fn notify<F>(&self, slot: &PluginSlot, f: F)
+    /// Sends a notification without waiting; the result is ignored. False
+    /// when it was not queued (the plugin does not run or its mailbox is full).
+    pub(crate) fn notify<F>(&self, slot: &PluginSlot, f: F) -> bool
     where
         F: for<'a> FnOnce(
                 &'a wasmtime::component::Accessor<crate::runtime::PluginState>,
@@ -115,9 +116,7 @@ impl HostInner {
             + Send
             + 'static,
     {
-        if slot.status() == Status::Running {
-            let _ = slot.submit(actor::job(f));
-        }
+        slot.status() == Status::Running && slot.submit(actor::job(f)).is_ok()
     }
 
     pub(crate) fn broadcast(&self, cmd: crate::bridge::PlayerCommand) {

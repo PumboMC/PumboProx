@@ -927,3 +927,69 @@ async fn imports_bars_timers_crypto_files() {
     );
     wait_for("bar hidden", LONG, || hides() > before).await;
 }
+
+/// Bots in a virtual world flood the plugin with 32 KB plugin messages
+/// (GAP3-01): the batches stay small enough for a plugin with 48 MB of
+/// memory, the `/release` typed after the flood still arrives, and the
+/// dropped inputs show in the metrics.
+#[tokio::test(flavor = "multi_thread")]
+async fn virtual_input_flood_is_bounded() {
+    let env = Env::new("inputflood");
+    env.plugin(
+        "vw",
+        "test",
+        "events: [gate, virtual-input]\ngate: { name: vw, priority: 100 }",
+    );
+    let mut cfg = env.host_config("");
+    cfg.plugins.memory_mb = 48;
+    let (host, bridge) = start(cfg).await;
+    host.player_joined(player(1, "virtual_a", None));
+    let h = host.clone();
+    let gate = tokio::spawn(async move { h.run_gates(1).await });
+    let mut inputs = None;
+    wait_for("the virtual world", LONG, || {
+        inputs = bridge
+            .sent
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|(p, c)| match c {
+                pumbo_host::bridge::PlayerCommand::Virtual(pumbo_virtual::Command::Enter {
+                    inputs,
+                    ..
+                }) if *p == 1 => Some(inputs.clone()),
+                _ => None,
+            });
+        inputs.is_some()
+    })
+    .await;
+    let inputs = inputs.unwrap();
+    let send = |input| {
+        let inputs = inputs.clone();
+        async move {
+            inputs
+                .send(pumbo_virtual::PlayerInput { player: 1, input })
+                .await
+                .unwrap();
+        }
+    };
+    for _ in 0..6000 {
+        send(pumbo_virtual::Input::PluginMessage(
+            "bot:spam".into(),
+            vec![7; 32 * 1024],
+        ))
+        .await;
+    }
+    send(pumbo_virtual::Input::Command("release".into())).await;
+    let r = tokio::time::timeout(LONG, gate).await.unwrap().unwrap();
+    assert_eq!(r, GateOutcome::Pass);
+    assert_eq!(host.plugin("vw").unwrap().status(), Status::Running);
+    let metrics = host.render_metrics();
+    let dropped: u64 = metrics
+        .lines()
+        .find_map(|l| l.strip_prefix("pumbo_virtual_inputs_dropped_total{plugin=\"vw\"} "))
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0);
+    eprintln!("[measure] flood of 6000 plugin messages: {dropped} dropped");
+    assert!(dropped > 0, "{metrics}");
+}

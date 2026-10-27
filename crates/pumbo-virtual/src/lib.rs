@@ -40,7 +40,8 @@ pub struct PlayerInput {
 /// What a driver (the plugin host, the test gate) asks of a player's session
 /// (WIT `virtual`, plan §5). The session answers with [`PlayerInput`]s on the
 /// channel of the last `Enter`; a full channel drops inputs, so a slow
-/// driver cannot grow the session's memory.
+/// driver cannot grow the session's memory. The plugin host keeps reading
+/// its channel and bounds the batches it hands on itself.
 #[derive(Debug, Clone)]
 pub enum Command {
     /// Into `world` at `at`: from the login (gate), from a server (through

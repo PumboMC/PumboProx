@@ -139,6 +139,8 @@ pub struct PluginSlot {
     pub(crate) bars: Mutex<HashMap<u64, crate::imports::BarState>>,
     /// Virtual world inputs for this plugin, batched per tick.
     pub(crate) inputs: Mutex<Option<mpsc::Sender<pumbo_virtual::PlayerInput>>>,
+    /// Virtual world inputs that never reached the plugin.
+    pub(crate) inputs_dropped: AtomicU64,
     /// A reload, unload or stop was asked: guest code still running then is
     /// stopped at the next epoch tick. While the guest runs, it holds the
     /// store and `serve` never sees the request.
@@ -184,6 +186,7 @@ impl PluginSlot {
             channels: Mutex::new(BTreeSet::new()),
             bars: Mutex::new(HashMap::new()),
             inputs: Mutex::new(None),
+            inputs_dropped: AtomicU64::new(0),
             stop_by: Mutex::new(None),
         });
         (slot, Receivers { jobs, control: crx })

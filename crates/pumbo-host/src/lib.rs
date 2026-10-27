@@ -33,6 +33,7 @@ mod crypto;
 mod dispatch;
 mod http;
 mod imports;
+mod inputs;
 pub mod manifest;
 mod permissions;
 mod placeholders;

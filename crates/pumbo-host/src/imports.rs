@@ -50,7 +50,10 @@ pub struct MapHandle(pub pumbo_virtual::MapImage);
 
 /// Teleport IDs the host hands out (`virtual.teleport` returns one at once).
 static NEXT_TELEPORT: AtomicU64 = AtomicU64::new(1_000_000);
-/// Inputs waiting per plugin before they are dropped.
+/// Inputs in the channel of one plugin. The batching task reads it all the
+/// time and bounds what it keeps ([`crate::inputs`]); the session drops
+/// inputs only when the channel itself is full
+/// (`pumboprox_dropped_packets_total{kind="virtual_input"}`).
 const INPUT_QUEUE: usize = 4096;
 /// One `on-virtual-input` per tick at most.
 const INPUT_TICK: Duration = Duration::from_millis(50);
@@ -493,6 +496,38 @@ fn wit_input(i: pumbo_virtual::PlayerInput) -> wv::Input {
     }
 }
 
+/// Hands the next batch of inputs to `on-virtual-input`; when the plugin
+/// cannot take it, its priority inputs wait for the next tick.
+fn deliver_inputs(host: &HostInner, slot: &PluginSlot, queue: &mut crate::inputs::InputQueue) {
+    if !slot.status().is_coming() {
+        queue.clear();
+        return;
+    }
+    let batch = queue.take();
+    if !slot
+        .manifest
+        .listens(crate::manifest::EventKind::VirtualInput)
+    {
+        return;
+    }
+    let keep: Vec<pumbo_virtual::PlayerInput> = batch
+        .iter()
+        .filter(|i| crate::inputs::priority(&i.input))
+        .cloned()
+        .collect();
+    let low = batch.len() - keep.len();
+    let items: Vec<wv::Input> = batch.into_iter().map(wit_input).collect();
+    let queued = host.notify(slot, move |acc, g| {
+        Box::pin(async move {
+            let _ = g.call_on_virtual_input(acc, items).await;
+        })
+    });
+    if !queued {
+        queue.dropped += low as u64;
+        queue.give_back(keep);
+    }
+}
+
 impl PluginState {
     fn virtual_cmd(&self, id: PlayerId, cmd: pumbo_virtual::Command) {
         self.send(id, PlayerCommand::Virtual(cmd));
@@ -512,28 +547,23 @@ impl PluginState {
         let slot = Arc::downgrade(&self.slot);
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(INPUT_TICK);
-            let mut batch = Vec::new();
+            let mut queue = crate::inputs::InputQueue::default();
             loop {
                 tokio::select! {
                     i = rx.recv() => match i {
-                        Some(i) => batch.push(i),
+                        Some(i) => queue.push(i),
                         None => return,
                     },
                     _ = tick.tick() => {
-                        if batch.is_empty() {
+                        if queue.is_empty() && queue.dropped == 0 {
                             continue;
                         }
                         let (Some(host), Some(slot)) = (host.upgrade(), slot.upgrade()) else {
                             return;
                         };
-                        let items: Vec<wv::Input> = batch.drain(..).map(wit_input).collect();
-                        if slot.manifest.listens(crate::manifest::EventKind::VirtualInput) {
-                            host.notify(&slot, move |acc, g| {
-                                Box::pin(async move {
-                                    let _ = g.call_on_virtual_input(acc, items).await;
-                                })
-                            });
-                        }
+                        deliver_inputs(&host, &slot, &mut queue);
+                        let dropped = std::mem::take(&mut queue.dropped);
+                        slot.inputs_dropped.fetch_add(dropped, Ordering::Relaxed);
                     }
                 }
             }

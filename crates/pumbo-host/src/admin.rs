@@ -148,6 +148,16 @@ impl HostInner {
         out.push_str(&format!(
             "# TYPE pumbo_bus_dropped_total counter\npumbo_bus_dropped_total {dropped}\n"
         ));
+        out.push_str("# TYPE pumbo_virtual_inputs_dropped_total counter\n");
+        for slot in self.plugins.values() {
+            let n = slot
+                .inputs_dropped
+                .load(std::sync::atomic::Ordering::Relaxed);
+            out.push_str(&format!(
+                "pumbo_virtual_inputs_dropped_total{{plugin=\"{}\"}} {n}\n",
+                prom_label(&slot.id)
+            ));
+        }
         out
     }
 
