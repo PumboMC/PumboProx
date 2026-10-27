@@ -429,11 +429,7 @@ impl bossbar::Host for PluginState {}
 impl servers::Host for PluginState {
     fn all(&mut self) -> Vec<servers::ServerInfo> {
         self.touch();
-        self.host
-            .servers
-            .read()
-            .map(|s| s.values().cloned().collect())
-            .unwrap_or_default()
+        self.host.server_list()
     }
 }
 

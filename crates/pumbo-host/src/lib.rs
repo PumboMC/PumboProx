@@ -841,6 +841,30 @@ impl HostInner {
         self.players.read().ok()?.get(&id).cloned()
     }
 
+    /// The server list with player counts from the players online now
+    /// (the proxy pushes the list without them).
+    pub fn server_list(&self) -> Vec<ServerInfo> {
+        let mut counts: HashMap<String, u32> = HashMap::new();
+        if let Ok(players) = self.players.read() {
+            for s in players.values().filter(|p| !p.in_virtual) {
+                if let Some(s) = &s.server {
+                    *counts.entry(s.clone()).or_default() += 1;
+                }
+            }
+        }
+        self.servers
+            .read()
+            .map(|s| {
+                s.values()
+                    .map(|i| ServerInfo {
+                        players: counts.get(&i.name).copied().unwrap_or(0),
+                        ..i.clone()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn context_of(&self, server: Option<&str>) -> PlayerContext {
         PlayerContext {
             server: server.map(str::to_string),

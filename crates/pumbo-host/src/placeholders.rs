@@ -261,7 +261,15 @@ impl HostInner {
                 .max_players
                 .load(Ordering::Relaxed)
                 .to_string(),
-            ("server", "online") => self.servers.read().ok()?.get(arg?)?.players.to_string(),
+            ("server", "online") => {
+                let name = arg?;
+                self.servers.read().ok()?.get(name)?;
+                let players = self.players.read().ok()?;
+                let on = players
+                    .values()
+                    .filter(|p| !p.in_virtual && p.server.as_deref() == Some(name));
+                on.count().to_string()
+            }
             ("server", "status") => {
                 let up = self.servers.read().ok()?.get(arg?)?.online;
                 (if up { "online" } else { "offline" }).to_string()

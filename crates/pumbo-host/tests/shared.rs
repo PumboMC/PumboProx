@@ -357,6 +357,18 @@ async fn placeholders() {
         r("%player_name% %player_server% %proxy_online% %nope_x% %test_secret%"),
         "Steve survival 1 %nope_x% s3cret"
     );
+    // Player counts per server come from the players online, not the push.
+    let server = |name: &str| pumbo_host::wit::servers::ServerInfo {
+        name: name.into(),
+        address: "127.0.0.1:1".into(),
+        protocol: None,
+        online: true,
+        players: 0,
+        groups: Vec::new(),
+        enforces_secure_chat: None,
+    };
+    host.set_servers(vec![server("lobby"), server("survival")]);
+    assert_eq!(r("%server_online:survival% %server_online:lobby%"), "1 0");
 
     // A private key resolves for its owner and the proxy, not for others.
     assert_eq!(
