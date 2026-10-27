@@ -506,6 +506,13 @@ impl Play<'_> {
         let idle = Duration::from_millis(self.rt.config.limits.idle_timeout_ms);
         let mut shutdown = self.proxy.shutdown_signal();
         let mut changes = self.proxy.runtime_changes();
+        // Built once, not on every turn of the loop: each new timer and Notify
+        // registration takes a lock in the runtime.
+        let stop = stopped(&mut shutdown);
+        let commands_changed = self.commands_changed.clone();
+        let commands = commands_changed.notified();
+        let timer = sleep_until(self.deadline(idle));
+        tokio::pin!(stop, commands, timer);
         loop {
             self.follow_runtime();
             if let Err(end) = self.progress() {
@@ -514,14 +521,20 @@ impl Play<'_> {
             if let Err(end) = self.flush().await {
                 return end;
             }
+            // Every client packet moves the deadline later. The armed timer is
+            // only moved earlier, or re-armed once it fired: an early wake is
+            // harmless, `timers` checks each deadline against the clock.
             let deadline = self.deadline(idle);
+            if deadline < timer.deadline() || timer.is_elapsed() {
+                timer.as_mut().reset(deadline);
+            }
             // While a kick waits for plugins the backend is not read any more,
             // nor while the client has a backlog.
             let kick_pending = self.pending_kick.is_some();
             let client_full = self.client_full();
             tokio::select! {
                 biased;
-                () = stopped(&mut shutdown) => return end_kick("The proxy is shutting down."),
+                () = &mut stop => return end_kick("The proxy is shutting down."),
                 // The client is written here, so it is read while it takes its
                 // data slowly: holding its packets back would pass them on in
                 // one burst later, over the limits of the proxy and backend.
@@ -570,10 +583,17 @@ impl Play<'_> {
                         return end;
                     }
                 }
-                () = self.commands_changed.notified() => self.on_commands_changed(),
+                () = &mut commands => {
+                    // A change stored meanwhile is covered by this rebuild.
+                    commands.set(commands_changed.notified());
+                    if commands.as_mut().enable() {
+                        commands.set(commands_changed.notified());
+                    }
+                    self.on_commands_changed();
+                }
                 // The Pumbox waits for a new server list (`progress`).
                 _ = changes.changed(), if self.pumbox.is_some() => {}
-                () = sleep_until(deadline) => {
+                () = &mut timer => {
                     if let Some(end) = self.timers(idle) {
                         return end;
                     }

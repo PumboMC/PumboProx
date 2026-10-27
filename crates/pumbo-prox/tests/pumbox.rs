@@ -360,7 +360,51 @@ async fn commands_changed_survives_full_queue() {
     );
     p.pump(Duration::from_secs(1), |_| false).await.unwrap();
     assert_eq!(trees(&p), before + 1, "two changes, one rebuild");
+    // A later change still gets through, and once.
+    assert!(proxy.commands_changed(id));
+    assert!(
+        p.pump(WAIT, |p| trees(p) > before + 1).await.unwrap(),
+        "no second rebuild"
+    );
+    p.pump(Duration::from_secs(1), |_| false).await.unwrap();
+    assert_eq!(trees(&p), before + 2, "one rebuild per change");
     p.close().await;
+    proxy.stop();
+}
+
+/// The idle limit counts from the client's last packet: activity keeps the
+/// session past the first deadline, silence ends it.
+#[tokio::test]
+async fn idle_limit_follows_the_last_client_packet() {
+    let text = format!("{BASE}  idle-timeout-ms: 1500\n");
+    let (proxy, addr) = common::start_proxy_at(&text, Some(file("idle", &text))).await;
+    let mut p = Player::join(addr, module(777), JoinOptions::new("Alex"))
+        .await
+        .unwrap();
+    assert!(p.pump(WAIT, |p| p.commands.is_some()).await.unwrap());
+    for _ in 0..10 {
+        p.request_suggestions("/prox ").await.unwrap();
+        p.pump(Duration::from_millis(300), |_| false).await.unwrap();
+    }
+    assert!(p.disconnect.is_none(), "{:?}", p.disconnect);
+    let quiet = std::time::Instant::now();
+    assert!(
+        p.pump(WAIT, |p| p.disconnect.is_some()).await.unwrap(),
+        "not timed out"
+    );
+    let waited = quiet.elapsed();
+    assert!(
+        p.disconnect
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Timed out"),
+        "{:?}",
+        p.disconnect
+    );
+    assert!(
+        waited >= Duration::from_millis(1000) && waited < Duration::from_secs(5),
+        "{waited:?}"
+    );
     proxy.stop();
 }
 
