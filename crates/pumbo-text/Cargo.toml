@@ -1,6 +1,6 @@
 [package]
 name = "pumbo-text"
-description = "Text components: model, legacy & codes, MiniMessage subset, JSON and NBT forms per protocol version"
+description = "Text components: model, legacy & codes, text tags, JSON and NBT forms per protocol version"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

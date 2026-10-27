@@ -7,7 +7,7 @@
 //!   snake_case and restructured them, 1.21.4 (769) added `shadow_color`.
 //!   Reading accepts both layouts, so text from any backend in the range parses.
 //! - Input formats for administrators and plugins: legacy `&` codes
-//!   ([`parse_legacy`]) and a MiniMessage subset ([`parse_mini`]).
+//!   ([`parse_legacy`]) and text tags ([`parse_mini`]).
 //!
 //! Sources (minecraft.wiki): "Text component format" (current layout and its
 //! history table: 24w44a `shadow_color`, 25w02a/25w03a event changes, 25w20a

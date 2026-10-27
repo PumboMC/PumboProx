@@ -104,7 +104,7 @@ fn default_transport() -> String {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case", default)]
 pub struct StatusConfig {
-    /// MOTD with `&` colour codes or MiniMessage tags.
+    /// MOTD with `&` colour codes or text tags.
     pub motd: String,
     pub max_players: u32,
     /// Version name in the server list; empty = "PumboProx <oldest>-<newest>".
@@ -320,7 +320,7 @@ impl Default for SwitchingConfig {
     }
 }
 
-/// Tab header and footer of the proxy (§5.8.3): MiniMessage (or `&` codes
+/// Tab header and footer of the proxy (§5.8.3): text tags (or `&` codes
 /// without plugins) with placeholders, rendered per player from push and
 /// cached values; empty = the backend decides. They replace the backend's.
 #[derive(Debug, Clone, Deserialize)]
@@ -438,7 +438,7 @@ impl Default for BungeeCordConfig {
     }
 }
 
-/// Texts of the proxy (`&` codes or MiniMessage).
+/// Texts of the proxy (`&` codes or text tags).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case", default)]
 pub struct MessagesConfig {

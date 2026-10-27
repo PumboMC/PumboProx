@@ -1,10 +1,10 @@
-//! Templates with placeholders (plan §5.8.3): MiniMessage text with
+//! Templates with placeholders (plan §5.8.3): text with tags and
 //! `%namespace_key%`, `%namespace_key:arg%`, `%namespace_key@context%`, short
 //! aliases `%rank%`, literal `%%` and argument slots `{name}`.
 //!
 //! Rendering is one pass: values and arguments are never scanned again, so a
 //! value cannot smuggle another placeholder and nothing can loop. Arguments go
-//! in literally (escaped for MiniMessage).
+//! in literally (with tags escaped).
 
 /// Template size limit in bytes.
 pub const MAX_TEMPLATE_BYTES: usize = 8 * 1024;
@@ -63,7 +63,7 @@ impl Placeholder {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Segment {
-    /// MiniMessage text as written.
+    /// Text with tags as written.
     Literal(String),
     Placeholder(Placeholder),
     /// `{name}`.
@@ -141,7 +141,7 @@ impl Template {
         })
     }
 
-    /// Renders MiniMessage text. `value` returns a MiniMessage-safe value for
+    /// Renders text with tags. `value` returns a tag-safe value for
     /// a placeholder (see [`escape_mini`], [`strip_events`]) or `None` when it
     /// is unresolved; `keep_unresolved` writes those back as text. Arguments
     /// missing from `args` stay as `{name}`.
@@ -241,7 +241,7 @@ fn parse_context(c: &str) -> Option<PlaceholderContext> {
     is_server(c).then(|| PlaceholderContext::Server(c.to_string()))
 }
 
-/// Escapes text so MiniMessage shows it literally.
+/// Escapes text so its tags show literally.
 pub fn escape_mini(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -253,7 +253,7 @@ pub fn escape_mini(s: &str) -> String {
     out
 }
 
-/// Legacy `&` codes to MiniMessage tags (`&a` → `<green>`, `&#RRGGBB` →
+/// Legacy `&` codes to text tags (`&a` → `<green>`, `&#RRGGBB` →
 /// `<#rrggbb>`); other text is escaped.
 pub fn legacy_to_mini(s: &str) -> String {
     let mut out = String::new();

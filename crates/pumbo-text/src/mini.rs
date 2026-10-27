@@ -1,4 +1,4 @@
-//! A subset of the MiniMessage format (tag syntax as documented by Adventure).
+//! Text tags: a markup of colour and style tags in angle brackets.
 //!
 //! Supported tags: named colors (`<red>`, also `grey`/`dark_grey`), `<#RRGGBB>`,
 //! `<color:...>` (`colour`, `c`), decorations `<bold>`/`<b>`, `<italic>`/`<i>`/`<em>`,
@@ -14,7 +14,7 @@ use crate::{ClickEvent, Color, Component, Content, HoverEvent, NamedColor, Style
 /// Nested `<hover>` texts parsed at most this deep.
 const MAX_HOVER_DEPTH: usize = 8;
 
-/// Parses MiniMessage text.
+/// Parses text with tags.
 pub fn parse_mini(input: &str) -> Component {
     parse_at(input, 0, None)
 }
@@ -27,7 +27,7 @@ pub struct StyleSheet {
 }
 
 impl StyleSheet {
-    /// Builds a sheet from tag name → MiniMessage opening tags, e.g.
+    /// Builds a sheet from tag name → opening tags, e.g.
     /// `("err", "<red><bold>")`. Unknown tags in a value are ignored.
     pub fn new<'a>(defs: impl IntoIterator<Item = (&'a str, &'a str)>) -> StyleSheet {
         let tags = defs
@@ -47,7 +47,7 @@ impl StyleSheet {
     }
 }
 
-/// Parses MiniMessage text with the network's style tags.
+/// Parses text with tags and the network's style tags.
 pub fn parse_mini_styled(input: &str, styles: &StyleSheet) -> Component {
     parse_at(input, 0, Some(styles))
 }

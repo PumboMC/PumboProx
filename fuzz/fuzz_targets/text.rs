@@ -1,5 +1,5 @@
 #![no_main]
-//! Text parsers: JSON, NBT, MiniMessage and legacy codes.
+//! Text parsers: JSON, NBT, text tags and legacy codes.
 
 use libfuzzer_sys::fuzz_target;
 use pumbo_nbt::{Limits, read_network};

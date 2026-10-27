@@ -352,7 +352,7 @@ mod tests {
             m[1],
             "<muted>[Example] <p>Hi, <s>Steve</s>! <muted>(hello #1)"
         );
-        // Player text goes in as an argument, never as MiniMessage.
+        // Player text goes in as an argument, never as text with tags.
         let sent = testing::sent_to(p);
         let pumbo_sdk::testing::Sent::Message(pumbo_sdk::Text::Template(t)) = &sent[3] else {
             panic!("{sent:?}")

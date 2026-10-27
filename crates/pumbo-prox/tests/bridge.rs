@@ -705,7 +705,7 @@ async fn status_table() {
     // Console columns line up.
     let col = |l: &str| l.find("connected").or_else(|| l.find("rejected")).unwrap();
     assert_eq!(col(&row("lobby")), col(&row("creative")));
-    // Chat lines are MiniMessage with the host styles.
+    // Chat lines are text tags with the host styles.
     assert!(lines.iter().any(|l| l.contains("<ok>connected</ok>")));
     assert!(lines.iter().any(|l| l.contains("<err>rejected</err>")));
 

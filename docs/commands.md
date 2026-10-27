@@ -14,7 +14,7 @@
 | `/glist` | | Players on each server | `pumbo.proxy.glist` |
 | `/send` | `<player\|all\|current> <server>` | Sends players to a server. `current`: everyone on your server. Example: `/send Steve lobby` | `pumbo.proxy.send` |
 | `/find` | `<player>` | Shows a player's server | `pumbo.proxy.find` |
-| `/alert` | `<message>` | A message to the whole network, colours with `&` codes or MiniMessage | `pumbo.proxy.alert` |
+| `/alert` | `<message>` | A message to the whole network, colours with `&` codes or text tags such as `<red>` and `<bold>` | `pumbo.proxy.alert` |
 
 ## The proxy: `/prox`
 

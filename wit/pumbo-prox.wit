@@ -30,7 +30,7 @@ interface types {
   record property { name: string, value: string, signature: option<string> }
   record profile { id: uuid, name: string, properties: list<property> }
 
-  /// MiniMessage with placeholders `%namespace_key%` and argument slots
+  /// Text with tags, placeholders `%namespace_key%` and argument slots
   /// `{name}`; arguments go in literally, without placeholders or tags.
   record text-template { mini: string, args: list<tuple<string, string>> }
 

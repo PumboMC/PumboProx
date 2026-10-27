@@ -27,7 +27,7 @@ pub struct HostConfig {
     #[serde(default)]
     pub servers: BTreeMap<String, serde_json::Value>,
     /// Style tags `<p>`, `<s>`, `<ok>`, `<warn>`, `<err>`, `<muted>` as
-    /// MiniMessage opening tags (plan §6.6.1).
+    /// Opening tags (plan §6.6.1).
     #[serde(default = "default_style")]
     pub style: BTreeMap<String, String>,
 }
@@ -107,7 +107,7 @@ pub struct PluginsConfig {
     pub mailbox: usize,
     pub timers_per_plugin: usize,
     pub log_lines_per_second: u32,
-    /// Messages of the host (MiniMessage with style tags).
+    /// Messages of the host (text tags and style tags).
     pub messages: HostMessages,
     /// `plugins.<id>`: where the plugin is enabled (plan §11, E5).
     #[serde(flatten)]

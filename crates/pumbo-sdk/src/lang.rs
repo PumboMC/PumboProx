@@ -108,7 +108,7 @@ impl Lang {
         *self.default.borrow_mut() = language.to_string();
     }
 
-    /// MiniMessage of the `<prefix>` tag (`messages.prefix`).
+    /// The text of the `<prefix>` tag (`messages.prefix`).
     pub fn set_prefix(&self, mini: &str) {
         *self.prefix.borrow_mut() = mini.to_string();
     }

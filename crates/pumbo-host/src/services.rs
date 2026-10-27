@@ -39,7 +39,7 @@ pub trait NativeService: Send + Sync + 'static {
         payload: Vec<u8>,
     ) -> futures::future::BoxFuture<'static, Result<Vec<u8>, ServiceError>>;
 
-    /// MiniMessage lines of its `/pumbo <name> …` command (`console`: plain
+    /// Lines with text tags of its `/pumbo <name> …` command (`console`: plain
     /// columns for the console; `secrets`: the caller may see keys).
     fn admin(&self, _args: &[String], _console: bool, _secrets: bool) -> Vec<String> {
         Vec::new()

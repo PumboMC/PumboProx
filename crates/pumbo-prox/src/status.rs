@@ -63,7 +63,7 @@ fn png_size(b: &[u8]) -> Option<(u32, u32)> {
     Some((n(16)?, n(20)?))
 }
 
-/// MOTD and kick texts from the config: MiniMessage when it has tags,
+/// MOTD and kick texts from the config: parsed as text tags when it has tags,
 /// otherwise `&` colour codes.
 pub fn parse_text(s: &str) -> Component {
     if s.contains('<') && s.contains('>') {

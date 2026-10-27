@@ -2,7 +2,7 @@
 //! resolves templates for each recipient.
 //!
 //! Text from a player (chat, command arguments, names) never goes into a
-//! MiniMessage string directly: pass it as a template argument
+//! string with tags directly: pass it as a template argument
 //! ([`template`]) or escape it ([`escape`]).
 
 use crate::bindings::pumbo::prox::types::{Text, TextTemplate};
@@ -11,7 +11,7 @@ pub fn plain(s: impl Into<String>) -> Text {
     Text::Plain(s.into())
 }
 
-/// MiniMessage with the network's style tags (`<p>`, `<s>`, `<ok>`,
+/// Text with tags and the network's style tags (`<p>`, `<s>`, `<ok>`,
 /// `<warn>`, `<err>`, `<muted>`).
 pub fn mini(s: impl Into<String>) -> Text {
     Text::Mini(s.into())
@@ -34,7 +34,7 @@ pub fn template(mini: impl Into<String>, args: &[(&str, &dyn std::fmt::Display)]
     })
 }
 
-/// Escapes text so MiniMessage shows it literally (`<` and `\`). Use it for
+/// Escapes text so its tags show literally (`<` and `\`). Use it for
 /// player data inside placeholder values with formatting.
 pub fn escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());

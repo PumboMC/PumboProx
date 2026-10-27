@@ -1050,7 +1050,7 @@ impl Bridge {
             .collect()
     }
 
-    /// `/pumbo bridge [status|key]` as MiniMessage lines (plain columns for
+    /// `/pumbo bridge [status|key]` as lines with text tags (plain columns for
     /// the console). `secrets`: the console or `pumbo.proxy.bridge.key`.
     pub fn admin(&self, args: &[String], console: bool, secrets: bool) -> Vec<String> {
         let esc = |s: &str| pumbo_text::template::escape_mini(s);

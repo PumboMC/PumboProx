@@ -58,7 +58,7 @@ const PROX_HELP: &[HelpEntry] = &[
         "/alert",
         "<message>",
         "Message to the whole network",
-        "Colours with & codes or MiniMessage.",
+        "Colours with & codes or text tags, e.g. <red> or <bold>.",
         Some("pumbo.proxy.alert"),
     ),
     entry(

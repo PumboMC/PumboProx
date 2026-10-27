@@ -881,7 +881,7 @@ impl HostInner {
         })
     }
 
-    /// A message from the config (MiniMessage with style tags).
+    /// A message from the config (text tags and style tags).
     pub fn message(&self, mini: &str) -> Component {
         pumbo_text::parse_mini_styled(mini, &self.styles)
     }

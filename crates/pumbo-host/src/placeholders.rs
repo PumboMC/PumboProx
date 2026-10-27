@@ -159,7 +159,7 @@ fn perm_ctx(c: &Context) -> PermContext {
     }
 }
 
-/// A value as MiniMessage that shows what the provider meant.
+/// A value with text tags that shows what the provider meant.
 fn value_mini(t: &Text) -> String {
     match t {
         Text::Plain(s) => escape_mini(s),

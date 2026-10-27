@@ -385,7 +385,7 @@ fn segment_json(s: &Segment, with_actions: bool) -> serde_json::Value {
     serde_json::Value::Object(m)
 }
 
-/// Text with `&` codes ([`crate::text`]) as MiniMessage for a template: each
+/// Text with `&` codes ([`crate::text`]) as text tags for a template: each
 /// styled run closes its own tags, so `&r` and the end of the text go back to
 /// the style around it.
 pub fn mini(text: &str) -> String {

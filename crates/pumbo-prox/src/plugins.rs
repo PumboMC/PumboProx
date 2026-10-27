@@ -428,7 +428,7 @@ impl Plugins {
         self.host.player_update(id, |p| p.brand = Some(brand));
     }
 
-    /// A MiniMessage template with push and cached placeholders only (no
+    /// A template with text tags with push and cached placeholders only (no
     /// waiting, §5.8.3), for one player or globally.
     pub fn render(&self, uuid: Option<Uuid>, mini: &str) -> Component {
         let id = uuid.and_then(|u| self.id(u));
