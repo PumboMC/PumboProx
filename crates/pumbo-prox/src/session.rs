@@ -45,8 +45,6 @@ const MAX_HANDSHAKE_FRAME: usize = 1024;
 const MAX_LOGIN_FRAME: usize = 8192;
 /// Time to read a PROXY header on a trusted listener (§3.4).
 const PROXY_HEADER_TIMEOUT: Duration = Duration::from_secs(2);
-/// TCP connect plus login with a backend.
-pub(crate) const BACKEND_LOGIN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Why a phase ended early.
 #[derive(Debug)]

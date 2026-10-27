@@ -535,6 +535,32 @@ async fn unknown_keep_alive_answers_and_duplicates_are_refused() {
     );
 }
 
+/// A backend that accepts and never answers fails the login after
+/// `limits.backend-login-timeout-ms`.
+#[tokio::test(flavor = "multi_thread")]
+async fn backend_login_timeout_is_configurable() {
+    let silent = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let backend = silent.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((s, _)) = silent.accept().await {
+            held.push(s);
+        }
+    });
+    let (_p, addr) = start_proxy(&config(backend, "  backend-login-timeout-ms: 300")).await;
+    let out = tokio::time::timeout(
+        Duration::from_secs(5),
+        pumbo_testclient::run(addr, module(777), &opts("Steve")),
+    )
+    .await
+    .expect("the backend login timed out")
+    .unwrap();
+    assert_eq!(
+        out.ending,
+        Ending::Disconnected("No server is available right now.".into())
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn backend_without_forwarding_or_with_other_secret_is_refused() {
     let (backend, _) = fake_backend(BackendOpts {

@@ -544,6 +544,8 @@ pub struct LimitsConfig {
     pub command_suggestions_per_second: u32,
     pub handshake_timeout_ms: u64,
     pub login_timeout_ms: u64,
+    /// TCP connect plus login with a backend.
+    pub backend_login_timeout_ms: u64,
     /// No data from a side for this long closes the session.
     pub idle_timeout_ms: u64,
 }
@@ -561,6 +563,7 @@ impl Default for LimitsConfig {
             command_suggestions_per_second: 10,
             handshake_timeout_ms: 5000,
             login_timeout_ms: 30_000,
+            backend_login_timeout_ms: 30_000,
             idle_timeout_ms: 30_000,
         }
     }

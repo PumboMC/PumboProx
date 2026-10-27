@@ -53,8 +53,8 @@ use crate::limits::TokenBucket;
 use crate::metrics::{GaugeGuard, Metrics};
 use crate::server::{ChatInput, PlayerGuard, Proxy, Runtime, SessionCmd};
 use crate::session::{
-    BACKEND_LOGIN_TIMEOUT, BackendFail, BackendVersion, Fail, backend_login, backend_version, ctx,
-    forward, kick_in, queue, queue_out, random_bytes, stopped,
+    BackendFail, BackendVersion, Fail, backend_login, backend_version, ctx, forward, kick_in,
+    queue, queue_out, random_bytes, stopped,
 };
 use crate::status::parse_text;
 use crate::world::{BossbarOp, PlayerInput, VirtualCmd};
@@ -234,7 +234,7 @@ fn login_future(
 ) -> LoginFuture {
     Box::pin(async move {
         let mut conn = timeout(
-            BACKEND_LOGIN_TIMEOUT,
+            Duration::from_millis(rt.config.limits.backend_login_timeout_ms),
             backend_login(&rt, &*module, &address, &player),
         )
         .await
