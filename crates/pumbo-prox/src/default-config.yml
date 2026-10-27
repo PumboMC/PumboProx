@@ -4,6 +4,12 @@
 listener:
   - bind: "0.0.0.0:25565"
 
+# Players log in with a Mojang account. "per-player" or false let players
+# without one in too, under any name and without a password: use them only
+# with PumboAuth (gate auth in plugins.required-gates).
+login:
+  online-mode: true
+
 # Servers you run yourself. For example:
 #   lobby: { address: "127.0.0.1:25566" }
 servers: {}

@@ -706,3 +706,53 @@ async fn pp_tab_completes_arguments() {
     p.close().await;
     proxy.stop();
 }
+
+/// An offline account claims the proxy only while the required login gate
+/// `auth` runs; without it the claim is refused and the code stays.
+#[tokio::test(flavor = "multi_thread")]
+async fn offline_claim_needs_a_running_login_gate() {
+    use pumbo_prox::commands::{self, Source};
+    for (tag, wasm) in [("claim-gate", true), ("claim-no-gate", false)] {
+        let dir = plugin_dir(tag, wasm);
+        let text = format!(
+            "listener:\n  - bind: \"127.0.0.1:0\"\nlogin:\n  online-mode: false\nforwarding:\n  mode: none\nplugins:\n  dir: {:?}\n  required-gates: [auth]\n",
+            dir.display().to_string()
+        );
+        let path = dir.join("pumboprox.yml");
+        std::fs::write(&path, &text).unwrap();
+        let (proxy, _) = common::start_proxy_at(&text, Some(path)).await;
+        let plugins = Plugins::start(&text, &proxy, Vec::new())
+            .await
+            .unwrap()
+            .expect("plugin directory");
+        proxy.plugins.set(plugins).unwrap();
+        if wasm {
+            let slot = proxy.plugins.get().unwrap().host.plugin("auth").unwrap();
+            for _ in 0..600 {
+                if slot.status() == pumbo_host::Status::Running {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+        let code = commands::claim_code(&proxy).unwrap();
+        let id = pumbo_identity::offline_uuid("Owner");
+        let rt = proxy.runtime();
+        let out = commands::run(
+            &proxy,
+            &rt,
+            &Source::Player { id, server: None },
+            &format!("prox claim {code}"),
+        )
+        .unwrap();
+        let text = out.lines[0].plain_text();
+        if wasm {
+            assert!(text.contains("now an operator"), "{text}");
+            assert!(proxy.runtime().operators.contains(&id));
+        } else {
+            assert!(text.contains("not premium"), "{text}");
+            assert!(commands::claim_open(&proxy, &proxy.runtime()));
+        }
+        proxy.stop();
+    }
+}

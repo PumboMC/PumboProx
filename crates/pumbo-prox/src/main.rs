@@ -278,8 +278,11 @@ fn run(path: &str) -> ExitCode {
             }
         };
         info!("PumboProx {} started", env!("CARGO_PKG_VERSION"));
+        for w in pumbo_prox::commands::login_warnings(&proxy) {
+            warn!("{w}");
+        }
         if let Some(code) = pumbo_prox::commands::claim_code(&proxy) {
-            warn!("No operator yet: join and type /prox claim {code} to become one");
+            warn!("{}", pumbo_prox::commands::claim_hint(&proxy, &code));
         }
         tokio::spawn(console(proxy.clone()));
         tokio::spawn(signals(proxy.clone()));

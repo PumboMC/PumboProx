@@ -573,6 +573,86 @@ pub fn claim_code(proxy: &Proxy) -> Option<String> {
     Some(code)
 }
 
+/// The login gate that proves who a player without a premium account is:
+/// PumboAuth's. Other gates (the bot filter) do not count.
+pub const LOGIN_GATE: &str = "auth";
+
+/// Whether `plugins.required-gates` names [`LOGIN_GATE`].
+fn login_gate_required(proxy: &Proxy) -> bool {
+    proxy
+        .plugins
+        .get()
+        .is_some_and(|p| p.host.required_gates().iter().any(|g| g == LOGIN_GATE))
+}
+
+/// [`LOGIN_GATE`] is required and its plugin runs: an offline UUID then
+/// belongs to whoever passed the login.
+fn login_gate_up(proxy: &Proxy) -> bool {
+    login_gate_required(proxy)
+        && proxy.plugins.get().is_some_and(|p| {
+            p.host.plugins().iter().any(|s| {
+                s.manifest
+                    .gate
+                    .as_ref()
+                    .is_some_and(|g| g.name == LOGIN_GATE)
+                    && s.status() == pumbo_host::Status::Running
+            })
+        })
+}
+
+/// Whether a player may become an operator: an offline UUID (version 3)
+/// names anyone who joins under that name, unless the login gate checks it.
+fn offline_without_login(proxy: &Proxy, id: Uuid) -> bool {
+    id.get_version_num() == 3 && !login_gate_up(proxy)
+}
+
+const OFFLINE_OP: &str = "<s>Anyone who joins under that name would get it. Install PumboAuth and add auth to plugins.required-gates first, or type prox op \\<uuid> in the console.";
+
+/// Warnings for the start: logins that let anyone in under any name.
+pub fn login_warnings(proxy: &Proxy) -> Vec<String> {
+    let rt = proxy.runtime();
+    let login = &rt.config.login;
+    let mut out = Vec::new();
+    if login.online_mode.is_none() {
+        out.push(
+            "login.online-mode is not set in pumboprox.yml, so it is per-player; new installs get online-mode: true. Set it to keep this choice".into(),
+        );
+    }
+    if login.online_mode() == crate::config::OnlineMode::Always || login_gate_required(proxy) {
+        return out;
+    }
+    out.push(format!(
+        "online-mode is not true and plugins.required-gates has no {LOGIN_GATE} gate: players without a premium account join under any name with no password, an operator's name too. Install PumboAuth and add {LOGIN_GATE} to plugins.required-gates, or set login.online-mode: true"
+    ));
+    let offline: Vec<String> = rt
+        .operators
+        .iter()
+        .filter(|id| id.get_version_num() == 3)
+        .map(Uuid::to_string)
+        .collect();
+    if !offline.is_empty() {
+        out.push(format!(
+            "commands.operators has offline UUIDs ({}): anyone who joins under those names gets every proxy permission",
+            offline.join(", ")
+        ));
+    }
+    out
+}
+
+/// What the console says about the claim code at the start.
+pub fn claim_hint(proxy: &Proxy, code: &str) -> String {
+    let mode = proxy.runtime().config.login.online_mode();
+    if mode == crate::config::OnlineMode::Always || login_gate_required(proxy) {
+        return format!("No operator yet: join and type /prox claim {code} to become one");
+    }
+    if mode == crate::config::OnlineMode::Never {
+        return "No operator yet: type prox op <uuid> here; /prox claim needs online mode or PumboAuth".into();
+    }
+    format!(
+        "No operator yet: join with a premium account and type /prox claim {code}, or type prox op <uuid> here"
+    )
+}
+
 /// Whether `/prox claim` takes a code now.
 pub fn claim_open(proxy: &Proxy, rt: &Runtime) -> bool {
     rt.operators.is_empty()
@@ -589,6 +669,11 @@ fn claim(proxy: &Arc<Proxy>, rt: &Runtime, source: &Source<'_>, code: Option<&st
     let Source::Player { id, .. } = source else {
         return reply("<err>Only players can claim. <s>Put a UUID in commands.operators instead.");
     };
+    if offline_without_login(proxy, *id) && claim_open(proxy, rt) {
+        return reply(&format!(
+            "<err>Your account is not premium, so you cannot claim the proxy. {OFFLINE_OP}"
+        ));
+    }
     let mut claim = proxy
         .claim
         .lock()
@@ -683,6 +768,12 @@ fn op(proxy: &Proxy, rt: &Runtime, source: &Source<'_>, add: bool, who: Option<&
             }
         },
     };
+    if add && matches!(source, Source::Player { .. }) && offline_without_login(proxy, id) {
+        return reply(&format!(
+            "<err><v>{}</v> has no premium account. {OFFLINE_OP}",
+            esc(&name)
+        ));
+    }
     if rt.operators.contains(&id) == add {
         let state = if add { "already" } else { "not" };
         return reply(&format!("<s><v>{}</v> is {state} an operator.", esc(&name)));

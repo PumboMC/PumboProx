@@ -81,8 +81,12 @@ async fn without_a_server_players_wait_in_the_pumbox_until_a_reload_brings_one()
     assert!(message(&mut p, "Only proxy commands work here.").await);
     p.command("prox reload").await.unwrap();
     assert!(message(&mut p, "You do not have permission to do that.").await);
+    // An offline account cannot claim without the login gate (anyone could
+    // join under its name); the console can still op it.
     p.command(&format!("prox claim {code}")).await.unwrap();
-    assert!(message(&mut p, "You are now an operator of this proxy.").await);
+    assert!(message(&mut p, "Your account is not premium").await);
+    assert!(commands::claim_open(&proxy, &proxy.runtime()));
+    assert!(run(&proxy, &Source::Console, "prox op Early").contains("Early is now an operator"));
     p.command("prox reload").await.unwrap();
     assert!(
         message(&mut p, "Config reloaded.").await,
@@ -172,6 +176,39 @@ fn a_code_makes_one_operator_and_wrong_codes_close_it() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), BASE);
 }
 
+#[test]
+fn offline_uuids_become_operators_only_from_the_console() {
+    let path = file("offline-op", BASE);
+    let proxy = Proxy::new(Config::parse(BASE).unwrap(), Some(path.clone())).unwrap();
+    let cracked = pumbo_identity::offline_uuid("Cracked");
+    let premium = uuid::Uuid::from_u128(0x853c80ef3c3749fdaa49938b674adae6);
+    let player = |id| Source::Player { id, server: None };
+    let code = commands::claim_code(&proxy).unwrap();
+    let no = run(&proxy, &player(cracked), &format!("prox claim {code}"));
+    assert!(no.contains("not premium"), "{no}");
+    // The refusal costs no try and leaves the code open.
+    assert!(commands::claim_open(&proxy, &proxy.runtime()));
+    // The console may op an offline UUID typed in.
+    let ok = run(&proxy, &Source::Console, &format!("prox op {cracked}"));
+    assert!(ok.contains("now an operator"), "{ok}");
+    assert!(proxy.runtime().operators.contains(&cracked));
+    // An operator in the game may not add another one, but may remove it.
+    let added = run(&proxy, &Source::Console, &format!("prox op {premium}"));
+    assert!(added.contains("now an operator"), "{added}");
+    let other = pumbo_identity::offline_uuid("Other");
+    let no = run(&proxy, &player(premium), &format!("prox op {other}"));
+    assert!(no.contains("has no premium account"), "{no}");
+    assert!(!proxy.runtime().operators.contains(&other));
+    let gone = run(&proxy, &player(premium), &format!("prox deop {cracked}"));
+    assert!(gone.contains("no longer an operator"), "{gone}");
+    // The start warns about logins without the gate.
+    let warnings = commands::login_warnings(&proxy).join("\n");
+    assert!(
+        warnings.contains("no auth gate") && !warnings.contains("is not set"),
+        "{warnings}"
+    );
+}
+
 /// Completions for `line` as a player would get them.
 fn suggest_as(proxy: &Proxy, id: uuid::Uuid, line: &str) -> Vec<String> {
     let rt = proxy.runtime();
@@ -257,12 +294,14 @@ async fn a_player_without_permissions_claims_from_the_pumbox() {
             p.messages
         );
     }
+    // An offline account without the login gate: refused, the console ops it.
     p.command(&format!("prox claim {code}")).await.unwrap();
     assert!(
-        message(&mut p, "You are now an operator of this proxy.").await,
+        message(&mut p, "Your account is not premium").await,
         "{:?}",
         p.messages
     );
+    assert!(run(&proxy, &Source::Console, "prox op Owner").contains("now an operator"));
     assert!(
         std::fs::read_to_string(&path)
             .unwrap()

@@ -8,6 +8,12 @@ All notable changes to PumboProx, one section per release. The format follows [K
 
 - A server's `transfer` packet (for example from the `/transfer` command) no longer reaches the player: one to another server of the network becomes a switch inside the proxy, any other is dropped and logged once per server. `servers.<name>.allow-transfers: true` lets a server's transfers through.
 - `online-mode: per-player` keeps the premium-name answers (a premium name for a day, any other for ten minutes) and limits lookups of new names for the whole proxy, so a flood of logins with random names no longer uses up the account service's limit for everyone. A refusal for too many requests (HTTP 429) has its own log line and metric.
+- A new install writes `login.online-mode: true`. With `per-player` or `false` and no `auth` gate in `plugins.required-gates`, the proxy warns at start that players without a premium account can join under any name, and names offline UUIDs in `commands.operators`.
+- `/prox claim` and `/prox op` from the game refuse an offline UUID unless the required `auth` gate runs; `prox op <uuid>` in the console still works, and `deop` always does.
+
+### Changed
+
+- A `pumboprox.yml` without `login.online-mode` stays on `per-player`, now with a warning at start; set the key to keep that choice. New installs get `online-mode: true`.
 
 ## [0.2.5-beta] - 2026-10-11
 

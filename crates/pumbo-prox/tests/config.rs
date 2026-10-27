@@ -136,6 +136,10 @@ fn the_default_file_is_valid() {
     assert_eq!(cfg.forwarding.mode, "modern");
     assert!(cfg.pumbox.enabled);
     assert!(cfg.commands.operators.is_empty());
+    assert_eq!(
+        cfg.login.online_mode,
+        Some(pumbo_prox::config::OnlineMode::Always)
+    );
     let host = pumbo_host::HostConfig::parse(pumbo_prox::config::DEFAULT_FILE).unwrap();
     assert_eq!(host.plugins.dir, std::path::Path::new("plugins"));
     // A server named in routing.try before the proxy made it: accepted.

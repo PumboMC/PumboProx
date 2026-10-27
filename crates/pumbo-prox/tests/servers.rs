@@ -332,8 +332,12 @@ async fn the_first_ready_server_takes_the_players_from_the_pumbox() {
         "{:?}",
         p.messages
     );
+    // An offline account claims nothing without the login gate; the console ops it.
     p.command(&format!("prox claim {code}")).await.unwrap();
-    assert!(common::message(&mut p, "now an operator").await);
+    assert!(common::message(&mut p, "not premium").await);
+    let rt = proxy.runtime();
+    let done = commands::run(&proxy, &rt, &Source::Console, "prox op Founder").unwrap();
+    assert!(done.lines[0].plain_text().contains("now an operator"));
     p.command(&format!("prox servers new arena {TAG}"))
         .await
         .unwrap();

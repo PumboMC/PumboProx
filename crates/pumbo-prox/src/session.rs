@@ -514,7 +514,7 @@ async fn login(
             .map_err(|t| Fail::Kick(Box::new(t)))?,
         None => None,
     };
-    let online = match forced.map_or(login_cfg.online_mode, |o| {
+    let online = match forced.map_or(login_cfg.online_mode(), |o| {
         if o {
             OnlineMode::Always
         } else {

@@ -45,7 +45,10 @@ A new network has no operator. The console shows a one-time code:
 No operator yet: join and type /prox claim 482193 to become one
 ```
 
-Join (`localhost`, or the machine's address) and type `/prox claim 482193`. You are added to `commands.operators` in `pumboprox.yml`. The code works only while the network has no operator and no server, and expires when the first server appears. Later, `prox op <player>` and `prox deop <player>` in the console (or the game) add and remove operators.
+Join (`localhost`, or the machine's address) with a premium account and type `/prox claim 482193`. You are added to `commands.operators` in `pumboprox.yml`. The code works only while the network has no operator and no server, and expires when the first server appears. Later, `prox op <player>` and `prox deop <player>` in the console (or the game) add and remove operators.
+
+> [!WARNING]
+> With `login.online-mode: per-player` or `false`, players without a premium account join under any name they type, with no password. Use these modes only with [PumboAuth](https://github.com/PumboMC/PumboAuth) and `auth` in `plugins.required-gates`. Until then the proxy warns at every start, and an account without premium (an offline UUID) can become an operator only from the console (`prox op <uuid>`): anyone who joins under that name would get its permissions.
 
 ## 4. Get a server
 
@@ -75,6 +78,12 @@ The file written on the first start:
 
 listener:
   - bind: "0.0.0.0:25565"
+
+# Players log in with a Mojang account. "per-player" or false let players
+# without one in too, under any name and without a password: use them only
+# with PumboAuth (gate auth in plugins.required-gates).
+login:
+  online-mode: true
 
 # Servers you run yourself. For example:
 #   lobby: { address: "127.0.0.1:25566" }

@@ -102,7 +102,7 @@ Every change: [changelog](CHANGELOG.md).
 | --- | --- | --- |
 | ⚙️ | **Written in Rust** | One small program, no Java. About 20 MB of RAM on its own; each plugin adds about 20 MB, so about 100 MB with Filter, Auth, Bans and Perms. |
 | 🧱 | **Versions 1.21 – 26.3** | Players on older clients join your 26.3 servers. The proxy translates the protocol. |
-| 👤 | **Premium and offline together** | Mojang accounts log in automatically, everyone else uses a password (with PumboAuth). Decided per player. |
+| 👤 | **Premium and offline together** | Mojang accounts log in automatically, everyone else uses a password (with PumboAuth). Decided per player; without PumboAuth keep `online-mode: true`. |
 | ➡️ | **Velocity modern forwarding** | The real UUID, IP and skin reach every server. Pumpkin supports it out of the box. |
 | 🔀 | **Server switching** | `/server`, `/glist`, `/send`, `/find`, `/alert`, a fallback server when one goes down, forced hosts. |
 | 🧩 | **PumboAPI** | One API for every plugin: services, placeholders, permissions, per-server and per-group config. |

@@ -165,7 +165,9 @@ impl<'de> Deserialize<'de> for OnlineMode {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case", default)]
 pub struct LoginConfig {
-    pub online_mode: OnlineMode,
+    /// `None` when the file does not set it: per-player then, with a
+    /// warning at start; the file of a new install sets `true`.
+    pub online_mode: Option<OnlineMode>,
     /// Encrypt offline connections too (`should_authenticate = false`).
     pub encrypt_offline: bool,
     /// Send the client IP to the sessionserver (`&ip=`).
@@ -179,12 +181,18 @@ pub struct LoginConfig {
 impl Default for LoginConfig {
     fn default() -> Self {
         Self {
-            online_mode: OnlineMode::PerPlayer,
+            online_mode: None,
             encrypt_offline: false,
             prevent_proxy_connections: false,
             compression_threshold: 256,
             accept_transfers: false,
         }
+    }
+}
+
+impl LoginConfig {
+    pub fn online_mode(&self) -> OnlineMode {
+        self.online_mode.unwrap_or(OnlineMode::PerPlayer)
     }
 }
 
