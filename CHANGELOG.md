@@ -7,6 +7,7 @@ All notable changes to PumboProx, one section per release. The format follows [K
 ### Security
 
 - A server's `transfer` packet (for example from the `/transfer` command) no longer reaches the player: one to another server of the network becomes a switch inside the proxy, any other is dropped and logged once per server. `servers.<name>.allow-transfers: true` lets a server's transfers through.
+- `online-mode: per-player` keeps the premium-name answers (a premium name for a day, any other for ten minutes) and limits lookups of new names for the whole proxy, so a flood of logins with random names no longer uses up the account service's limit for everyone. A refusal for too many requests (HTTP 429) has its own log line and metric.
 
 ## [0.2.5-beta] - 2026-10-11
 

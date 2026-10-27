@@ -162,6 +162,7 @@ impl Authenticator for Mojang {
             match status {
                 StatusCode::OK => Ok(true),
                 StatusCode::NOT_FOUND | StatusCode::NO_CONTENT => Ok(false),
+                StatusCode::TOO_MANY_REQUESTS => Err(AuthError::RateLimited),
                 other => Err(AuthError::Unavailable(format!(
                     "profile lookup answered {other}"
                 ))),

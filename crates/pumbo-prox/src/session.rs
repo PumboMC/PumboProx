@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use pumbo_core::identity::{AuthOutcome, AuthRequest};
+use pumbo_core::identity::{AuthError, AuthOutcome, AuthRequest};
 use pumbo_core::listener::Incoming;
 use pumbo_core::profile::{ForwardedPlayer, GameProfile, Property};
 use pumbo_core::translate::{PacketTranslator, TranslationPlan};
@@ -34,7 +34,7 @@ use uuid::Uuid;
 
 use crate::config::{OnlineMode, split_host_port};
 use crate::conn::{Conn, ConnError};
-use crate::limits::IpReject;
+use crate::limits::{IpReject, Premium};
 use crate::metrics::{GaugeGuard, Metrics};
 use crate::net::parse_proxy_header;
 use crate::server::{ListenerSettings, PlayerGuard, Proxy, Runtime, SessionCmd};
@@ -524,15 +524,44 @@ async fn login(
         OnlineMode::Always => true,
         OnlineMode::Never => false,
         OnlineMode::PerPlayer => {
-            let _slot = rt.auth_slots.acquire().await.map_err(|_| Fail::Closed)?;
-            match auth.is_premium(&start.name).await {
-                Ok(premium) => premium,
-                Err(e) => {
-                    Metrics::inc(&m.auth_unavailable);
-                    warn!("premium check for {} failed: {e}", start.name);
-                    return Err(kick(
-                        "Could not check your account right now. Please try again later.",
-                    ));
+            const TRY_LATER: &str =
+                "Could not check your account right now. Please try again later.";
+            let cache = &proxy.premium;
+            match cache.check(&start.name, std::time::Instant::now()) {
+                Premium::Known(premium) => {
+                    Metrics::inc(&m.premium_cached);
+                    premium
+                }
+                Premium::Throttled => {
+                    Metrics::inc(&m.premium_throttled);
+                    if cache.warn_due(std::time::Instant::now()) {
+                        warn!("too many premium checks of new names; they are refused for now");
+                    }
+                    return Err(kick(TRY_LATER));
+                }
+                Premium::Ask => {
+                    Metrics::inc(&m.premium_lookups);
+                    let _slot = rt.auth_slots.acquire().await.map_err(|_| Fail::Closed)?;
+                    match auth.is_premium(&start.name).await {
+                        Ok(premium) => {
+                            cache.store(&start.name, premium, std::time::Instant::now());
+                            premium
+                        }
+                        Err(AuthError::RateLimited) => {
+                            Metrics::inc(&m.premium_rate_limited);
+                            if cache.warn_due(std::time::Instant::now()) {
+                                warn!(
+                                    "the account service refuses premium checks (too many requests); new names are refused until it answers again"
+                                );
+                            }
+                            return Err(kick(TRY_LATER));
+                        }
+                        Err(e) => {
+                            Metrics::inc(&m.auth_unavailable);
+                            warn!("premium check for {} failed: {e}", start.name);
+                            return Err(kick(TRY_LATER));
+                        }
+                    }
                 }
             }
         }

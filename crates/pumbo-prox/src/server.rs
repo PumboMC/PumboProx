@@ -217,6 +217,8 @@ pub struct Proxy {
     warned: Mutex<HashSet<(&'static str, String)>>,
     pub metrics: Arc<Metrics>,
     pub ips: Arc<IpLimiter>,
+    /// Premium-name answers and their lookup limit; kept across reloads.
+    pub premium: crate::limits::PremiumCache,
     ip_display: IpDisplay,
     shutdown: watch::Sender<bool>,
     active: AtomicUsize,
@@ -294,6 +296,7 @@ impl Proxy {
             warned: Mutex::new(HashSet::new()),
             metrics: Arc::new(Metrics::default()),
             ips: Arc::new(IpLimiter::default()),
+            premium: crate::limits::PremiumCache::default(),
             ip_display,
             shutdown: watch::channel(false).0,
             active: AtomicUsize::new(0),

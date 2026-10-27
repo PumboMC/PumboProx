@@ -29,6 +29,9 @@ pub enum AuthError {
     Unavailable(String),
     #[error("deadline exceeded")]
     Timeout,
+    /// The service refused: too many requests from this address (HTTP 429).
+    #[error("too many requests")]
+    RateLimited,
 }
 
 pub trait Authenticator: Send + Sync + std::fmt::Debug {

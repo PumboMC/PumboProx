@@ -137,6 +137,7 @@ pub async fn fake_mojang() -> (String, Arc<Mutex<MojangLog>>) {
                     log.lock().unwrap().lookups.push(name.to_string());
                     match (name, premium_uuid(name)) {
                         ("Broken", _) => ("500 Internal Server Error", String::new()),
+                        ("Limited", _) => ("429 Too Many Requests", String::new()),
                         (_, Some(id)) => (
                             "200 OK",
                             format!(r#"{{"id":"{}","name":"{name}"}}"#, id.simple()),

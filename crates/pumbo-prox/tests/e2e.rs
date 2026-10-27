@@ -622,7 +622,7 @@ async fn per_player_online_mode() {
         "\nauthentication:\n  service: mojang\n  session-server: \"{mojang}\"\n  profile-lookup: \"{mojang}/lookup\"\n"
     );
     let cfg = config(backend, "").replace("online-mode: false", "online-mode: per-player") + &extra;
-    let (_p, addr) = start_proxy(&cfg).await;
+    let (proxy, addr) = start_proxy(&cfg).await;
     // Premium name: encryption request with should_authenticate.
     let out = pumbo_testclient::run(
         addr,
@@ -651,6 +651,44 @@ async fn per_player_online_mode() {
     }
     assert_eq!(mlog.lock().unwrap().lookups, ["jeb_", "Cracked1", "Broken"]);
     assert_eq!(log.lock().unwrap().forwarded.len(), 1);
+    // Answers are kept by name in any letter case; failures are not.
+    let out = pumbo_testclient::run(addr, module(777), &opts("cracked1"))
+        .await
+        .unwrap();
+    assert_eq!(out.ending, Ending::Finished);
+    let out = pumbo_testclient::run(
+        addr,
+        module(777),
+        &SessionOptions {
+            stop_at_encryption: true,
+            ..opts("JEB_")
+        },
+    )
+    .await
+    .unwrap();
+    assert!(out.encryption.unwrap().should_authenticate);
+    // Too many requests (HTTP 429): refused and counted on its own.
+    for name in ["Broken", "Limited", "Limited"] {
+        let out = pumbo_testclient::run(addr, module(777), &opts(name))
+            .await
+            .unwrap();
+        match out.ending {
+            Ending::Disconnected(r) => assert!(r.contains("try again later"), "{r}"),
+            other => panic!("{other:?}"),
+        }
+    }
+    assert_eq!(
+        mlog.lock().unwrap().lookups,
+        ["jeb_", "Cracked1", "Broken", "Broken", "Limited", "Limited"]
+    );
+    let metrics = proxy.metrics.render();
+    for line in [
+        "pumboprox_premium_checks_total{result=\"cached\"} 2",
+        "pumboprox_premium_checks_total{result=\"rate_limited\"} 2",
+        "pumboprox_logins_total{result=\"auth_unavailable\"} 2",
+    ] {
+        assert!(metrics.contains(line), "{line}: {metrics}");
+    }
 
     // encrypt-offline: offline players get an encryption request without authentication.
     let cfg = cfg.replace(

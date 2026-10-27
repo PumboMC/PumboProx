@@ -82,6 +82,11 @@ metrics! {
     /// `transfer` packets from servers without `allow-transfers` (GAP2-01).
     transfers_blocked: counter "pumboprox_transfers_total" "{result=\"blocked\"}";
     transfers_switched: counter "pumboprox_transfers_total" "{result=\"switched\"}";
+    /// Premium-name checks of `online-mode: per-player` (SEC-04).
+    premium_cached: counter "pumboprox_premium_checks_total" "{result=\"cached\"}";
+    premium_lookups: counter "pumboprox_premium_checks_total" "{result=\"lookup\"}";
+    premium_throttled: counter "pumboprox_premium_checks_total" "{result=\"throttled\"}";
+    premium_rate_limited: counter "pumboprox_premium_checks_total" "{result=\"rate_limited\"}";
 }
 
 impl Metrics {
