@@ -23,6 +23,7 @@ All notable changes to PumboProx, one section per release. The format follows [K
 - A plugin stuck in a loop that keeps calling the proxy is stopped instead of holding a worker thread, and `reload`, `unload` and stopping the proxy get through while a plugin is busy.
 - A flood of player input (movement, chat, plugin messages) can no longer pile up in one batch for a plugin: low-priority input is dropped first and counted in `pumbo_virtual_inputs_dropped_total`.
 - Less work per connection: compression state is reused between packets, and a session no longer re-creates its timer on every packet, which cut lock waits with many players online.
+- Plugins see the current server list: servers added by `reload` or `/prox servers new` and removed ones show up at once, a server run by the proxy is online only while it is ready, and player counts per server are real.
 - `reload` checks the whole file, the plugin host sections and the permissions file too, before it changes anything, and keeps the old config on any error. It applies `logging.level` at once and names the changed settings that only take effect after a restart, instead of reporting success for them.
 - A connection lost for a reason other than a plain quit (for example a write timeout) is logged with the error instead of as `left`.
 
