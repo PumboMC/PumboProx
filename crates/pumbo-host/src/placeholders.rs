@@ -462,7 +462,7 @@ impl HostInner {
                 }
                 let limit = self.cfg.placeholders.cache_entries.max(1);
                 if cache.len() > limit {
-                    // ponytail: drops the oldest tenth, an LRU if eviction shows up in profiles.
+                    // Drops the oldest tenth, an LRU if eviction shows up in profiles.
                     let mut ages: Vec<(Instant, CacheKey)> =
                         cache.iter().map(|(k, e)| (e.at, k.clone())).collect();
                     ages.sort_by_key(|(t, _)| *t);

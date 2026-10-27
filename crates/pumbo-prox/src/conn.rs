@@ -252,7 +252,7 @@ impl Conn {
             payload: Bytes::copy_from_slice(payload),
         };
         t.translator.client_to_backend(&f, &mut t.out);
-        // ponytail: translators answer the client only from backend frames, so
+        // Translators answer the client only from backend frames, so
         // `to_client` is empty here; route it to the client if one ever needs to.
         t.out.to_client.clear();
         for a in t.out.to_backend.drain(..) {

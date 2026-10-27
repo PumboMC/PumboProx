@@ -680,7 +680,7 @@ fn level_particles(ctx: &mut Ctx<'_>, payload: &[u8]) -> Option<Vec<u8>> {
             1.0,
         )
     } else {
-        // ponytail: per-axis speeds need one packet per particle; the X speed stands for all.
+        // Per-axis speeds need one packet per particle; the X speed stands for all.
         (offset, speed[0])
     };
     let mut out = Vec::with_capacity(64);

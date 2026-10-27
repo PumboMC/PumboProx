@@ -384,7 +384,7 @@ impl Default for PumboxConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "kebab-case", default)]
 pub struct CommandsConfig {
-    /// Player UUIDs with every `pumbo.proxy.*` permission. ponytail: stands in
+    /// Player UUIDs with every `pumbo.proxy.*` permission. Stands in
     /// for the permission system until E5; `/server` is open to everyone.
     pub operators: Vec<String>,
     /// Command names that never reach a backend (e.g. `login`), also when no

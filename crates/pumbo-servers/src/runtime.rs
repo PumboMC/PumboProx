@@ -70,7 +70,7 @@ impl Log {
         }
     }
 
-    /// Appends a line. ponytail: a blocking append per line; servers print
+    /// Appends a line. A blocking append per line; servers print
     /// little, a writer task when that shows up in profiles.
     pub fn push(&self, line: &str) {
         if std::fs::metadata(&self.path).is_ok_and(|m| m.len() > LOG_ROTATE_BYTES) {
@@ -286,7 +286,7 @@ fn ps_status(pid: u32) -> Option<ProcStatus> {
     parse_ps(&String::from_utf8_lossy(&out.stdout))
 }
 
-// ponytail: no process names on Windows yet, so servers left by a crashed
+// No process names on Windows yet, so servers left by a crashed
 // proxy count as stopped there; tasklist when someone runs it on Windows.
 #[cfg(not(unix))]
 fn ps_status(_: u32) -> Option<ProcStatus> {

@@ -108,7 +108,7 @@ impl ProxyBridge for SessionBridge {
                 ),
             },
             PlayerCommand::ClearTitle => SessionCmd::ClearTitle,
-            // ponytail: sounds play in the virtual world only (the proxy knows
+            // Sounds play in the virtual world only (the proxy knows
             // no position on a server); `sound_entity` on servers when needed.
             PlayerCommand::Sound {
                 sound,
@@ -162,7 +162,7 @@ impl ProxyBridge for SessionBridge {
                 },
             )
         });
-        // ponytail: queued, not finished; the session reports failures to the
+        // Queued, not finished; the session reports failures to the
         // player. A result after the switch needs a reply channel in SessionCmd.
         Box::pin(async move {
             if queued {

@@ -149,7 +149,7 @@ impl World {
     /// Sets a block by state name (`minecraft:air` removes it). The name is
     /// checked against the newest protocol; a version without the block shows
     /// air there. Players already in the world do not see the change
-    /// (ponytail: live block updates when a plugin needs them).
+    /// (live block updates can come when a plugin needs them).
     pub fn set_block(&self, pos: BlockPos, state: &str) -> Result<(), Error> {
         if !(0..HEIGHT).contains(&pos.y) {
             return Err(Error::OutOfWorld(pos.y));

@@ -520,7 +520,7 @@ fn beds(t: &Tables, mut data: &[u8]) -> Vec<(u8, i16)> {
         }
         sections += 1;
     }
-    // ponytail: the bottom of the world from the section count (24: overworld at -64, else 0);
+    // The bottom of the world from the section count (24: overworld at -64, else 0);
     // read it from the dimension type when custom heights matter.
     let min_y = if sections == 24 { -64 } else { 0 };
     found

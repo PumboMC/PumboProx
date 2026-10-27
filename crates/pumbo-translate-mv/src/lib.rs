@@ -526,7 +526,7 @@ impl Translator {
     /// A player spawned before its info is invisible to the client, so the
     /// spawn and everything after it wait for that info (Pumpkin 0.2.0 sends a
     /// joining player's `add_entity` first).
-    // ponytail: frames, not just the entity's, are held; at most HOLD_LIMIT, then sent as they are.
+    // Frames, not just the entity's, are held; at most HOLD_LIMIT, then sent as they are.
     fn hold(&mut self, out: &mut Output, start: usize, waited: usize, urgent: bool) {
         let s = &mut self.state;
         if s.waiting.is_empty() && waited > 0 {

@@ -82,7 +82,7 @@ const MAX_DEFERRED: usize = 64;
 
 /// How a session ended.
 /// How long the gates wait for `client_information` sent after the acknowledgement.
-// ponytail: fixed; a config option when someone needs a slower link than this.
+// Fixed; a config option when someone needs a slower link than this.
 const SETTINGS_WAIT: Duration = Duration::from_millis(500);
 
 pub(crate) enum End {
@@ -3045,7 +3045,7 @@ impl Play<'_> {
 /// 0.2 that send it without options (D-COMPAT-1).
 fn pumpkin_trail(v: pumbo_protocol::ProtocolVersion) -> Option<i32> {
     use pumbo_protocol::ProtocolVersion as V;
-    // ponytail: only Pumpkin's protocols so far; a later Pumpkin with the same bug
+    // Only Pumpkin's protocols so far; a later Pumpkin with the same bug
     // needs its protocol here (26.3's layout from 777 on, see `fix_empty_trail`).
     if v != V::V776 && v != V::V777 {
         return None;

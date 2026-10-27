@@ -11,7 +11,7 @@ use crate::{Ctx, Phase, nbt};
 /// ViaBackwards `RegistryDataRewriter` step changes them): entries the client's
 /// vanilla lacks (Pumpkin's `chat_type` `raw`, datapack damage types) go to it
 /// with the server's data. Other registries keep the fallback entry.
-// ponytail: biomes, dimension types and the rest need the per-step data
+// Biomes, dimension types and the rest need the per-step data
 // conversions of ViaBackwards `RegistryDataRewriter*`; add them when a server sends its own.
 const CUSTOM_ENTRIES: &[&str] = &["chat_type", "damage_type"];
 
@@ -105,14 +105,14 @@ fn send_client_registries(ctx: &mut Ctx<'_>) {
     }
     ctx.s.registries_sent = true;
     if !ctx.s.client_knows_core && !ctx.t.client.full_registry_data.is_empty() {
-        // ponytail: prebuilt payloads; the server's own entries keep the fallback.
+        // Prebuilt payloads; the server's own entries keep the fallback.
         ctx.s.custom_entries.clear();
         for payload in ctx.t.client.full_registry_data.clone() {
             ctx.send_client("registry_data", payload);
         }
         return;
     }
-    // ponytail: a client without the core pack and no full data gets names only and
+    // A client without the core pack and no full data gets names only and
     // disconnects with the vanilla "missing registry data" error; vanilla clients always confirm.
     let mut packets = Vec::new();
     for (registry, entries) in &ctx.t.client.synced.registries {

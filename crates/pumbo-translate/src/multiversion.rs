@@ -136,7 +136,7 @@ impl Multiversion {
         cache
             .entry(client.0)
             .or_insert_with(|| {
-                // ponytail: built under the lock on the first join of a protocol; fine
+                // Built under the lock on the first join of a protocol; fine
                 // while it takes milliseconds, move to spawn_blocking if it grows.
                 let client = version_data(client)?;
                 let server = version_data(ProtocolVersion(mv::SERVER_PROTOCOL))?;

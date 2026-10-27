@@ -1336,7 +1336,7 @@ fn slot_display(ctx: &mut Ctx<'_>, r: &mut &[u8], out: &mut Vec<u8>, depth: usiz
                 r.get_bool().map(|_| ())
             })?;
             if client >= V1_21_5 {
-                // ponytail: an inline pattern becomes the first one.
+                // An inline pattern becomes the first one.
                 v.put_var_int(pattern.unwrap_or(0) + 1);
             } else {
                 v.put_var_int(display_id("empty")?);
@@ -1412,7 +1412,7 @@ fn ingredient(ctx: &Ctx<'_>, r: &mut &[u8], out: &mut Vec<u8>) -> Option<()> {
 /// Recipe packets for 1.21.2+ clients (ViaVersion `RecipeDisplayRewriter`).
 /// 1.21 has the old recipe format (full recipes in `update_recipes`) and
 /// gets none: an empty recipe book, no stonecutter recipes.
-// ponytail: 1.21 needs whole recipes rebuilt (ViaBackwards `RecipeStorage`); port it when 1.21.0 matters.
+// 1.21 needs whole recipes rebuilt (ViaBackwards `RecipeStorage`); port it when 1.21.0 matters.
 fn recipes_known(ctx: &Ctx<'_>) -> bool {
     ctx.client() >= V1_21_2
 }
