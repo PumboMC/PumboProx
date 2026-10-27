@@ -240,7 +240,8 @@ fn rejected(code: &str, detail: Option<String>) -> ServiceError {
     })
 }
 
-/// Reads the bridge key, creating it (mode 0600) when missing.
+/// Reads the bridge key, creating it (mode 0600) when missing; a key file
+/// other users can read is set to 0600.
 pub fn load_key(path: &str) -> Result<wire::Key, String> {
     if !std::path::Path::new(path).exists() {
         let mut k = [0u8; 32];
@@ -258,6 +259,16 @@ pub fn load_key(path: &str) -> Result<wire::Key, String> {
         info!(
             "created a new bridge key in {path}; show it with `bridge key` in the console and put it in config.yml of PumboBridge"
         );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
+        if meta.permissions().mode() & 0o077 != 0 {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| format!("{path}: {e}"))?;
+            warn!("{path}: other users could read the bridge key, its mode is now 0600");
+        }
     }
     let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
     wire::parse_key(&text).ok_or_else(|| format!("{path}: not a bridge key (64 hex digits)"))
@@ -1524,5 +1535,22 @@ mod tests {
         assert_eq!(Tp::Confirmed(old).busy(), None);
         assert!(is_channel("pumbo:bridge") && is_channel("pumbo:bridge/x"));
         assert!(!is_channel("pumbo:other"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn a_readable_key_file_is_tightened() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let path = std::env::temp_dir().join(format!("pumbo-bridge-key-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let path_str = path.to_str().unwrap();
+        let mode = || std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        let key = load_key(path_str).unwrap();
+        assert_eq!(mode(), 0o600);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(load_key(path_str).unwrap(), key);
+        assert_eq!(mode(), 0o600);
+        std::fs::remove_file(&path).unwrap();
     }
 }

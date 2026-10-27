@@ -384,14 +384,14 @@ impl Source for Pumpkin {
             setup.network.velocity_secret.as_deref(),
             &servers::random_seed()?,
         );
-        let write = |path: PathBuf, text: String| {
-            std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
-        };
-        write(dir.join("pumpkin.toml"), toml)?;
+        servers::write_secret(&dir.join("pumpkin.toml"), &toml)?;
         if let Some((addr, key)) = &setup.network.bridge {
             let bridge = dir.join("plugins/data/pumbobridge");
             std::fs::create_dir_all(&bridge).map_err(|e| format!("{}: {e}", bridge.display()))?;
-            write(bridge.join("config.yml"), servers::bridge_config(addr, key))?;
+            servers::write_secret(
+                &bridge.join("config.yml"),
+                &servers::bridge_config(addr, key),
+            )?;
         }
         Ok(())
     }

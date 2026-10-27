@@ -15,6 +15,7 @@ All notable changes to PumboProx, one section per release. The format follows [K
 - A dialog click (`custom_click_action`) sent by a player in play is checked against the same size and NBT depth limits as in configuration instead of passing to the server unread.
 - `limits.client-bytes-per-second` counted only compressed data, so a player could make the proxy decompress far more. Decompressed data now has its own limit, four times that value, with the same kick.
 - A player waiting in the Pumbox can run five commands at once and then one a second; more are ignored. These commands are logged at `debug` instead of `info`, so they no longer flood the log.
+- The forwarding secret in a managed server's `pumpkin.toml`, its PumboBridge `config.yml` and `bridge.key` are readable only by their owner (mode 0600). Files an older version wrote are tightened when the server starts, `bridge.key` when the proxy starts.
 
 ### Added
 

@@ -192,6 +192,49 @@ pub fn bridge_config(addr: &str, key: &str) -> String {
     format!("# Written by PumboProx.\nproxy: {addr}\nkey: \"{key}\"\n")
 }
 
+/// Files of a server folder that hold the proxy's secrets.
+const SECRET_FILES: &[&str] = &["pumpkin.toml", "plugins/data/pumbobridge/config.yml"];
+
+/// Writes a file only its owner can read (mode 0600 on Unix, also when it
+/// exists already); the mode is set before the text goes in.
+pub fn write_secret(path: &Path, text: &str) -> Result<(), String> {
+    use std::io::Write as _;
+    let err = |e: std::io::Error| format!("{}: {e}", path.display());
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(path).map_err(err)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(err)?;
+    }
+    file.write_all(text.as_bytes()).map_err(err)
+}
+
+/// Sets mode 0600 on the secret files of a server folder written by an older
+/// proxy with the default mode.
+pub fn tighten_secrets(dir: &Path) {
+    #[cfg(unix)]
+    for file in SECRET_FILES {
+        use std::os::unix::fs::PermissionsExt as _;
+        let path = dir.join(file);
+        let loose = std::fs::metadata(&path).is_ok_and(|m| m.permissions().mode() & 0o077 != 0);
+        if loose
+            && let Err(e) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+        {
+            tracing::warn!("{}: {e}", path.display());
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (dir, SECRET_FILES);
+}
+
 /// Copies the files of a template folder into a new server's folder.
 pub fn copy_dir(from: &Path, to: &Path) -> Result<(), String> {
     let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());

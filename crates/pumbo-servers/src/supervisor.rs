@@ -359,6 +359,7 @@ impl Manager {
         let file = std::path::absolute(&file).map_err(|e| format!("{}: {e}", file.display()))?;
         let launch = source.launch(&file, &self.template_of(name))?;
         let dir = self.config.dir.join(name);
+        crate::servers::tighten_secrets(&dir);
         let log = self.slot(name, |s| s.log.clone());
         self.runner.start(&dir, &launch, log)
     }

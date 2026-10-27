@@ -245,6 +245,30 @@ async fn a_server_ignoring_stop_is_killed() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn secret_files_are_private() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let m = manager(config("secrets", 25640));
+    create(&m, "arena").await;
+    let dir = m.config.dir.join("arena");
+    let files = [
+        dir.join("pumpkin.toml"),
+        dir.join("plugins/data/pumbobridge/config.yml"),
+    ];
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    for f in &files {
+        assert_eq!(mode(f), 0o600, "{}", f.display());
+        // As an older proxy left it.
+        std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    m.start("arena").unwrap();
+    wait("ready", 20, || m.state("arena") == State::Ready).await;
+    for f in &files {
+        assert_eq!(mode(f), 0o600, "{}", f.display());
+    }
+    m.shutdown().await;
+}
+
 #[test]
 fn a_server_left_by_a_crashed_proxy_is_taken_over() {
     let cfg = config("orphan", 25780);
