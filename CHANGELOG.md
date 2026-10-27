@@ -16,11 +16,13 @@ All notable changes to PumboProx, one section per release. The format follows [K
 ### Added
 
 - `limits.backend-login-timeout-ms` (default 30000): how long the proxy waits to connect and log in to a server. It was a fixed 10 s, which dropped players while a busy server was slow to let them in.
+- `docs/configuration.md`: every key of `pumboprox.yml` with its default, what it does and whether `reload` applies it.
 
 ### Changed
 
 - A `pumboprox.yml` without `login.online-mode` stays on `per-player`, now with a warning at start; set the key to keep that choice. New installs get `online-mode: true`.
 - The Docker tag `latest` moves only with stable releases; pre-releases get `beta`, and their GitHub release is marked as a pre-release.
+- A release is published only from a commit whose CI passed, and its binaries and Docker image are started once with a fresh config before they go out.
 - The `/alert` help and the log hint for a server that does not ask for forwarding use neutral wording and name the setting for Pumpkin and Paper.
 
 ### Fixed
