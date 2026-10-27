@@ -102,7 +102,12 @@ jobs:
               # The Pumbo icon in Finder; tar keeps it (as extended attributes).
               osascript -l JavaScript -e "ObjC.import('AppKit'); \$.NSWorkspace.sharedWorkspace.setIconForFileOptions(\$.NSImage.alloc.initWithContentsOfFile('$PWD/crates/pumbo-prox/pumboprox-icon.png'), '$PWD/$dir/pumboprox', 0)" ;;
           esac
-          if [ "${{ matrix.run }}" = true ]; then "$dir/pumboprox" version; fi
+          if [ "${{ matrix.run }}" = true ]; then
+            bin=$PWD/$dir/pumboprox
+            "$bin" version
+            # The first start in an empty folder writes the default config, which check-config must accept.
+            (cd "$(mktemp -d)" && echo stop | "$bin" run && "$bin" check-config)
+          fi
           cp LICENSE "$dir"
           # README.md lives in PumboMC/PumboProx, not in the development monorepo.
           if [ -f README.md ]; then cp README.md "$dir"; fi
@@ -167,6 +172,22 @@ jobs:
           esac
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v4
+      - name: Image for the smoke test
+        uses: docker/build-push-action@v7
+        with:
+          context: image
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: pumboprox:smoke
+      - name: Smoke test
+        run: |
+          docker run --rm pumboprox:smoke version
+          # The first start writes the default config into /data, which check-config must accept.
+          mkdir smoke
+          image() { docker run --rm -i -v "$PWD/smoke:/data" --user "$(id -u):$(id -g)" pumboprox:smoke "$@"; }
+          echo stop | image
+          image check-config
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
