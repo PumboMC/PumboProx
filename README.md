@@ -205,6 +205,7 @@ Every command and permission: [Commands](docs/commands.md).
 | | Page | What's in it |
 | --- | --- | --- |
 | 🚀 | [Get started](docs/getting-started.md) | Downloads, Docker, the config, setting up Pumpkin, plugins, permissions |
+| ⚙️ | [Configuration](docs/configuration.md) | Every key of `pumboprox.yml` with its default, and whether `reload` applies it |
 | 🖥️ | [Servers from the proxy](docs/servers.md) | Downloading Pumpkin, creating and running servers, the way into the network |
 | ⌨️ | [Commands](docs/commands.md) | Every command and permission of the proxy, plugin commands |
 | 🌉 | [PumboBridge](docs/bridge.md) | Setting up the bridge and what the proxy can do with it |

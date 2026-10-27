@@ -1,4 +1,4 @@
-[PumboProx](../README.md) · **Get started** · [Servers from the proxy](servers.md) · [Commands](commands.md) · [PumboBridge](bridge.md) · [How it works](how-it-works.md) · [Writing plugins](writing-plugins.md)
+[PumboProx](../README.md) · **Get started** · [Configuration](configuration.md) · [Servers from the proxy](servers.md) · [Commands](commands.md) · [PumboBridge](bridge.md) · [How it works](how-it-works.md) · [Writing plugins](writing-plugins.md)
 
 ---
 
@@ -117,7 +117,7 @@ commands:
   operators: []
 ```
 
-Change it and type `reload` in the console. Every command is in [Commands](commands.md), with permissions.
+Change it and type `reload` in the console. Every key, its default and whether `reload` applies it: [Configuration](configuration.md). Every command is in [Commands](commands.md), with permissions.
 
 ## Your own Pumpkin servers
 
