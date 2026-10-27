@@ -1,9 +1,10 @@
 name: release
 
-# A tag v* builds pumboprox for every platform, publishes a GitHub Release with
-# the archives and SHA256SUMS (a tag with "-" is a pre-release) and pushes the
-# Docker image. Run by hand (Run workflow) it only builds, to check the
-# platforms before tagging.
+# A tag v* waits for a green "check" from ci.yml on the tagged commit (so tag
+# a commit on main), builds pumboprox for every platform, publishes a GitHub
+# Release with the archives and SHA256SUMS (a tag with "-" is a pre-release)
+# and pushes the Docker image. Run by hand (Run workflow) it only builds, to
+# check the platforms before tagging.
 on:
   push:
     tags: ['v*']
@@ -15,8 +16,34 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  verify:
+    name: verify CI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      checks: read
+    steps:
+      - name: Green check for the tagged commit
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The newest "check" run of ci.yml for this commit; one still running is waited for.
+          while :; do
+            last=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?check_name=check" \
+              --jq '.check_runs | sort_by(.id) | last | if . then .status + " " + (.conclusion // "") else "" end')
+            case $last in
+              '') echo "::error::no CI check for $GITHUB_SHA: push the commit to main and tag it after CI passes"; exit 1 ;;
+              'completed success') echo "CI check passed for $GITHUB_SHA"; exit 0 ;;
+              completed*) echo "::error::CI check for $GITHUB_SHA: ${last#completed }; re-run CI for it, then the release"; exit 1 ;;
+            esac
+            echo "CI check: $last, waiting"
+            sleep 30
+          done
+
   build:
     name: build ${{ matrix.name }}
+    needs: verify
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
