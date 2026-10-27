@@ -441,10 +441,8 @@ async fn n5(l: &Live) -> Step {
         }
     }
     must_fail(&mut moderator, &format!("pb ban {VICTIM} test")).await?;
-    l.wait_log("proxy", "players online keep their permissions", 5)
-        .await?;
-    l.wait_log("proxy", "(/prox plugins reload pumbo-perms", 5)
-        .await?;
+    // A reload is not an outage: the proxy does not warn that the provider is down.
+    l.log_lacks("proxy", "players online keep their permissions")?;
     moderator.close().await;
     admin.close().await;
     Ok(())
