@@ -42,6 +42,9 @@ where
 const MAX_IN_FLIGHT: usize = 4096;
 /// Graceful end of an instance (shutdown export and events in flight).
 const DRAIN: Duration = Duration::from_secs(2);
+/// Guest work that holds the store when a reload, unload or stop is asked
+/// may go on this long (about one budget) before it is stopped.
+const STOP_GRACE: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
@@ -136,6 +139,10 @@ pub struct PluginSlot {
     pub(crate) bars: Mutex<HashMap<u64, crate::imports::BarState>>,
     /// Virtual world inputs for this plugin, batched per tick.
     pub(crate) inputs: Mutex<Option<mpsc::Sender<pumbo_virtual::PlayerInput>>>,
+    /// A reload, unload or stop was asked: guest code still running then is
+    /// stopped at the next epoch tick. While the guest runs, it holds the
+    /// store and `serve` never sees the request.
+    pub(crate) stop_by: Mutex<Option<Instant>>,
 }
 
 pub(crate) struct Receivers {
@@ -177,6 +184,7 @@ impl PluginSlot {
             channels: Mutex::new(BTreeSet::new()),
             bars: Mutex::new(HashMap::new()),
             inputs: Mutex::new(None),
+            stop_by: Mutex::new(None),
         });
         (slot, Receivers { jobs, control: crx })
     }
@@ -293,6 +301,7 @@ impl PluginSlot {
         make: fn(oneshot::Sender<Result<(), String>>) -> Control,
     ) -> impl Future<Output = Result<(), String>> + Send + 'static {
         let (tx, rx) = oneshot::channel();
+        self.stop_by(Instant::now() + STOP_GRACE);
         let sent = self.control.send(make(tx)).is_ok();
         async move {
             if !sent {
@@ -304,7 +313,24 @@ impl PluginSlot {
     }
 
     pub(crate) fn stop(&self) {
+        self.stop_by(Instant::now() + STOP_GRACE);
         let _ = self.control.send(Control::Stop);
+    }
+
+    /// Guest code of the current instance that still runs at `at` is stopped.
+    fn stop_by(&self, at: Instant) {
+        if let Ok(mut s) = self.stop_by.lock() {
+            *s = Some(at);
+        }
+    }
+
+    /// The stop time passed (checked by the epoch callback).
+    pub(crate) fn must_stop(&self) -> bool {
+        self.stop_by
+            .lock()
+            .ok()
+            .and_then(|s| *s)
+            .is_some_and(|at| Instant::now() >= at)
     }
 
     pub(crate) fn cancel_timers(&self) {
@@ -513,6 +539,9 @@ async fn run_instance(
     rx: &mut Receivers,
     reply: &mut Option<oneshot::Sender<Result<(), String>>>,
 ) -> Outcome {
+    if let Ok(mut s) = slot.stop_by.lock() {
+        *s = None;
+    }
     let mut store = match host.runtime.store(host, slot) {
         Ok(s) => s,
         Err(e) => return InitFailed(format!("{e:#}")),
@@ -533,6 +562,10 @@ async fn run_instance(
     let init_deadline = Duration::from_millis(host.cfg.plugins.init_timeout_ms);
     // `init` registers the commands of this instance again over the old ones.
     let old_commands = host.commands.of_plugin(&slot.id);
+    // An `init` that never waits for the host holds the store, so the timeout
+    // below is not polled; the epoch callback ends it instead.
+    store.data_mut().init_by = Some(Instant::now() + init_deadline);
+    let mut stopping = None;
     let result = store
         .run_concurrent(async |acc| -> Outcome {
             let g = instance.pumbo_prox_events();
@@ -549,20 +582,43 @@ async fn run_instance(
             if let Err(msg) = host.plugin_ready(slot, desc) {
                 return InitFailed(msg);
             }
-            acc.with(|mut a| a.get().set_budget(host.cfg.plugins.budget_ms));
+            acc.with(|mut a| {
+                let s = a.get();
+                s.init_by = None;
+                s.set_budget(host.cfg.plugins.budget_ms);
+            });
             host.commands.retire(&old_commands);
             slot.set_status(Status::Running);
             if let Some(r) = reply.take() {
                 let _ = r.send(Ok(()));
             }
             host.plugin_running(slot);
-            serve(acc, g, rx).await
+            serve(acc, g, rx, slot, &mut stopping).await
         })
         .await;
     match result {
         Ok(o) => o,
-        Err(e) => Trapped(format!("{e:#}")),
+        // Guest code stopped by the epoch callback: a request that `serve`
+        // took (the drain ran out) or never saw, or the end of `init`.
+        Err(e) => stopping
+            .or_else(|| slot.must_stop().then(|| asked(rx)).flatten())
+            .unwrap_or_else(|| {
+                if store.data().init_by.is_some_and(|t| Instant::now() >= t) {
+                    InitFailed("init timed out".into())
+                } else {
+                    Trapped(format!("{e:#}"))
+                }
+            }),
     }
+}
+
+/// A control request waiting for the instance.
+fn asked(rx: &mut Receivers) -> Option<Outcome> {
+    Some(match rx.control.try_recv().ok()? {
+        Control::Reload(r) => Outcome::Reload(r),
+        Control::Unload(r) => Outcome::Unload(r),
+        Control::Stop => Outcome::Stopped,
+    })
 }
 
 /// The optional `suggest` export; a plugin built without it has none.
@@ -580,7 +636,13 @@ fn suggest_export(
         .ok()
 }
 
-async fn serve(acc: &Accessor<PluginState>, g: &Guest, rx: &mut Receivers) -> Outcome {
+async fn serve(
+    acc: &Accessor<PluginState>,
+    g: &Guest,
+    rx: &mut Receivers,
+    slot: &PluginSlot,
+    stopping: &mut Option<Outcome>,
+) -> Outcome {
     let mut inflight = FuturesUnordered::new();
     let outcome = loop {
         tokio::select! {
@@ -593,20 +655,26 @@ async fn serve(acc: &Accessor<PluginState>, g: &Guest, rx: &mut Receivers) -> Ou
             Some(()) = inflight.next(), if !inflight.is_empty() => {}
             job = rx.jobs.recv(), if inflight.len() < MAX_IN_FLIGHT => match job {
                 Some(job) => {
-                    acc.with(|mut a| a.get().touch());
+                    // Only the end of a job counts as waiting: with the guest
+                    // yielding every epoch tick, a job may start while another
+                    // one runs, and steady events would keep a loop alive.
                     inflight.push(async move {
                         job(acc, g).await;
-                        acc.with(|mut a| a.get().touch());
+                        acc.with(|mut a| a.get().waited());
                     });
                 }
                 None => break Outcome::Stopped,
             },
         }
     };
+    // Guest code still running after the drain is stopped by the epoch
+    // callback; the outcome survives that.
+    slot.stop_by(Instant::now() + DRAIN);
+    *stopping = Some(outcome);
     let drain = async {
         let _ = g.call_shutdown(acc).await;
         while inflight.next().await.is_some() {}
     };
     let _ = tokio::time::timeout(DRAIN, drain).await;
-    outcome
+    stopping.take().unwrap_or(Outcome::Stopped)
 }

@@ -270,7 +270,7 @@ impl players::HostWithStore<PluginState> for HasSelf<PluginState> {
     ) -> Result<(), players::ConnectError> {
         let bridge = accessor.with(|mut a| {
             let s = a.get();
-            s.touch();
+            s.waited();
             Arc::clone(&s.host.bridge)
         });
         bridge.connect(id, server).await
@@ -282,7 +282,7 @@ impl players::HostWithStore<PluginState> for HasSelf<PluginState> {
     ) -> Result<(), players::ConnectError> {
         let bridge = accessor.with(|mut a| {
             let s = a.get();
-            s.touch();
+            s.waited();
             Arc::clone(&s.host.bridge)
         });
         bridge.reconnect(id).await
@@ -856,7 +856,7 @@ impl wperm::HostWithStore<PluginState> for HasSelf<PluginState> {
     ) -> Result<bool, services::ServiceError> {
         let (host, slot) = accessor.with(|mut a| {
             let s = a.get();
-            s.touch();
+            s.waited();
             (Arc::clone(&s.host), Arc::clone(&s.slot))
         });
         let at = match at {
@@ -921,7 +921,7 @@ impl services::HostWithStore<PluginState> for HasSelf<PluginState> {
     ) -> Result<Vec<u8>, services::ServiceError> {
         let (host, slot) = accessor.with(|mut a| {
             let s = a.get();
-            s.touch();
+            s.waited();
             (Arc::clone(&s.host), Arc::clone(&s.slot))
         });
         host.service_call(&slot, service, method, payload, opts)
@@ -1015,7 +1015,7 @@ impl placeholders::HostWithStore<PluginState> for HasSelf<PluginState> {
     ) -> Result<Text, placeholders::ResolveError> {
         let (host, slot) = accessor.with(|mut a| {
             let s = a.get();
-            s.touch();
+            s.waited();
             (Arc::clone(&s.host), Arc::clone(&s.slot))
         });
         host.resolve_template(&t, player, &at, Some(&slot))
@@ -1084,7 +1084,7 @@ impl PluginState {
 
 impl scheduler::HostWithStore<PluginState> for HasSelf<PluginState> {
     async fn sleep(accessor: &Accessor<PluginState, Self>, ms: u64) {
-        accessor.with(|mut a| a.get().touch());
+        accessor.with(|mut a| a.get().waited());
         if ms == 0 {
             tokio::task::yield_now().await;
         } else {
@@ -1149,7 +1149,7 @@ impl crypto::HostWithStore<PluginState> for HasSelf<PluginState> {
     ) -> Result<String, String> {
         let host = accessor.with(|mut a| {
             let s = a.get();
-            s.touch();
+            s.waited();
             Arc::clone(&s.host)
         });
         crate::crypto::argon2id_hash(&host.crypto, password, params).await
@@ -1162,7 +1162,7 @@ impl crypto::HostWithStore<PluginState> for HasSelf<PluginState> {
     ) -> bool {
         let host = accessor.with(|mut a| {
             let s = a.get();
-            s.touch();
+            s.waited();
             Arc::clone(&s.host)
         });
         crate::crypto::argon2id_verify(&host.crypto, password, phc).await
@@ -1175,7 +1175,7 @@ impl crypto::HostWithStore<PluginState> for HasSelf<PluginState> {
     ) -> bool {
         let host = accessor.with(|mut a| {
             let s = a.get();
-            s.touch();
+            s.waited();
             Arc::clone(&s.host)
         });
         crate::crypto::bcrypt_verify(&host.crypto, password, hash).await
@@ -1237,7 +1237,7 @@ impl http::HostWithStore<PluginState> for HasSelf<PluginState> {
     ) -> Result<http::Response, http::HttpError> {
         let (host, slot) = accessor.with(|mut a| {
             let s = a.get();
-            s.touch();
+            s.waited();
             (Arc::clone(&s.host), Arc::clone(&s.slot))
         });
         host.http.fetch(&slot, req).await

@@ -14,7 +14,7 @@
 mod common;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use common::*;
@@ -160,6 +160,149 @@ async fn endless_loop_is_interrupted() {
         bridge.messages(1).contains(&"echo back".to_string())
     })
     .await;
+}
+
+/// Aborts the test binary when a test hangs: a blocked worker can stall the
+/// timers the test waits on, and it keeps the runtime from shutting down
+/// after a failed assertion, so the test would never end by itself.
+struct Watchdog(Arc<AtomicU8>);
+
+impl Watchdog {
+    const DONE: u8 = 1;
+    const FAILED: u8 = 2;
+
+    fn new(what: &'static str, after: Duration) -> Watchdog {
+        let state = Arc::new(AtomicU8::new(0));
+        let s = state.clone();
+        std::thread::spawn(move || {
+            let mut end = Instant::now() + after;
+            let mut failed = false;
+            while Instant::now() < end {
+                match s.load(Ordering::Relaxed) {
+                    Watchdog::DONE => return,
+                    Watchdog::FAILED if !failed => {
+                        failed = true;
+                        end = Instant::now() + Duration::from_secs(5);
+                    }
+                    _ => {}
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            eprintln!("{what}: no result after {after:?} (or no shutdown after a failure)");
+            std::process::abort();
+        });
+        Watchdog(state)
+    }
+}
+
+impl Drop for Watchdog {
+    fn drop(&mut self) {
+        let state = if std::thread::panicking() {
+            Watchdog::FAILED
+        } else {
+            Watchdog::DONE
+        };
+        self.0.store(state, Ordering::Relaxed);
+    }
+}
+
+/// A loop that calls the host all the time (every import returns at once) is
+/// stopped too: the imports do not reset the limit of continuous work, and
+/// neither do events of the same plugin that arrive meanwhile.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_call_loop_is_stopped() {
+    let _watchdog = Watchdog::new("host_call_loop_is_stopped", Duration::from_secs(90));
+    let env = Env::new("hostloop");
+    env.plugin("hot", "test", r#"events: [chat]"#);
+    env.plugin("other", "test", r#"events: [chat]"#);
+    env.config_file("other", "config.yml", "prefix: o\n");
+    let (host, bridge) = start(env.host_config("")).await;
+    host.player_joined(player(1, "a", Some("lobby")));
+    let slot = host.plugin("hot").unwrap();
+    let instance = slot.generation.load(Ordering::SeqCst);
+    let started = Instant::now();
+    assert_eq!(
+        host.dispatch_command(CommandSender::Player(1), "/hostloop"),
+        CommandOutcome::Handled
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The other plugin answers while the loop runs.
+    assert_eq!(
+        host.dispatch_command(CommandSender::Player(1), "/oecho hi"),
+        CommandOutcome::Handled
+    );
+    wait_for("echo of the other plugin", Duration::from_secs(3), || {
+        bridge.messages(1).contains(&"echo hi".to_string())
+    })
+    .await;
+    while slot.status() == Status::Running && slot.generation.load(Ordering::SeqCst) == instance {
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "the loop still runs"
+        );
+        let _ = host.dispatch_command(CommandSender::Player(1), "/echo x");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    eprintln!(
+        "[measure] loop with host calls stopped after {:?}",
+        started.elapsed()
+    );
+    wait_status(&host, "hot", LONG, |s| *s == Status::Running).await;
+}
+
+/// While a plugin loops on host calls, the worker is given back every epoch
+/// tick: `/prox plugins reload` gets through long before the loop is stopped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reload_gets_through_host_call_loop() {
+    let _watchdog = Watchdog::new(
+        "reload_gets_through_host_call_loop",
+        Duration::from_secs(90),
+    );
+    let env = Env::new("hostloopreload");
+    env.plugin("hot", "test", r#"events: [chat]"#);
+    let mut cfg = env.host_config("");
+    // Continuous work is stopped after 5 × 4 s here, so the reload is not the
+    // restart after a trap.
+    cfg.plugins.budget_ms = 4_000;
+    let (host, bridge) = start(cfg).await;
+    host.player_joined(player(1, "a", Some("lobby")));
+    assert_eq!(
+        host.dispatch_command(CommandSender::Player(1), "/hostloop"),
+        CommandOutcome::Handled
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let started = Instant::now();
+    let r = tokio::time::timeout(Duration::from_secs(15), host.reload_plugin("hot")).await;
+    eprintln!(
+        "[measure] reload during a loop took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(r, Ok(Ok(())));
+    assert_eq!(
+        host.dispatch_command(CommandSender::Player(1), "/echo back"),
+        CommandOutcome::Handled
+    );
+    wait_for("echo after reload", LONG, || {
+        bridge.messages(1).contains(&"echo back".to_string())
+    })
+    .await;
+}
+
+/// `init` that loops on host calls is ended by `init-timeout-ms`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn init_host_call_loop_times_out() {
+    let _watchdog = Watchdog::new("init_host_call_loop_times_out", Duration::from_secs(90));
+    let env = Env::new("hostloopinit");
+    env.plugin("hot", "test", r#"events: [chat]"#);
+    env.config_file("hot", "config.yml", "hostloop_init: true\n");
+    let mut cfg = env.host_config("");
+    cfg.plugins.init_timeout_ms = 1_000;
+    let (host, _) = start(cfg).await;
+    let s = wait_status(&host, "hot", Duration::from_secs(30), |s| {
+        matches!(s, Status::InitFailed(_) | Status::Disabled(_))
+    })
+    .await;
+    assert!(format!("{s:?}").contains("init timed out"), "{s:?}");
 }
 
 /// Loading has its own budget: `init` that works 600 ms without calling the

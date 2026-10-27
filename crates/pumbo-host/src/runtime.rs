@@ -16,9 +16,25 @@ use crate::wit_bindings::Plugin;
 /// How often (ms) the engine epoch advances (D-E0-2).
 pub const EPOCH_TICK_MS: u64 = 10;
 
+/// Continuous work of the guest without waiting for the host (synchronous
+/// imports do not count as waiting) is stopped after this many budgets...
+const RUN_BUDGETS: u32 = 5;
+/// ...but not before this long (the default event deadline), so a long
+/// command that only calls synchronous imports, such as an import of
+/// thousands of players, still finishes. The guest gives the worker back
+/// every epoch tick meanwhile.
+const MIN_RUN_MS: u32 = 5_000;
+
 /// Epoch ticks for a budget in milliseconds.
 fn budget_ticks(ms: u32) -> u32 {
     ms.div_ceil(u32::try_from(EPOCH_TICK_MS).unwrap_or(10))
+}
+
+/// Epoch ticks of continuous work allowed with a budget in milliseconds.
+fn run_ticks(ms: u32) -> u32 {
+    budget_ticks(ms)
+        .saturating_mul(RUN_BUDGETS)
+        .max(budget_ticks(MIN_RUN_MS))
 }
 
 /// The optional `suggest` export: (player, command name, arguments).
@@ -29,8 +45,14 @@ pub struct PluginState {
     wasi: WasiCtx,
     pub(crate) table: ResourceTable,
     limits: StoreLimits,
+    /// Ticks since the guest last returned to the host.
     busy_ticks: u32,
     budget_ticks: u32,
+    /// Ticks since the guest last waited for the host or a call ended.
+    run_ticks: u32,
+    run_limit: u32,
+    /// `init` must end by then.
+    pub(crate) init_by: Option<std::time::Instant>,
     pub(crate) host: Arc<HostInner>,
     pub(crate) slot: Arc<PluginSlot>,
     /// Set when the instance has the `suggest` export.
@@ -40,17 +62,25 @@ pub struct PluginState {
 impl PluginState {
     /// The guest returned to the host: the budget limits continuous guest
     /// work, not the length of an event (D-E0-2). Called by every import of
-    /// `pumbo:prox` and around every event. (A store call hook cannot do it:
-    /// it also fires for the epoch libcall itself.)
+    /// `pumbo:prox`. (A store call hook cannot do it: it also fires for the
+    /// epoch libcall itself.) A loop of synchronous imports is still stopped
+    /// by the run limit, which only [`PluginState::waited`] resets.
     pub(crate) fn touch(&mut self) {
         self.busy_ticks = 0;
+    }
+
+    /// The guest waits for the host (an async import) or a call ended.
+    pub(crate) fn waited(&mut self) {
+        self.busy_ticks = 0;
+        self.run_ticks = 0;
     }
 
     /// Sets the budget of continuous guest work: `load-budget-ms` while the
     /// plugin loads, `budget-ms` once it handles events.
     pub(crate) fn set_budget(&mut self, ms: u32) {
-        self.busy_ticks = 0;
+        self.waited();
         self.budget_ticks = budget_ticks(ms);
+        self.run_limit = run_ticks(ms);
     }
 }
 
@@ -141,6 +171,9 @@ impl Runtime {
             busy_ticks: 0,
             // A new instance starts by loading.
             budget_ticks: budget_ticks(cfg.load_budget_ms),
+            run_ticks: 0,
+            run_limit: run_ticks(cfg.load_budget_ms),
+            init_by: None,
             host: Arc::clone(host),
             slot: Arc::clone(slot),
             suggest: None,
@@ -148,13 +181,29 @@ impl Runtime {
         let mut store = Store::new(&self.engine, state);
         store.limiter(|s| &mut s.limits);
         store.set_epoch_deadline(1);
+        // Fires once per crossed deadline, so the counters count the ticks in
+        // which the guest ran. Yielding gives the worker back to tokio (other
+        // tasks, `serve`'s control branch, timeouts); every guest call runs
+        // through `run_concurrent` or `call_concurrent`, where that is allowed.
         store.epoch_deadline_callback(|mut ctx| {
             let state = ctx.data_mut();
             state.busy_ticks = state.busy_ticks.saturating_add(1);
+            state.run_ticks = state.run_ticks.saturating_add(1);
             if state.busy_ticks > state.budget_ticks {
                 Err(wasmtime::Error::msg("plugin time budget exceeded"))
+            } else if state.run_ticks > state.run_limit {
+                Err(wasmtime::Error::msg(
+                    "plugin ran too long without waiting for the host",
+                ))
+            } else if state.slot.must_stop() {
+                Err(wasmtime::Error::msg("plugin stopped"))
+            } else if state
+                .init_by
+                .is_some_and(|t| std::time::Instant::now() >= t)
+            {
+                Err(wasmtime::Error::msg("init timed out"))
             } else {
-                Ok(UpdateDeadline::Continue(1))
+                Ok(UpdateDeadline::Yield(1))
             }
         });
         Ok(store)

@@ -2,14 +2,16 @@
 //! name and `config.yml` of the plugin, so one module covers many cases:
 //!
 //! - commands (with `prefix` from the config): `/spin` (endless loop),
-//!   `/busy <ms>` (works that long without calling the host),
+//!   `/hostloop` (endless loop that calls the host), `/busy <ms>` (works
+//!   that long without calling the host),
 //!   `/panic`, `/reg <name> [umbrella] [virtual]` (registers a command),
 //!   `/http <url>`, `/call <service> <method> <n>`, `/flood <n>`,
 //!   `/sleep <ms>`, `/echo <text>`, `/alloc <mb>`, `/struct <file>` (a
 //!   structure from the data directory into a new world); tab completion of `/echo`
 //!   answers `<name>|<args>|<player>`, of `/sleep <ms>` after that long,
 //! - `busy_init_ms` from the config: `init` works that long without
-//!   calling the host,
+//!   calling the host; `hostloop_init`: `init` calls the host in an endless
+//!   loop,
 //! - gate by name prefix: `deny_`, `hold_` (released after 50 ms), `slow_`,
 //!   `never_` (hold without release), `locale_` (deny with the locale the
 //!   gate sees), `early_` (title, action bar and boss bar, then a virtual
@@ -81,6 +83,8 @@ struct Cfg {
     fail_init: bool,
     /// `init` works this long without calling the host.
     busy_init_ms: u64,
+    /// `init` calls the host in an endless loop.
+    hostloop_init: bool,
     /// Prefix of the command names, so several instances can be loaded.
     prefix: String,
     /// Answer to `on-pre-login`: `force-online`, `force-offline`, `deny`.
@@ -102,6 +106,14 @@ fn busy(ms: u64) {
     let mut x: u64 = 0;
     while std::time::Instant::now() < end {
         x = std::hint::black_box(x.wrapping_add(1));
+    }
+}
+
+/// Calls a synchronous import forever (each call returns to the host, but
+/// the guest never waits).
+fn host_loop() -> ! {
+    loop {
+        std::hint::black_box(pumbo_sdk::players::all());
     }
 }
 
@@ -174,6 +186,9 @@ impl pumbo_sdk::Plugin for TestPlugin {
             return Err("init failed on purpose".into());
         }
         busy(self.config.get().busy_init_ms);
+        if self.config.get().hostloop_init {
+            host_loop();
+        }
         let prefix = self.config.get().prefix.clone();
         for name in [
             "spin", "busy", "panic", "reg", "http", "call", "flood", "sleep", "echo", "alloc",
@@ -182,6 +197,7 @@ impl pumbo_sdk::Plugin for TestPlugin {
         ] {
             Command::new(&format!("{prefix}{name}")).register()?;
         }
+        Command::new(&format!("{prefix}hostloop")).register()?;
         Command::new(&format!("{prefix}secret"))
             .sensitive()
             .register()?;
@@ -347,6 +363,7 @@ impl pumbo_sdk::Plugin for TestPlugin {
                     x = std::hint::black_box(x.wrapping_add(1));
                 }
             }
+            "hostloop" => host_loop(),
             "busy" => {
                 busy(arg(&e, 0).parse().unwrap_or(0));
                 reply(&e, "busy done".into());
