@@ -249,6 +249,33 @@ impl Host {
                 }
             });
         }
+        if spawn
+            && let Some(slot) = inner
+                .perm_provider
+                .as_ref()
+                .and_then(|p| inner.plugins.get(p))
+        {
+            let me = Arc::downgrade(&inner);
+            let mut status = slot.subscribe_status();
+            // Warns when the provider goes down for real: a reload or a
+            // restart after a trap brings it back (logins wait for it), and a
+            // stop is the proxy shutting down.
+            tokio::spawn(async move {
+                let mut was_down = false;
+                while status.changed().await.is_ok() {
+                    let now = status.borrow_and_update().clone();
+                    let down = !now.is_coming() && now != Status::Stopped;
+                    if down && !was_down {
+                        let Some(inner) = me.upgrade() else { return };
+                        if let Ok(mut last) = inner.provider_down_logged.lock() {
+                            *last = None;
+                        }
+                        inner.warn_provider_down("is down");
+                    }
+                    was_down = down;
+                }
+            });
+        }
         if spawn {
             for (slot, rx) in receivers {
                 if let Some((_, why)) = blocked.iter().find(|(id, _)| *id == slot.id) {
@@ -987,10 +1014,6 @@ impl HostInner {
             if let Ok(mut a) = self.perms.accepted.lock() {
                 *a = None;
             }
-            if let Ok(mut last) = self.provider_down_logged.lock() {
-                *last = None;
-            }
-            self.warn_provider_down("is down");
             self.export_changed();
         }
         slot.cancel_timers();

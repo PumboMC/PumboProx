@@ -1659,6 +1659,30 @@ async fn disabled_provider_denies_new_logins_keeps_online() {
     host.shutdown().await;
 }
 
+/// A reload or the shutdown of the provider is not an outage: only an
+/// unload (or a disabled provider) logs that it is down.
+#[tokio::test(flavor = "multi_thread")]
+async fn provider_down_warning_only_when_it_is_down() {
+    logs();
+    let env = Env::new("provider-down-warning");
+    env.plugin("perm-alarm", "test", PROVIDER);
+    let (host, _) = start(env.host_config("")).await;
+    let down = || {
+        logs()
+            .matches("permission provider perm-alarm is down")
+            .count()
+    };
+    host.reload_plugin("perm-alarm").await.unwrap();
+    wait_status(&host, "perm-alarm", LONG, |s| *s == Status::Running).await;
+    assert_eq!(down(), 0, "reload");
+    host.plugin("perm-alarm").unwrap().unload().await.unwrap();
+    wait_for("the warning", LONG, || down() == 1).await;
+    host.reload_plugin("perm-alarm").await.unwrap();
+    host.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(down(), 1, "shutdown");
+}
+
 /// With `on-load-failure: file-only` a new login gets permissions.yml while
 /// the provider is down; players online keep the provider's set.
 #[tokio::test(flavor = "multi_thread")]
