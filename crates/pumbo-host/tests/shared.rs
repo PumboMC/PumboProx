@@ -507,7 +507,8 @@ async fn permission_provider_with_contexts() {
     let hasoff = ask(&host, &bridge, 1, "/qhasoff 5 pumbo.test.fly", "hasoff").await;
     assert_eq!(hasoff, "hasoff Ok(true)");
 
-    // `set` needs permissions-write, `replace` the configured provider.
+    // `set` needs permissions-write (see below), `replace` the configured
+    // provider.
     let set = ask(&host, &bridge, 1, "/qpset pumbo.test.x true global", "pset").await;
     assert!(set.contains("permissions-write"), "{set}");
     let repl = ask(&host, &bridge, 1, "/qprepl", "prepl").await;
@@ -536,6 +537,102 @@ async fn permission_provider_with_contexts() {
     host2.player_joined(player(3, "joe", None));
     assert_eq!(host2.run_gates(3).await, GateOutcome::Pass);
     assert!(host2.has_permission(3, "pumbo.test.base", None));
+}
+
+/// GAP1-01: `permissions.set` needs the manifest's `permissions-write` and
+/// the owner's grant in the proxy config, and then only reaches nodes under
+/// the plugin's own prefixes; never `*`, the proxy's, the backends' or
+/// groups, not even for a plugin whose id owns them. Every change and every
+/// refusal is logged.
+#[tokio::test(flavor = "multi_thread")]
+async fn permission_writes_need_a_grant_and_own_nodes() {
+    logs();
+    let env = Env::new("perm-write");
+    env.plugin("shop", "test", "permissions-write: true");
+    env.config_file("shop", "config.yml", "prefix: s\n");
+    env.plugin("pumbo-proxy", "test", "permissions-write: true");
+    env.config_file("pumbo-proxy", "config.yml", "prefix: x\n");
+
+    // Asked for in the manifest, not granted.
+    let (host, bridge) = start(env.host_config("")).await;
+    host.player_joined(player(1, "steve", None));
+    let set = ask(
+        &host,
+        &bridge,
+        1,
+        "/spset pumbo.shop.vip true global",
+        "pset",
+    )
+    .await;
+    assert!(set.contains("permissions-write is not granted"), "{set}");
+    assert!(!host.has_permission(1, "pumbo.shop.vip", None));
+    let log = logs();
+    assert!(
+        log.contains("asks for permissions-write; to allow it, add it to plugins.shop.grants"),
+        "{log}"
+    );
+    host.shutdown().await;
+
+    let cfg = env.host_config(
+        "plugins:\n  shop: { grants: [permissions-write] }\n  pumbo-proxy: { grants: [permissions-write] }\n",
+    );
+    let (host, bridge) = start(cfg).await;
+    host.player_joined(player(1, "steve", None));
+    let set = ask(
+        &host,
+        &bridge,
+        1,
+        "/spset pumbo.shop.vip true global",
+        "pset",
+    )
+    .await;
+    assert_eq!(set, "pset Some(Ok(()))");
+    assert!(host.has_permission(1, "pumbo.shop.vip", None));
+    for (line, why) in [
+        ("/spset * false global", "* is not for plugins"),
+        (
+            "/spset pumbo.proxy.reload true global",
+            "pumbo.proxy.reload is not for plugins",
+        ),
+        (
+            "/spset PUMBO.Proxy.op true global",
+            "pumbo.proxy.op is not for plugins",
+        ),
+        (
+            "/spset minecraft:op true global",
+            "minecraft:op is not for plugins",
+        ),
+        (
+            "/spset group.admin true global",
+            "group.admin is not for plugins",
+        ),
+        (
+            "/spset pumbo.* true global",
+            "pumbo.* must start with pumbo.shop.",
+        ),
+        ("/spset pumbo.perms.edit true global", "must start with"),
+        (
+            "/xpset pumbo.proxy.reload true global",
+            "pumbo.proxy.reload is not for plugins",
+        ),
+        (
+            "/xpset minecraft:op true global",
+            "minecraft:op is not for plugins",
+        ),
+    ] {
+        let r = ask(&host, &bridge, 1, line, "pset").await;
+        assert!(r.contains(why), "{line}: {r}");
+    }
+    assert!(!host.has_permission(1, "pumbo.proxy.reload", None));
+    assert!(!host.has_permission(1, "pumbo.other", None));
+    let log = logs();
+    for want in [
+        "permission changed plugin=shop player=Some(\"steve\") node=pumbo.shop.vip value=Some(true) ctx=Context::Global",
+        "pumbo.proxy.reload is not for plugins to set plugin=pumbo-proxy player=Some(\"steve\")",
+    ] {
+        assert!(log.contains(want), "{want} in\n{log}");
+    }
+    host.shutdown().await;
 }
 
 /// PumboPerms spec §16: without config the installed provider is taken

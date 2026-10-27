@@ -184,6 +184,15 @@ impl Host {
                 .get(&manifest.id)
                 .cloned()
                 .unwrap_or_default();
+            if manifest.permissions_write
+                && !scope.grants.contains(&config::Grant::PermissionsWrite)
+            {
+                tracing::warn!(
+                    plugin = %manifest.id,
+                    "asks for permissions-write; to allow it, add it to plugins.{}.grants in the proxy config and restart the proxy",
+                    manifest.id
+                );
+            }
             let (slot, rx) = PluginSlot::new(manifest, text, wasm, scope, cfg.plugins.mailbox);
             receivers.push((Arc::clone(&slot), rx));
             plugins.insert(slot.id.clone(), slot);

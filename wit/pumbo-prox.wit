@@ -286,7 +286,10 @@ interface permissions {
   /// Offline player: permissions.yml, then the provider's `pumbo:permissions`
   /// service. `current` means global.
   has-offline: async func(id: uuid, node: string, at: query-context) -> result<bool, service-error>;
-  /// Plugins with `permissions-write` only: change one node for the session.
+  /// Plugins with `permissions-write` in the manifest that the owner granted
+  /// (`plugins.<id>.grants: [permissions-write]`, read at the proxy start):
+  /// change one node under the plugin's own prefixes for the session; `*`,
+  /// `pumbo.proxy.`, `minecraft:` and `group.` nodes are refused.
   /// It lasts until the player leaves and wins a tie with the file and the
   /// provider; `replace` keeps it.
   set: func(id: player-id, node: string, value: option<bool>, ctx: context) -> result<_, string>;

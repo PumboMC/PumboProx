@@ -764,6 +764,37 @@ impl gates::Host for PluginState {
     }
 }
 
+/// `permissions.set` asked for in the manifest (`permissions-write`) and
+/// granted in the proxy config, only for nodes under the plugin's own
+/// prefixes and never for the proxy's, the backends', groups or `*`
+/// (GAP1-01). Nodes are matched without case, like the resolver does.
+fn may_set(slot: &PluginSlot, node: &str) -> Result<(), String> {
+    if !slot.manifest.permissions_write {
+        return Err("the manifest has no permissions-write".into());
+    }
+    if !slot
+        .scope
+        .grants
+        .contains(&crate::config::Grant::PermissionsWrite)
+    {
+        return Err(format!(
+            "permissions-write is not granted (plugins.{}.grants in the proxy config)",
+            slot.id
+        ));
+    }
+    let node = node.to_ascii_lowercase();
+    // Before the own prefixes: `pumbo-proxy` or `minecraft` would own these.
+    let reserved = ["pumbo.proxy.", "minecraft:", "group."];
+    if node == "*" || reserved.iter().any(|r| node.starts_with(r)) {
+        return Err(format!("{node} is not for plugins to set"));
+    }
+    let own = slot.manifest.permission_prefixes();
+    if !own.iter().any(|o| node.starts_with(o.as_str())) {
+        return Err(format!("{node} must start with {}", own.join(" or ")));
+    }
+    Ok(())
+}
+
 impl wperm::Host for PluginState {
     fn has(&mut self, id: PlayerId, node: String, at: QueryContext) -> bool {
         self.touch();
@@ -779,8 +810,10 @@ impl wperm::Host for PluginState {
         ctx: Context,
     ) -> Result<(), String> {
         self.touch();
-        if !self.slot.manifest.permissions_write {
-            return Err("the manifest has no permissions-write".into());
+        let player = self.host.player(id).map(|p| p.profile.name);
+        if let Err(e) = may_set(&self.slot, &node) {
+            tracing::warn!(plugin = %self.slot.id, ?player, %node, "permission change refused: {e}");
+            return Err(e);
         }
         if !self
             .host
@@ -789,6 +822,7 @@ impl wperm::Host for PluginState {
         {
             return Err("unknown player".into());
         }
+        tracing::info!(plugin = %self.slot.id, ?player, %node, ?value, ?ctx, "permission changed");
         self.send(id, PlayerCommand::CommandsChanged);
         Ok(())
     }

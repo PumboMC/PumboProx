@@ -207,6 +207,17 @@ pub struct PluginScope {
     pub servers: Vec<String>,
     pub groups: Vec<String>,
     pub except: Vec<String>,
+    /// What the owner allows the plugin beyond its sandbox; read at the
+    /// start of the proxy, so a change needs a restart (not `reload`).
+    pub grants: Vec<Grant>,
+}
+
+/// `plugins.<id>.grants`: the owner's consent to what a manifest asks for.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Grant {
+    /// `permissions.set` (the manifest's `permissions-write`).
+    PermissionsWrite,
 }
 
 impl PluginScope {
@@ -393,6 +404,7 @@ placeholders:
             servers: vec!["survival".into()],
             groups: vec!["minigames".into()],
             except: vec!["bedwars".into()],
+            grants: vec![Grant::PermissionsWrite],
         };
         assert!(s.allows("survival", &[]));
         assert!(s.allows("skywars", &["minigames".into()]));
@@ -404,5 +416,15 @@ placeholders:
         };
         assert!(not_lobby.allows("survival", &[]));
         assert!(!not_lobby.allows("lobby", &[]));
+    }
+
+    #[test]
+    fn grants_do_not_limit_the_scope() {
+        let cfg =
+            HostConfig::parse("plugins:\n  shop:\n    grants: [permissions-write]\n").unwrap();
+        let s = &cfg.plugins.scopes["shop"];
+        assert_eq!(s.grants, [Grant::PermissionsWrite]);
+        assert!(s.is_everywhere() && s.allows("lobby", &[]));
+        assert!(HostConfig::parse("plugins:\n  shop:\n    grants: [permission-write]\n").is_err());
     }
 }
