@@ -602,8 +602,12 @@ impl wv::HostWorld for PluginState {
         {
             return Err("a path inside the plugin's data directory".into());
         }
-        let file = self.host.cfg.plugins.data_dir(&self.slot.id).join(rel);
-        let data = std::fs::read(&file).map_err(|e| format!("{path}: {e}"))?;
+        // Resolved like the plugin's own sandbox: the plugin can make links
+        // there, but none that leads out (SEC-02). The world decompresses
+        // at most 16 MiB of a structure, so a larger file is no structure.
+        let data = crate::manifest::DataDir::open(&self.host.cfg.plugins.data_dir(&self.slot.id))
+            .and_then(|d| d.read(rel, 16 << 20))
+            .map_err(|e| format!("{path}: {e}"))?;
         let world = self.table.get(&w).map_err(|e| e.to_string())?;
         let placed = world
             .0

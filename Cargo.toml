@@ -64,6 +64,8 @@ aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sy
 base64 = "0.23"
 bcrypt = { version = "0.17", default-features = false, features = ["std"] }
 bytes = "1.12"
+# The version wasmtime-wasi uses: plugin data directories resolved like the guest's own sandbox.
+cap-primitives = "=4.0.3"
 cfb8 = "0.8"
 ciborium = "0.2"
 # The icon and file details of pumboprox.exe, compiled in by the build script on Windows.

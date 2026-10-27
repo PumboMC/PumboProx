@@ -383,3 +383,99 @@ async fn a_bad_plugin_does_not_stop_the_proxy() {
         "{e}"
     );
 }
+
+/// SEC-02: the plugin can make links in its data directory (relative ones
+/// pass the WASI sandbox). The host keeps its base copies in `.generated/`
+/// there and never follows such a link out of the directory: the target
+/// stays as it is, the log says why, and the plugin still loads.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn base_copies_never_follow_a_link_out_of_the_data_dir() {
+    use std::os::unix::fs::symlink;
+    logs();
+    let env = Env::new("generated-link");
+    example_alone(&env);
+    let (host, _) = start(env.host_config("")).await;
+    host.shutdown().await;
+    let generated = env.plugins().join("data/pumbo-example/.generated");
+    std::fs::remove_dir_all(&generated).unwrap();
+    std::fs::create_dir(&generated).unwrap();
+    let outside = env.file("outside.yml", "operators: [me]\n");
+    std::fs::create_dir(env.root.join("outside")).unwrap();
+    // The links the plugin would make: `.generated/config.yml` to a file and
+    // `.generated/lang` to a directory, both above `plugins/`.
+    symlink("../../../../outside.yml", generated.join("config.yml")).unwrap();
+    symlink("../../../../outside", generated.join("lang")).unwrap();
+
+    let (host, _) = start(env.host_config("")).await;
+    assert_eq!(
+        host.plugin("pumbo-example").unwrap().status(),
+        Status::Running
+    );
+    host.reload_plugin("pumbo-example").await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&outside).unwrap(),
+        "operators: [me]\n"
+    );
+    assert_eq!(
+        std::fs::read_dir(env.root.join("outside")).unwrap().count(),
+        0
+    );
+    let log = logs();
+    for f in ["config.yml", "lang/pl.yml"] {
+        let line = format!("cannot write {}", generated.join(f).display());
+        assert!(log.contains(&line), "{line} in\n{log}");
+    }
+    host.shutdown().await;
+}
+
+/// SEC-02: `load-structure` reads only regular files inside the data
+/// directory: no link out of it, no FIFO (the read would block the plugin
+/// for good), nothing larger than a structure can be.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn structures_stay_inside_the_data_dir() {
+    let env = Env::new("structure-link");
+    env.plugin("st", "test", "");
+    let (host, bridge) = start(env.host_config("")).await;
+    host.player_joined(player(1, "steve", None));
+    let data = env.plugins().join("data/st");
+    env.file("outside.nbt", "not a structure");
+    std::os::unix::fs::symlink("../../../outside.nbt", data.join("out.nbt")).unwrap();
+    std::fs::write(data.join("plain.nbt"), "not a structure").unwrap();
+    let fifo = std::process::Command::new("mkfifo")
+        .arg(data.join("fifo.nbt"))
+        .status()
+        .unwrap();
+    assert!(fifo.success());
+    std::fs::File::create(data.join("big.nbt"))
+        .unwrap()
+        .set_len(64 << 20)
+        .unwrap();
+    let ask = async |file: &str| {
+        let before = bridge.messages(1).len();
+        host.dispatch_command(CommandSender::Player(1), &format!("/struct {file}"));
+        let mut out = None;
+        wait_for(file, std::time::Duration::from_secs(30), || {
+            out = bridge.messages(1).into_iter().nth(before);
+            out.is_some()
+        })
+        .await;
+        out.unwrap()
+    };
+    // Read and parsed: not a structure.
+    let plain = ask("plain.nbt").await;
+    assert!(
+        plain.starts_with("struct Err(") && !plain.contains("plain.nbt"),
+        "{plain}"
+    );
+    for (file, why) in [
+        ("out.nbt", "out.nbt: "),
+        ("fifo.nbt", "fifo.nbt: not a regular file"),
+        ("big.nbt", "big.nbt: larger than"),
+    ] {
+        let r = ask(file).await;
+        assert!(r.contains(why), "{file}: {r}");
+    }
+    host.shutdown().await;
+}

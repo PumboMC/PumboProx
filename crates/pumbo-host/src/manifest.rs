@@ -98,11 +98,16 @@ pub const LANG_SECTION: &str = "pumbo-lang:";
 /// `<data>/.generated/` (D-STD-7): a file nobody changed since then follows
 /// a new version of the plugin (a config only when none of its values
 /// changed); a changed file stays, and options or texts it lacks or still
-/// has from the previous version are named in the log.
+/// has from the previous version are named in the log. The plugin can write
+/// `<data>`, links included, so the copies are reached only through paths
+/// that stay inside it (SEC-02); one that does not is skipped with a warning.
 pub(crate) fn default_files(id: &str, wasm: &Path, dir: &Path, data: &Path) {
     let Ok(bytes) = std::fs::read(wasm) else {
         return;
     };
+    let root = DataDir::open(data)
+        .inspect_err(|e| tracing::warn!(plugin = %id, "cannot open {}: {e}", data.display()))
+        .ok();
     for payload in wasmparser::Parser::new(0).parse_all(&bytes) {
         let Ok(wasmparser::Payload::CustomSection(s)) = payload else {
             continue;
@@ -114,8 +119,87 @@ pub(crate) fn default_files(id: &str, wasm: &Path, dir: &Path, data: &Path) {
         } else {
             continue;
         };
-        let base = data.join(".generated").join(&rel);
+        let base = Base {
+            id,
+            root: root.as_ref(),
+            rel: Path::new(".generated").join(&rel),
+            shown: data.join(".generated").join(&rel),
+        };
         default_file(id, &dir.join(&rel), &base, s.data(), kind);
+    }
+}
+
+/// A plugin's data directory as the plugin itself sees it: paths below it
+/// resolve inside it, and `..` or a link leading out is an error.
+pub(crate) struct DataDir(std::fs::File);
+
+impl DataDir {
+    pub(crate) fn open(dir: &Path) -> std::io::Result<DataDir> {
+        cap_primitives::fs::open_ambient_dir(dir, cap_primitives::ambient_authority()).map(DataDir)
+    }
+
+    /// A regular file of at most `limit` bytes.
+    pub(crate) fn read(&self, rel: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
+        use std::io::{Error, Read as _};
+        let meta = cap_primitives::fs::stat(&self.0, rel, cap_primitives::fs::FollowSymlinks::Yes)?;
+        if !meta.is_file() {
+            return Err(Error::other("not a regular file"));
+        }
+        if meta.len() > limit {
+            return Err(Error::other(format!("larger than {limit} bytes")));
+        }
+        let mut opts = cap_primitives::fs::OpenOptions::new();
+        opts.read(true);
+        let file = cap_primitives::fs::open(&self.0, rel, &opts)?;
+        let mut out = Vec::new();
+        file.take(limit).read_to_end(&mut out)?;
+        Ok(out)
+    }
+
+    /// Creates or replaces `rel` with its parent directories.
+    fn write(&self, rel: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        let mut dirs: Vec<&Path> = rel.ancestors().skip(1).collect();
+        dirs.pop();
+        for d in dirs.into_iter().rev() {
+            match cap_primitives::fs::create_dir(&self.0, d, &cap_primitives::fs::DirOptions::new())
+            {
+                Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(e),
+                _ => {}
+            }
+        }
+        let mut opts = cap_primitives::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        cap_primitives::fs::open(&self.0, rel, &opts)?.write_all(bytes)
+    }
+}
+
+/// The copy in `.generated/` of one file the host wrote.
+struct Base<'a> {
+    id: &'a str,
+    root: Option<&'a DataDir>,
+    rel: std::path::PathBuf,
+    /// The full path, for the log.
+    shown: std::path::PathBuf,
+}
+
+impl Base<'_> {
+    /// None when missing (a file of an older host) or refused.
+    fn read(&self) -> Option<String> {
+        match self.root?.read(&self.rel, 16 << 20) {
+            Ok(b) => Some(String::from_utf8_lossy(&b).into_owned()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                tracing::warn!(plugin = %self.id, "ignoring {}: {e}", self.shown.display());
+                None
+            }
+        }
+    }
+
+    fn write(&self, bytes: &[u8]) {
+        let Some(root) = self.root else { return };
+        if let Err(e) = root.write(&self.rel, bytes) {
+            tracing::warn!(plugin = %self.id, "cannot write {}: {e}", self.shown.display());
+        }
     }
 }
 
@@ -137,13 +221,7 @@ fn lang_file(path: &str) -> Option<&str> {
     ok.then_some(name)
 }
 
-fn default_file(id: &str, path: &Path, base: &Path, template: &[u8], kind: Kind) {
-    let write = |p: &Path| {
-        if let Some(parent) = p.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        std::fs::write(p, template)
-    };
+fn default_file(id: &str, path: &Path, base: &Base, template: &[u8], kind: Kind) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -154,15 +232,16 @@ fn default_file(id: &str, path: &Path, base: &Path, template: &[u8], kind: Kind)
         .and_then(|mut f| f.write_all(template));
     match created {
         Ok(()) => {
-            let _ = write(base);
+            base.write(template);
             tracing::info!(plugin = %id, "created {}", path.display());
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             let text = std::fs::read_to_string(path).unwrap_or_default();
+            let bytes = template;
             let template = String::from_utf8_lossy(template);
             // What the host wrote last time; none for files of older hosts,
             // whose language files are compared as they are.
-            let old = std::fs::read_to_string(base).ok();
+            let old = base.read();
             let since = match kind {
                 Kind::Lang => Some(old.as_deref().unwrap_or(&text)),
                 Kind::Config => old.as_deref(),
@@ -172,19 +251,22 @@ fn default_file(id: &str, path: &Path, base: &Path, template: &[u8], kind: Kind)
                 .unwrap_or_default();
             let unchanged = old.as_deref() == Some(text.as_str());
             if text != template && unchanged && (kind == Kind::Lang || stale.is_empty()) {
-                match write(path).and_then(|()| write(base)) {
-                    Ok(()) => tracing::info!(
-                        plugin = %id,
-                        "updated {} to the new built-in {}",
-                        path.display(),
-                        if kind == Kind::Lang { "texts" } else { "template" }
-                    ),
+                match std::fs::write(path, bytes) {
+                    Ok(()) => {
+                        base.write(bytes);
+                        tracing::info!(
+                            plugin = %id,
+                            "updated {} to the new built-in {}",
+                            path.display(),
+                            if kind == Kind::Lang { "texts" } else { "template" }
+                        );
+                    }
                     Err(e) => tracing::warn!(plugin = %id, "cannot write {}: {e}", path.display()),
                 }
                 return;
             }
             if text == template && old.as_deref() != Some(&*template) {
-                let _ = write(base);
+                base.write(bytes);
             }
             let (lacks, kept) = match kind {
                 Kind::Config => (

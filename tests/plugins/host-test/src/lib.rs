@@ -5,7 +5,8 @@
 //!   `/busy <ms>` (works that long without calling the host),
 //!   `/panic`, `/reg <name> [umbrella] [virtual]` (registers a command),
 //!   `/http <url>`, `/call <service> <method> <n>`, `/flood <n>`,
-//!   `/sleep <ms>`, `/echo <text>`, `/alloc <mb>`; tab completion of `/echo`
+//!   `/sleep <ms>`, `/echo <text>`, `/alloc <mb>`, `/struct <file>` (a
+//!   structure from the data directory into a new world); tab completion of `/echo`
 //!   answers `<name>|<args>|<player>`, of `/sleep <ms>` after that long,
 //! - `busy_init_ms` from the config: `init` works that long without
 //!   calling the host,
@@ -184,6 +185,7 @@ impl pumbo_sdk::Plugin for TestPlugin {
         Command::new(&format!("{prefix}secret"))
             .sensitive()
             .register()?;
+        Command::new(&format!("{prefix}struct")).register()?;
         Ok(())
     }
 
@@ -538,6 +540,17 @@ impl pumbo_sdk::Plugin for TestPlugin {
                     &e,
                     format!("file {written} {back} ro={ro} outside={outside}"),
                 );
+            }
+            "struct" => {
+                use pumbo_sdk::virtual_world as v;
+                let w = v::World::new(v::WorldOptions {
+                    time: 0,
+                    light: 15,
+                    game_mode: v::GameMode::Adventure,
+                    view_distance: 2,
+                });
+                let r = w.load_structure(&arg(&e, 0), v::BlockPos { x: 0, y: 64, z: 0 });
+                reply(&e, format!("struct {r:?}"));
             }
             "pset" => {
                 let r = e.player.map(|p| {

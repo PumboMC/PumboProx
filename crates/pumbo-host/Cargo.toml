@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 argon2.workspace = true
 bcrypt.workspace = true
+cap-primitives.workspace = true
 ciborium.workspace = true
 futures.workspace = true
 pumbo-contracts.workspace = true
