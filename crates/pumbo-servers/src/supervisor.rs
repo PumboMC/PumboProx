@@ -81,14 +81,21 @@ impl Manager {
         f(slot)
     }
 
+    /// A server that stops being ready is reported like one that becomes
+    /// ready, so the proxy's server list shows it offline.
     fn set(&self, name: &str, state: State, pid: Option<u32>) {
-        self.slot(name, |s| {
+        let was_ready = self.slot(name, |s| {
             if s.pid != pid {
                 s.since = pid.map(|_| Instant::now());
             }
+            let was = s.state == State::Ready;
             s.state = state;
             s.pid = pid;
+            was
         });
+        if was_ready && state != State::Ready {
+            self.changed();
+        }
     }
 
     fn save_pid(&self, name: &str, pid: Option<u32>) {

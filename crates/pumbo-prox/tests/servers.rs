@@ -646,6 +646,41 @@ async fn the_route_is_shown_and_changed_in_the_config_file() {
     m.shutdown().await;
 }
 
+/// Plugins see servers of the proxy made after the start, with their state:
+/// offline when created, online when ready, offline when stopped, gone
+/// when deleted.
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_see_servers_made_after_the_start() {
+    let (proxy, _, dir, lobby) = proxy("plugins", 25640, "Admin").await;
+    let m = proxy.servers.get().unwrap().clone();
+    let _cleanup = Cleanup(m.clone());
+    let host_text = format!(
+        "plugins:\n  dir: \"{}\"\n",
+        common::toml_path(&dir.join("../plugins"))
+    );
+    let plugins = pumbo_prox::plugins::Plugins::start(&host_text, &proxy, Vec::new())
+        .await
+        .unwrap()
+        .unwrap();
+    proxy.plugins.set(plugins.clone()).unwrap();
+    let status = |name: &str| {
+        plugins
+            .host
+            .render_now(&format!("%server_status:{name}%"), &[], None)
+            .plain_text()
+    };
+    assert_eq!(status("lobby"), "online");
+    new_server(&proxy, &dir, "later", &lobby).await;
+    assert_eq!(status("later"), "offline");
+    console(&proxy, "prox servers start later");
+    wait("online for plugins", 20, || status("later") == "online").await;
+    console(&proxy, "prox servers stop later");
+    wait("offline for plugins", 20, || status("later") == "offline").await;
+    console(&proxy, "prox servers delete later confirm");
+    wait("gone for plugins", 20, || status("later") != "offline").await;
+    m.shutdown().await;
+}
+
 /// A server in the config file wins over a server of the proxy whose name
 /// differs only in letter case: both would share one permission context.
 #[tokio::test(flavor = "multi_thread")]

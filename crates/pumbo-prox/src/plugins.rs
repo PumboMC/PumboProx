@@ -275,34 +275,48 @@ impl Plugins {
         let host = Host::start_with(cfg, bridge.clone(), natives)
             .await
             .map_err(|e| e.to_string())?;
+        let plugins = Plugins {
+            host,
+            bridge,
+            ids: Mutex::new(HashMap::new()),
+            next: AtomicU64::new(1),
+        };
+        plugins.servers_changed(proxy);
+        plugins
+            .host
+            .wait_started(std::time::Duration::from_secs(30))
+            .await
+            .map_err(|e| e.to_string())?;
+        for slot in plugins.host.plugins() {
+            tracing::info!(plugin = %slot.id, status = ?slot.status(), "plugin loaded");
+        }
+        Ok(Some(Arc::new(plugins)))
+    }
+
+    /// Gives plugins the current server list and player limit (start,
+    /// reload, servers of the proxy created, removed, ready or down). A
+    /// server of the proxy is online while it is ready; config servers have
+    /// no health check yet and count as online. Player counts come from the
+    /// host's own player list.
+    pub fn servers_changed(&self, proxy: &Proxy) {
         let rt = proxy.runtime();
-        host.set_max_players(rt.config.status.max_players);
-        host.set_servers(
+        self.host.set_max_players(rt.config.status.max_players);
+        let manager = proxy.servers.get();
+        self.host.set_servers(
             rt.backends
                 .iter()
                 .map(|b| ServerInfo {
                     name: b.name.clone(),
                     address: b.address.clone(),
                     protocol: b.protocol.map(|p| p.0),
-                    online: b.online,
-                    players: b.players,
+                    online: !rt.managed.contains(&b.name)
+                        || manager.is_some_and(|m| m.state(&b.name) == pumbo_servers::State::Ready),
+                    players: 0,
                     groups: Vec::new(),
                     enforces_secure_chat: None,
                 })
                 .collect(),
         );
-        host.wait_started(std::time::Duration::from_secs(30))
-            .await
-            .map_err(|e| e.to_string())?;
-        for slot in host.plugins() {
-            tracing::info!(plugin = %slot.id, status = ?slot.status(), "plugin loaded");
-        }
-        Ok(Some(Arc::new(Plugins {
-            host,
-            bridge,
-            ids: Mutex::new(HashMap::new()),
-            next: AtomicU64::new(1),
-        })))
     }
 
     /// After `hello`: closed logins and `on-pre-login`. `Ok(Some(online))`

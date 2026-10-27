@@ -399,6 +399,9 @@ impl Proxy {
             info!("The operator code expired: the network has a server now.");
         }
         self.runtime.send_replace(Arc::new(runtime));
+        if let Some(p) = self.plugins.get() {
+            p.servers_changed(self);
+        }
         Ok(())
     }
 
