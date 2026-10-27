@@ -129,8 +129,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           sha256sum pumboprox-* > SHA256SUMS
+          # Only a stable tag (no "-" in the version) becomes the latest release.
+          case $GITHUB_REF_NAME in
+            *-*) kind=(--prerelease --latest=false) ;;
+            *) kind=(--latest) ;;
+          esac
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes \
-            --latest pumboprox-* SHA256SUMS
+            "${kind[@]}" pumboprox-* SHA256SUMS
 
   docker:
     if: github.event_name == 'push'
@@ -155,7 +160,11 @@ jobs:
           done
           name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/pumboprox
           tags=$name:${GITHUB_REF_NAME#v}
-          tags+=,$name:latest
+          # latest follows stable releases only, beta the pre-releases.
+          case $GITHUB_REF_NAME in
+            *-*) tags+=,$name:beta ;;
+            *) tags+=,$name:latest ;;
+          esac
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4

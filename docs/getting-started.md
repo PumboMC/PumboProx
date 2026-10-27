@@ -9,13 +9,13 @@
 Pick one:
 
 - **Download** the file for your system from [Releases](https://github.com/PumboMC/PumboProx/releases/latest): Linux (x86_64 and ARM64, also static builds), Windows (x86_64 and ARM64) or macOS. Unpack it and you have the `pumboprox` program.
-- **Docker**: an image for `linux/amd64` and `linux/arm64`, `ghcr.io/pumbomc/pumboprox:<version>` (`latest` is the newest stable release). It holds only the program and runs as a non-root user. Mount a directory as `/data`: the proxy writes its config, secrets, data and `plugins/` there on the first start.
+- **Docker**: an image for `linux/amd64` and `linux/arm64`, `ghcr.io/pumbomc/pumboprox:<version>`. It holds only the program and runs as a non-root user. `latest` is the newest stable release and `beta` the newest pre-release; there is no stable release yet, so `latest` stays on an older beta and `beta` is the one to use. Mount a directory as `/data`: the proxy writes its config, secrets, data and `plugins/` there on the first start.
 
   ```sh
   mkdir pumbo && cd pumbo        # pumboprox.yml goes here
   docker run -dit --name pumboprox -p 25565:25565 \
     -v "$PWD:/data" --user "$(id -u):$(id -g)" \
-    ghcr.io/pumbomc/pumboprox:latest
+    ghcr.io/pumbomc/pumboprox:beta
   ```
 
   Inside the container `127.0.0.1` is the container itself: give the servers in `pumboprox.yml` addresses the container can reach (another container's name on the same Docker network, or `--network host` on Linux). Console: `docker attach pumboprox`, leave it with Ctrl+P Ctrl+Q. `docker stop pumboprox` shuts the proxy down cleanly.
