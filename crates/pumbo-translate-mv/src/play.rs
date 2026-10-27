@@ -334,7 +334,7 @@ fn parser_properties<'a>(parser: &str, r: &mut &'a [u8]) -> Option<&'a [u8]> {
 }
 
 /// `commands`: argument parsers as the client's; parsers it lacks become
-/// quotable strings (as ViaVersion does).
+/// quotable strings (ported, see NOTICE).
 fn commands(ctx: &mut Ctx<'_>, mut r: &[u8]) -> Option<Vec<u8>> {
     let client = ctx.client();
     let parsers = ctx.t.registry("command_argument_type")?;
@@ -492,7 +492,7 @@ pub(crate) fn particle(ctx: &mut Ctx<'_>, r: &mut &[u8], out: &mut Vec<u8>) -> O
             .get(usize::try_from(client_id).ok()?)?,
     );
     let name = short(&name);
-    // A stand-in (ViaVersion Mappings) keeps the options when their layout is
+    // A stand-in (from the mappings, see NOTICE) keeps the options when their layout is
     // the same and drops them when it has none; otherwise it is not sent.
     let same_options = options(&stand_in) == options(&name);
     if !same_options && !options(&stand_in).is_empty() {
@@ -568,7 +568,7 @@ pub(crate) fn particle(ctx: &mut Ctx<'_>, r: &mut &[u8], out: &mut Vec<u8>) -> O
     Some(())
 }
 
-/// Particles sharing an option layout (ViaVersion `ParticleType` readers);
+/// Particles sharing an option layout (ported, see NOTICE);
 /// empty for those without options.
 fn options(particle: &str) -> &str {
     match particle {
@@ -1228,7 +1228,7 @@ mod tests {
     }
 
     /// Reads a 26.3 `level_particles` with a trail in vanilla's field order
-    /// (ViaVersion `TRAIL1_21_4`, `BlockItemPacketRewriter26_3`): target,
+    /// (ported, see NOTICE): target,
     /// color and duration, then the rest, and nothing may be left.
     fn read_trail_26_3(mut r: &[u8]) -> ([f64; 3], i32, i32, [f64; 3]) {
         assert_eq!(r.get_var_int(), Some(TRAIL));

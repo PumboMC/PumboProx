@@ -1,6 +1,6 @@
 //! ID remaps between the server's and the client's registries, built from the
 //! names in both versions' tables. Entries the client lacks get the stand-in
-//! of ViaVersion Mappings (`data/via_mappings.txt`), otherwise they are dropped.
+//! of the mappings (`data/via_mappings.txt`, see NOTICE), otherwise they are dropped.
 
 use std::collections::HashMap;
 
@@ -8,8 +8,8 @@ use crate::data::{Block, VersionData};
 
 const VIA: &str = include_str!("../data/via_mappings.txt");
 
-/// Stand-ins from ViaVersion Mappings: the diffs of the steps from the server
-/// down to one client, applied in order like the protocol chain of ViaBackwards.
+/// Stand-ins from the mappings (see NOTICE): the diffs of the steps from the
+/// server down to one client, applied in order, one protocol step at a time.
 #[derive(Debug, Default)]
 pub(crate) struct Via {
     /// Per step, newest first: section → name → stand-in (`-`: none).
@@ -55,7 +55,7 @@ impl Via {
     }
 
     /// The client's state (`name[key=value,...]`) of a server state; per step
-    /// as ViaVersion `MappingsLoader.mapEntry`: the whole state first, then the
+    /// (ported, see NOTICE): the whole state first, then the
     /// block name, whose stand-in ending in `[` keeps the properties.
     fn state(&self, state: String) -> Option<String> {
         let mut current = state;

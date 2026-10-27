@@ -25,8 +25,8 @@ anew here.
 ViaBackwards and ViaVersion
 ---------------------------
 
-Conversions marked in the code with "ViaBackwards" or "ViaVersion" are ported
-from ViaBackwards (https://github.com/ViaVersion/ViaBackwards, commit
+Conversions marked in the code with "ported, see NOTICE" are ported from
+ViaBackwards (https://github.com/ViaVersion/ViaBackwards, commit
 ec63e9f8084f965c5bb085a428844a98be111ada of 2026-10-01) and ViaVersion
 (https://github.com/ViaVersion/ViaVersion, commit
 b83268efa03d9729a82fa165f78cc99c794446fd of 2026-10-08), GPL-3.0-or-later,
@@ -38,6 +38,36 @@ the block entity changes (`BlockPacketRewriter26_3`,
 `BlockItemPacketRewriter26_2`, `BlockPacketRewriter1_21_5`), and the way
 diff mappings are applied per step (ViaVersion Mappings
 `MappingsLoader.mapEntry`, GPL-3.0, see below).
+
+Ported functions, by file (the source in brackets):
+
+- `src/chunk.rs`: `pot_sherds` (ViaBackwards `BlockPacketRewriter26_3`),
+  `text_as_json` (ViaBackwards `BlockPacketRewriter1_21_5`), `beds`
+  (ViaBackwards `BlockItemPacketRewriter26_2`).
+- `src/item.rs`: `consume_effects` (ViaBackwards
+  `BlockItemPacketRewriter26_3`, ViaVersion `ConsumeEffect.EFFECT_TYPES26_3`),
+  `profile` (ViaBackwards `BlockItemPacketRewriter1_21_9`), `component`
+  (layouts from ViaVersion `StructuredDataKey`, `Protocol26_2To26_3`,
+  `ToolProperties.TYPE1_21_5`, `Equippable`, `BlocksAttacks.TYPE1_21_5`,
+  `Instrument1_21_2` and `Bee.TYPE1_21_9`; `pot_decorations` from ViaBackwards
+  `BlockItemPacketRewriter26_3`, `damage_resistant` from ViaBackwards
+  `BlockItemPacketRewriter26_1`), `slot_display` (ViaVersion
+  `RecipeDisplayRewriter*`), `recipes_known` (ViaVersion
+  `RecipeDisplayRewriter`).
+- `src/nbt.rs`: `text` (ViaBackwards `ComponentRewriter1_21_5`).
+- `src/play.rs`: `commands` (argument parsers the client lacks become strings,
+  as in ViaVersion), `options` (ViaVersion `ParticleType` readers), the test
+  reader `read_trail_26_3` (ViaVersion `TRAIL1_21_4`, ViaBackwards
+  `BlockItemPacketRewriter26_3`).
+- `src/remap.rs`: `Via::state` (ViaVersion Mappings `MappingsLoader.mapEntry`).
+- `src/serverbound.rs`: `player_action` (ViaBackwards
+  `EntityPacketRewriter26_3`).
+- `src/version.rs`: the encoding eras (pumpkin-java-multiversion).
+
+Not ported yet: the per-step registry data conversions for biomes, dimension
+types and other registries (ViaBackwards `RegistryDataRewriter*`, see
+`CUSTOM_ENTRIES` in `src/config.rs`) and whole recipes for 1.21 clients
+(ViaBackwards `RecipeStorage`, see `recipes_known` in `src/item.rs`).
 
 Data
 ----

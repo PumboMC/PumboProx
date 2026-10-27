@@ -3,10 +3,10 @@
 //! configuration and play phases. Handshake, status and login stay with the
 //! caller, in the client's version.
 //!
-//! Ported from pumpkin-java-multiversion by Zinedin Polic (MIT OR Apache-2.0,
-//! see `NOTICE`), with conversions from ViaBackwards and ViaVersion
-//! (GPL-3.0, marked where used): translation on raw payloads per packet, eras per encoding
-//! change, per-connection state for entity types. The plugin's Pumpkin types
+//! Ported in part from other projects (MIT OR Apache-2.0 and GPL-3.0; `NOTICE`
+//! lists the sources and the ported functions, marked "ported, see NOTICE"
+//! in the code): translation on raw payloads per packet, eras per encoding
+//! change, per-connection state for entity types. The original's Pumpkin types
 //! are replaced by readers and writers on bytes, and its generated remaps by
 //! remaps built at start from both versions' tables ([`VersionData`]).
 //!

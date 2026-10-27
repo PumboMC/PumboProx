@@ -403,8 +403,7 @@ fn vanilla_26_3_session_for_older_clients() {
 
 // ---------------------------------------------------------------- recipes
 
-/// Reads recipe packets in one client's layout (ViaVersion `RecipeDisplayRewriter`
-/// per version) and fails on anything that does not fit.
+/// Reads recipe packets in one client's layout (per version) and fails on anything that does not fit.
 struct RecipeReader<'a> {
     protocol: i32,
     tables: &'a pumbo_data::Tables,

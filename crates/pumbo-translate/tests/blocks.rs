@@ -1,7 +1,7 @@
 //! Block entities for older clients: NBT in the client's layout (pot sherds
 //! before 26.3, text as JSON before 1.21.5) and the bed block entities that
-//! clients before 26.2 need to draw beds (ViaBackwards `BlockPacketRewriter26_3`,
-//! `BlockItemPacketRewriter26_2`, `BlockPacketRewriter1_21_5`).
+//! clients before 26.2 need to draw beds (the ported conversions, see the
+//! NOTICE of pumbo-translate-mv).
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

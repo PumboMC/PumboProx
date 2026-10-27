@@ -90,7 +90,7 @@ pub(crate) fn copy(r: &mut &[u8], out: &mut Vec<u8>) -> Option<()> {
 
 /// Copies one text component (network NBT) in the client's layout. Before
 /// 1.21.5 click and hover events had other names and fields
-/// (`clickEvent {action, value}`; ViaBackwards `ComponentRewriter1_21_5`):
+/// (`clickEvent {action, value}`; ported, see NOTICE):
 /// text with events is rewritten by `pumbo-text`, the rest is copied.
 pub(crate) fn text(client: i32, r: &mut &[u8], out: &mut Vec<u8>) -> Option<()> {
     let raw = split(r)?;

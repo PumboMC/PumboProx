@@ -8,11 +8,11 @@ use crate::wire::{Get, Put};
 use crate::{Ctx, Phase, nbt};
 
 /// Synced registries whose entry data has the same layout for 1.21–26.3 (no
-/// ViaBackwards `RegistryDataRewriter` step changes them): entries the client's
+/// registry data conversion step changes them): entries the client's
 /// vanilla lacks (Pumpkin's `chat_type` `raw`, datapack damage types) go to it
 /// with the server's data. Other registries keep the fallback entry.
-// Biomes, dimension types and the rest need the per-step data
-// conversions of ViaBackwards `RegistryDataRewriter*`; add them when a server sends its own.
+// Biomes, dimension types and the rest need the per-step registry data
+// conversions (not ported yet, see NOTICE); add them when a server sends its own.
 const CUSTOM_ENTRIES: &[&str] = &["chat_type", "damage_type"];
 
 fn full(name: &str) -> String {

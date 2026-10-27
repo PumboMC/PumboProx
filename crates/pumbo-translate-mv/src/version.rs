@@ -16,7 +16,7 @@ pub const SERVER_PROTOCOL: i32 = V26_3;
 /// Oldest client protocol translated.
 pub const OLDEST_CLIENT: i32 = V1_21;
 
-/// A component's encoding eras (from pumpkin-java-multiversion). Each variant
+/// A component's encoding eras (ported, see NOTICE). Each variant
 /// starts at its protocol and lasts until the next one, so protocols where the
 /// component did not change share a variant. `of` is the only comparison.
 macro_rules! eras {

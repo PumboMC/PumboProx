@@ -142,8 +142,7 @@ fn mob_effects(ctx: &Ctx<'_>, r: &mut &[u8], out: &mut Vec<u8>) -> Option<()> {
 }
 
 /// Consume effects of `consumable` and `death_protection` (1.21.2+).
-/// 26.3→26.2 (ViaBackwards `BlockItemPacketRewriter26_3`, ViaVersion
-/// `ConsumeEffect.EFFECT_TYPES26_3`): `teleport_randomly` lost its
+/// 26.3→26.2 (ported, see NOTICE): `teleport_randomly` lost its
 /// directional particles flag.
 fn consume_effects(ctx: &Ctx<'_>, r: &mut &[u8], out: &mut Vec<u8>) -> Option<()> {
     let t = ctx.t;
@@ -275,7 +274,7 @@ fn component_name(t: &crate::Tables, kind: i32) -> Option<String> {
 }
 
 /// A `ResolvableProfile` (1.21.9+); older clients get a `GameProfile`
-/// (ViaBackwards `BlockItemPacketRewriter1_21_9`): name, ID and properties,
+/// (ported, see NOTICE): name, ID and properties,
 /// without the skin patch.
 fn profile(ctx: &Ctx<'_>, r: &mut &[u8], out: &mut Vec<u8>) -> Option<()> {
     let start = *r;
@@ -311,7 +310,7 @@ fn profile(ctx: &Ctx<'_>, r: &mut &[u8], out: &mut Vec<u8>) -> Option<()> {
 /// One server component value. `Some(true)`: written for the client;
 /// `Some(false)`: read, but the client cannot have it (left out of the
 /// stack). `None` only for a malformed value: every 26.3 component is read
-/// (layouts from ViaVersion `StructuredDataKey` and `Protocol26_2To26_3`).
+/// (layouts ported, see NOTICE).
 fn component(ctx: &mut Ctx<'_>, name: &str, r: &mut &[u8], out: &mut Vec<u8>) -> Option<bool> {
     let client = ctx.client();
     let flag = TooltipFlags::of(client) == TooltipFlags::Inline;
@@ -480,7 +479,7 @@ fn component(ctx: &mut Ctx<'_>, name: &str, r: &mut &[u8], out: &mut Vec<u8>) ->
             out.put_slice(&body);
         }
         "pot_decorations" => {
-            // 26.3→26.2 (ViaBackwards `BlockItemPacketRewriter26_3`): four optional
+            // 26.3→26.2 (ported, see NOTICE): four optional
             // item templates (back, left, right, front) became a list of items.
             let start = *r;
             let mut sides = [None; 4];
@@ -552,7 +551,7 @@ fn component(ctx: &mut Ctx<'_>, name: &str, r: &mut &[u8], out: &mut Vec<u8>) ->
             opt(r, out, copy_str)?;
         }
         "damage_resistant" => {
-            // 26.1→1.21.11 (ViaBackwards `BlockItemPacketRewriter26_1`): a damage type tag before 26.1.
+            // 26.1→1.21.11 (ported, see NOTICE): a damage type tag before 26.1.
             let set = read_set(r)?;
             if !synced_set(ctx, "damage_type", &set, out) {
                 return Some(false);
@@ -569,7 +568,7 @@ fn component(ctx: &mut Ctx<'_>, name: &str, r: &mut &[u8], out: &mut Vec<u8>) ->
             out.put_var_int(id);
         }
         "tool" => {
-            // 1.21.5 added `can_destroy_blocks_in_creative` (ViaVersion `ToolProperties.TYPE1_21_5`).
+            // 1.21.5 added `can_destroy_blocks_in_creative` (ported, see NOTICE).
             let blocks = &ctx.t.blocks;
             copy_list(r, out, |r, o| {
                 put_set(&read_set(r)?, o, &mut |id| blocks.get(id));
@@ -588,7 +587,7 @@ fn component(ctx: &mut Ctx<'_>, name: &str, r: &mut &[u8], out: &mut Vec<u8>) ->
             copy(r, 4, out)?;
         }
         "equippable" => {
-            // ViaVersion `Equippable`: `equip_on_interact` since 1.21.5, shearing since 1.21.6.
+            // `equip_on_interact` since 1.21.5, shearing since 1.21.6 (ported, see NOTICE).
             let slot = copy_var_int(r, out)?;
             sound_holder(ctx, r, out)?;
             opt(r, out, copy_str)?;
@@ -620,7 +619,7 @@ fn component(ctx: &mut Ctx<'_>, name: &str, r: &mut &[u8], out: &mut Vec<u8>) ->
             put_set(&read_set(r)?, out, &mut |id| items.get(id));
         }
         "blocks_attacks" => {
-            // 26.1→1.21.11 (ViaVersion `BlocksAttacks.TYPE1_21_5`): `bypassed_by` was a tag.
+            // 26.1→1.21.11 (ported, see NOTICE): `bypassed_by` was a tag.
             copy(r, 8, out)?;
             let n = r.get_len()?;
             out.put_len(n);
@@ -770,7 +769,7 @@ fn component(ctx: &mut Ctx<'_>, name: &str, r: &mut &[u8], out: &mut Vec<u8>) ->
         }
         "instrument" => {
             // 26.3 added the inline instrument's durability damage; 1.21.5-1.21.11 wrap
-            // the holder in an `Either` (ViaVersion `Instrument1_21_2`).
+            // the holder in an `Either` (ported, see NOTICE).
             let Some(id) = synced_holder(ctx, "instrument", r, |r| {
                 skip_sound(r)?;
                 r.bytes(8)?;
@@ -853,7 +852,7 @@ fn component(ctx: &mut Ctx<'_>, name: &str, r: &mut &[u8], out: &mut Vec<u8>) ->
         }
         "profile" => profile(ctx, r, out)?,
         "bees" => {
-            // 1.21.9 added the entity type (ViaVersion `Bee.TYPE1_21_9`).
+            // 1.21.9 added the entity type (ported, see NOTICE).
             let n = r.get_len()?;
             out.put_len(n);
             for _ in 0..n {
@@ -1272,7 +1271,7 @@ pub(crate) fn merchant_offers(ctx: &mut Ctx<'_>, mut r: &[u8]) -> Option<Vec<u8>
     Some(out)
 }
 
-/// A slot display (1.21.2+; ViaVersion `RecipeDisplayRewriter*`). Types the
+/// A slot display (1.21.2+; ported, see NOTICE). Types the
 /// client lacks become `empty`; 26.3 made `tag` a holder set of items (IDs
 /// become a `composite` of items before), 1.21.5 made the trim pattern of
 /// `smithing_trim` a pattern holder (an `empty` display before).
@@ -1409,10 +1408,10 @@ fn ingredient(ctx: &Ctx<'_>, r: &mut &[u8], out: &mut Vec<u8>) -> Option<()> {
     Some(())
 }
 
-/// Recipe packets for 1.21.2+ clients (ViaVersion `RecipeDisplayRewriter`).
+/// Recipe packets for 1.21.2+ clients (ported, see NOTICE).
 /// 1.21 has the old recipe format (full recipes in `update_recipes`) and
 /// gets none: an empty recipe book, no stonecutter recipes.
-// 1.21 needs whole recipes rebuilt (ViaBackwards `RecipeStorage`); port it when 1.21.0 matters.
+// 1.21 needs whole recipes rebuilt (not ported yet, see NOTICE); port it when 1.21.0 matters.
 fn recipes_known(ctx: &Ctx<'_>) -> bool {
     ctx.client() >= V1_21_2
 }

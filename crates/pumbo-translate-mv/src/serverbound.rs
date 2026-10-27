@@ -192,7 +192,7 @@ fn punch(ctx: &mut Ctx<'_>, r: &[u8]) -> Option<Vec<u8>> {
     Some(Vec::new())
 }
 
-/// `player_action` (26.3→26.2, ViaBackwards `EntityPacketRewriter26_3`):
+/// `player_action` (26.3→26.2, ported, see NOTICE):
 /// 26.3 inserted `change_destroy_direction` as action 1, so every older
 /// action from 1 on moves up by one. Without it a finished dig (2) reaches
 /// the server as an abort and the block comes back.

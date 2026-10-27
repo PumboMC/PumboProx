@@ -49,7 +49,7 @@ fn known_blocks() {
         t.block_state_for_client(state(777, "oak_stairs", &stairs)),
         state(767, "oak_stairs", &stairs)
     );
-    // New blocks get the stand-ins of ViaVersion Mappings with their properties.
+    // New blocks get the stand-ins of the mappings with their properties.
     assert_eq!(
         t.block_state_for_client(state(777, "pale_oak_stairs", &stairs)),
         state(767, "birch_stairs", &stairs)
@@ -200,7 +200,7 @@ fn known_items_and_entities() {
         t.entity_type_for_client(entity(777, "cushion")),
         Some(entity(767, "text_display"))
     );
-    // Our override: ViaBackwards makes mannequins fake players.
+    // Our override: the mappings make mannequins fake players.
     assert_eq!(
         t.entity_type_for_client(entity(777, "mannequin")),
         Some(entity(767, "armor_stand"))

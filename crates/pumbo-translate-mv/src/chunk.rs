@@ -444,7 +444,7 @@ fn block_entity_nbt(ctx: &Ctx<'_>, kind: i32, data: &[u8], out: &mut Vec<u8>) {
     }
 }
 
-/// 26.3→26.2 (ViaBackwards `BlockPacketRewriter26_3`): pot sherds by side
+/// 26.3→26.2 (ported, see NOTICE): pot sherds by side
 /// became item templates; older clients read a list of item names in the
 /// order back, left, right, front.
 fn pot_sherds(c: &mut Compound) {
@@ -464,7 +464,7 @@ fn pot_sherds(c: &mut Compound) {
     c.insert("sherds", Tag::List(List::of(items)));
 }
 
-/// 1.21.5→1.21.4 (ViaBackwards `BlockPacketRewriter1_21_5`): text in block
+/// 1.21.5→1.21.4 (ported, see NOTICE): text in block
 /// entities was JSON strings: sign lines and custom names.
 fn text_as_json(c: &mut Compound, format: TextFormat) {
     let json = |tag: &Tag| {
@@ -490,7 +490,7 @@ fn text_as_json(c: &mut Compound, format: TextFormat) {
     }
 }
 
-/// 26.2→26.1 (ViaBackwards `BlockItemPacketRewriter26_2`): beds lost their
+/// 26.2→26.1 (ported, see NOTICE): beds lost their
 /// block entity in 26.2, and older clients draw a bed only with one. Positions
 /// of the beds in the server's chunk sections, as packed XZ and Y.
 fn beds(t: &Tables, mut data: &[u8]) -> Vec<(u8, i16)> {

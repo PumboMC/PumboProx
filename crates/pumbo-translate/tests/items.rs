@@ -1,7 +1,7 @@
 //! Item stacks with 26.3 components for every older client: the packet with
 //! the stack always arrives, components the client cannot have are left out,
-//! and the ones that changed layout come out in the client's layout (as
-//! ViaVersion's `StructuredDataKey` types of that version describe them).
+//! and the ones that changed layout come out in the client's layout (the
+//! ported layouts of that version, see the NOTICE of pumbo-translate-mv).
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
