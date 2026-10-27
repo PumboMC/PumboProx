@@ -13,6 +13,16 @@ fi
 
 step() { echo; echo "== $*"; }
 
+step text
+# A plugin name the owner keeps out of the project (spelled in hex, so this file
+# does not contain it) and a marker an editor tool leaves in comments.
+banned="$(printf '\x6c\x75\x63\x6b\x70\x65\x72\x6d\x73|\x6c\x75\x63\x6b\x6f')|pony""tail:"
+if git grep -n -i -E "$banned" -- . ':!*NOTICE' ':!*/licenses/*' ':!Cargo.lock' \
+  ':!crates/pumbo-data/tables/*'; then
+  echo "banned text found"
+  exit 1
+fi
+
 step fmt
 cargo fmt --all --check
 (cd tests/spikes/wasm-async/guest && cargo fmt --check)
