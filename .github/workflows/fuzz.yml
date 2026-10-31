@@ -1,7 +1,7 @@
 name: fuzz
 
 # Fuzzing (plan E2): the frame decoder, the packet decoders of every phase,
-# NBT and text parsers, one hour each. By hand only: 7 hours of runner time
+# NBT and text parsers and version translation, one hour each. By hand only: 8 hours of runner time
 # would use up the 2000 minutes a month of a private repository in days.
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [frame, handshake_status, login, configuration, play, nbt, text]
+        target: [frame, handshake_status, login, configuration, play, nbt, text, translate]
     steps:
       - uses: actions/checkout@v4
       - name: Rust nightly and cargo-fuzz

@@ -1,6 +1,6 @@
 [package]
 name = "pumbo-fuzz"
-description = "Fuzz targets for the frame decoder, packet decoders of every phase, NBT and text"
+description = "Fuzz targets for the frame decoder, packet decoders of every phase, NBT, text and version translation"
 version = "0.0.0"
 edition = "2024"
 license = "GPL-3.0-only"
@@ -17,6 +17,8 @@ pumbo-nbt = { path = "../crates/pumbo-nbt" }
 pumbo-protocol = { path = "../crates/pumbo-protocol" }
 pumbo-testclient = { path = "../crates/pumbo-testclient" }
 pumbo-text = { path = "../crates/pumbo-text" }
+pumbo-translate = { path = "../crates/pumbo-translate" }
+pumbo-translate-mv = { path = "../crates/pumbo-translate-mv" }
 
 # Not part of the main workspace (needs nightly and libFuzzer).
 [workspace]
@@ -73,6 +75,13 @@ bench = false
 [[bin]]
 name = "text"
 path = "fuzz_targets/text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "translate"
+path = "fuzz_targets/translate.rs"
 test = false
 doc = false
 bench = false

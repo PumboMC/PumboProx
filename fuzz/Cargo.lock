@@ -906,6 +906,8 @@ dependencies = [
  "pumbo-protocol",
  "pumbo-testclient",
  "pumbo-text",
+ "pumbo-translate",
+ "pumbo-translate-mv",
 ]
 
 [[package]]
@@ -963,6 +965,26 @@ dependencies = [
  "pumbo-nbt",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "pumbo-translate"
+version = "0.2.5-beta"
+dependencies = [
+ "bytes",
+ "pumbo-core",
+ "pumbo-data",
+ "pumbo-protocol",
+ "pumbo-translate-mv",
+ "serde_json",
+]
+
+[[package]]
+name = "pumbo-translate-mv"
+version = "0.2.5-beta"
+dependencies = [
+ "pumbo-nbt",
+ "pumbo-text",
 ]
 
 [[package]]
