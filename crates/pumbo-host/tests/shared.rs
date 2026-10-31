@@ -651,7 +651,8 @@ async fn permission_writes_need_a_grant_and_own_nodes() {
 /// (`auto`) and gets permissions.yml at its start; once it loaded a player
 /// its set replaces the file; when it is unloaded players keep its set, and
 /// when it comes back the players are loaded again. A named provider that is
-/// not installed leaves the file in charge.
+/// not installed, or a plugin that provides no permissions, stops the start
+/// instead of leaving the file in charge.
 #[tokio::test(flavor = "multi_thread")]
 async fn provider_replaces_the_file_and_falls_back() {
     let env = Env::new("perm-fallback");
@@ -718,13 +719,22 @@ async fn provider_replaces_the_file_and_falls_back() {
     assert!(!host.has_permission(2, "pumbo.test.base", None));
     host.shutdown().await;
 
-    // A named provider that is not installed: the file, no start error.
-    let (host2, _) = start(env.host_config("permissions: { provider: nothere }\n")).await;
-    host2.player_joined(player(3, "joe", None));
-    assert_eq!(host2.run_gates(3).await, GateOutcome::Pass);
-    assert!(host2.has_permission(3, "pumbo.test.base", None));
-    assert!(!host2.has_permission(3, "pumbo.test.fly", None));
-    host2.shutdown().await;
+    // A named provider that is not installed: a start error, not the file.
+    let fails = async |extra: &str| {
+        Host::start(env.host_config(extra), Arc::new(FakeBridge::default()))
+            .await
+            .unwrap_err()
+            .to_string()
+    };
+    let err = fails("permissions: { provider: nothere }\n").await;
+    assert!(
+        err.contains("permissions.provider: nothere is not installed")
+            && err.contains("put its .wasm back, or set permissions.provider: file"),
+        "{err}"
+    );
+    env.plugin("plain", "test", "");
+    let err = fails("permissions: { provider: plain }\n").await;
+    assert!(err.contains("plain provides no permissions"), "{err}");
     // `file`: the plugin is installed but not asked.
     let (host3, _) = start(env.host_config("permissions: { provider: file }\n")).await;
     host3.player_joined(player(4, "ann", None));

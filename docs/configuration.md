@@ -355,7 +355,7 @@ Where permissions come from. `reload` reads the permissions file again; the keys
 
 | Key | Default | Description | Applies |
 | --- | --- | --- | --- |
-| `provider` | `auto` | `auto`: the installed permission plugin, else the file. `file`: only the file. Or the id of a permission plugin | restart |
+| `provider` | `auto` | `auto`: the installed permission plugin, else the file. `file`: only the file. Or the id of a permission plugin; when that plugin is not installed, the proxy does not start | restart |
 | `file` | `permissions.yml` | The permissions file, see [Commands](commands.md#permissions) | restart |
 | `load-at` | `after-gates` | When a player's permissions are loaded: `after-gates` or `after-profile` | restart |
 | `load-timeout-ms` | `2000` | Time for the permission plugin to load one player | restart |

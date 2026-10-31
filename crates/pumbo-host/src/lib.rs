@@ -1254,8 +1254,9 @@ fn check_failures(
 /// The permission provider (`permissions.provider`): `auto` takes the plugin
 /// with `permission-provider: true` that provides `pumbo:permissions` (of
 /// several, the one chosen in `services.providers`, else a start error),
-/// `file` none. A named plugin that is not installed or no provider leaves
-/// `permissions.yml` in charge, with a warning (PumboPerms spec §16).
+/// `file` none. A named plugin that is not installed or provides no
+/// permissions stops the start instead of leaving an old `permissions.yml`
+/// in charge.
 fn permission_provider(
     cfg: &HostConfig,
     plugins: &BTreeMap<String, Arc<PluginSlot>>,
@@ -1310,7 +1311,6 @@ fn permission_provider(
             ),
         });
     }
-    let file = cfg.permissions.file.display();
     Ok(match cfg.permissions.provider.as_str() {
         "file" => None,
         "auto" => match able.as_slice() {
@@ -1334,11 +1334,16 @@ fn permission_provider(
             }
         },
         id if able.iter().any(|a| *a == id) => Some(id.to_string()),
+        id if plugins.contains_key(id) => {
+            return Err(HostError::Config(format!(
+                "permissions.provider: {id} provides no permissions (its manifest needs permission-provider: true and pumbo:permissions under provides): name another plugin, or set permissions.provider: file"
+            )));
+        }
         id => {
-            tracing::warn!(
-                "permissions.provider: {id} is not installed or provides no permissions, using {file}"
-            );
-            None
+            return Err(HostError::Config(format!(
+                "permissions.provider: {id} is not installed (no plugin with this id in {}): put its .wasm back, or set permissions.provider: file",
+                cfg.plugins.dir.display()
+            )));
         }
     })
 }

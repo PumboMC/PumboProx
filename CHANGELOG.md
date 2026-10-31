@@ -26,6 +26,7 @@ All notable changes to PumboProx, one section per release. The format follows [K
 
 ### Changed
 
+- A permission plugin named in `permissions.provider` that is not installed, or that provides no permissions, now stops the start instead of leaving an old `permissions.yml` in charge.
 - A `pumboprox.yml` without `login.online-mode` stays on `per-player`, now with a warning at start; set the key to keep that choice. New installs get `online-mode: true`.
 - The Docker tag `latest` moves only with stable releases; pre-releases get `beta`, and their GitHub release is marked as a pre-release.
 - A release is published only from a commit whose CI passed, and its binaries and Docker image are started once with a fresh config before they go out.
