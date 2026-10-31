@@ -30,6 +30,20 @@ impl Cidr {
             _ => false,
         }
     }
+
+    /// Wider than any range a hosting or protection provider publishes:
+    /// public IPv4 wider than /8, public IPv6 wider than /16. Private,
+    /// CGNAT and unique local ranges of any width are not.
+    pub fn too_wide(&self) -> bool {
+        const ULA: Cidr = Cidr {
+            addr: IpAddr::V6(Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 0)),
+            prefix: 7,
+        };
+        match self.addr {
+            IpAddr::V4(_) => self.prefix < 8,
+            IpAddr::V6(_) => self.prefix < 16 && !(self.prefix >= 7 && ULA.contains(self.addr)),
+        }
+    }
 }
 
 impl FromStr for Cidr {
@@ -187,6 +201,26 @@ mod tests {
         assert!(v6.contains("2001:db8:1::5".parse().unwrap()));
         assert!("10.0.0.0/33".parse::<Cidr>().is_err());
         assert!("nope/8".parse::<Cidr>().is_err());
+    }
+
+    #[test]
+    fn wide_ranges() {
+        let wide = |s: &str| s.parse::<Cidr>().unwrap().too_wide();
+        for s in ["0.0.0.0/0", "1.0.0.0/7", "::/0", "2000::/3", "2001::/15"] {
+            assert!(wide(s), "{s}");
+        }
+        for s in [
+            "10.0.0.0/8",
+            "172.16.0.0/12",
+            "100.64.0.0/10",
+            "104.16.0.0/12",
+            "2001:db8::/32",
+            "2400:cb00::/29",
+            "fc00::/7",
+            "fd00::/8",
+        ] {
+            assert!(!wide(s), "{s}");
+        }
     }
 
     #[test]

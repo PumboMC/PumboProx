@@ -32,7 +32,7 @@ use tokio::time::{Instant, timeout, timeout_at};
 use tracing::{Instrument as _, debug, info, warn};
 use uuid::Uuid;
 
-use crate::config::{OnlineMode, split_host_port};
+use crate::config::{OnlineMode, ProxyProtocol, split_host_port};
 use crate::conn::{Conn, ConnError};
 use crate::limits::{IpReject, Premium};
 use crate::metrics::{GaugeGuard, Metrics};
@@ -114,7 +114,24 @@ async fn run(proxy: Arc<Proxy>, listener: Arc<ListenerSettings>, incoming: Incom
         FrameConfig::from_client(),
     );
     let mut peer = incoming.peer;
-    if listener.proxy_protocol && listener.is_trusted(peer.ip()) {
+    if listener.proxy_protocol == ProxyProtocol::Required && !listener.is_trusted(peer.ip()) {
+        Metrics::inc(&m.rejected_proxy_untrusted);
+        let first = !listener
+            .warned
+            .swap(true, std::sync::atomic::Ordering::Relaxed);
+        let why = format!(
+            "listener {}: connection from {} refused: not in trusted-proxies, and proxy-protocol is required",
+            listener.bind,
+            proxy.ip(peer)
+        );
+        if first {
+            warn!("{why} (more are logged at debug)");
+        } else {
+            debug!("{why}");
+        }
+        return;
+    }
+    if listener.proxy_protocol.on() && listener.is_trusted(peer.ip()) {
         match timeout(PROXY_HEADER_TIMEOUT, read_proxy_header(&mut client)).await {
             Ok(Ok(Some(source))) => peer = source,
             Ok(Ok(None)) => {}

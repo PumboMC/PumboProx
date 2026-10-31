@@ -45,6 +45,7 @@ metrics! {
     rejected_ip_concurrent: counter "pumboprox_connections_rejected_total" "{reason=\"ip_concurrent\"}";
     rejected_status_rate: counter "pumboprox_connections_rejected_total" "{reason=\"status_rate\"}";
     rejected_proxy_header: counter "pumboprox_connections_rejected_total" "{reason=\"proxy_header\"}";
+    rejected_proxy_untrusted: counter "pumboprox_connections_rejected_total" "{reason=\"proxy_untrusted\"}";
     timeouts_handshake: counter "pumboprox_timeouts_total" "{phase=\"handshake\"}";
     timeouts_login: counter "pumboprox_timeouts_total" "{phase=\"login\"}";
     timeouts_idle: counter "pumboprox_timeouts_total" "{phase=\"idle\"}";

@@ -157,10 +157,10 @@ fn check_config(path: &str) -> ExitCode {
         Ok(rt) => {
             let cfg = &rt.config;
             for l in &cfg.listener {
-                let pp = if l.proxy_protocol {
-                    ", PROXY protocol"
-                } else {
-                    ""
+                let pp = match l.proxy_protocol {
+                    pumbo_prox::config::ProxyProtocol::Required => ", PROXY protocol (required)",
+                    pumbo_prox::config::ProxyProtocol::Optional => ", PROXY protocol (optional)",
+                    pumbo_prox::config::ProxyProtocol::Off => "",
                 };
                 println!("listener: {} on {}{pp}", l.transport, l.bind);
             }

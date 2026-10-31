@@ -4,6 +4,9 @@
 
 listener:
   - bind: "0.0.0.0:25565"
+    # Behind DDoS protection or a load balancer that sends the PROXY header:
+    # proxy-protocol: true             # only trusted-proxies may connect
+    # trusted-proxies: ["10.0.0.0/8"]  # optional instead of true also lets players in directly
 
 # Players log in with a Mojang account. "per-player" or false let players
 # without one in too, under any name and without a password: use them only

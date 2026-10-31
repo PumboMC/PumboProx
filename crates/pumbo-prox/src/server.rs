@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
@@ -17,7 +17,7 @@ use tokio::sync::{Notify, Semaphore, mpsc, watch};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use crate::config::{Config, is_loopback_host, split_host_port};
+use crate::config::{Config, ProxyProtocol, is_loopback_host, split_host_port};
 use crate::limits::IpLimiter;
 use crate::logging::IpDisplay;
 use crate::metrics::Metrics;
@@ -178,8 +178,10 @@ fn host_restart_needed(old: &pumbo_host::HostConfig, new: &pumbo_host::HostConfi
 #[derive(Debug)]
 pub struct ListenerSettings {
     pub bind: String,
-    pub proxy_protocol: bool,
+    pub proxy_protocol: ProxyProtocol,
     pub trusted: Vec<Cidr>,
+    /// The first refused direct connection was logged at warn.
+    pub warned: AtomicBool,
 }
 
 impl ListenerSettings {
@@ -736,12 +738,20 @@ impl Proxy {
                 .map_err(|e| e.to_string())?;
             let trusted = rt.config.trusted(l).map_err(|e| e.to_string())?;
             info!("listening on {} ({})", listener.local_addr(), l.transport);
+            if l.proxy_protocol == ProxyProtocol::Required {
+                info!(
+                    "listener {}: PROXY header required, only {} may connect; set proxy-protocol: optional to also accept direct connections",
+                    l.bind,
+                    l.trusted_proxies.join(", ")
+                );
+            }
             out.push((
                 listener,
                 Arc::new(ListenerSettings {
                     bind: l.bind.clone(),
                     proxy_protocol: l.proxy_protocol,
                     trusted,
+                    warned: AtomicBool::new(false),
                 }),
             ));
         }

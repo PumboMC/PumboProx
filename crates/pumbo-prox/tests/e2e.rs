@@ -326,11 +326,11 @@ limits:
 }
 
 /// The listener takes PROXY headers from `cidr` (and requires them there).
-fn with_proxy_protocol(cfg: &str, cidr: &str) -> String {
+fn with_proxy_protocol(cfg: &str, mode: &str, cidr: &str) -> String {
     cfg.replacen(
         "bind: \"127.0.0.1:0\"\n",
         &format!(
-            "bind: \"127.0.0.1:0\"\n    proxy-protocol: true\n    trusted-proxies: [\"{cidr}\"]\n"
+            "bind: \"127.0.0.1:0\"\n    proxy-protocol: {mode}\n    trusted-proxies: [\"{cidr}\"]\n"
         ),
         1,
     )
@@ -472,8 +472,12 @@ async fn status_and_legacy_ping() {
 #[tokio::test(flavor = "multi_thread")]
 async fn offline_login_with_forwarding_proxy_header_and_keep_alives() {
     let (backend, log) = fake_backend(BackendOpts::default()).await;
-    let (proxy, addr) =
-        start_proxy(&with_proxy_protocol(&config(backend, ""), "127.0.0.1/32")).await;
+    let (proxy, addr) = start_proxy(&with_proxy_protocol(
+        &config(backend, ""),
+        "true",
+        "127.0.0.1/32",
+    ))
+    .await;
     let out = pumbo_testclient::run(
         addr,
         module(777),
@@ -915,7 +919,7 @@ async fn three_thousand_idle_connections() {
 #[tokio::test(flavor = "multi_thread")]
 async fn proxy_header_only_from_trusted_addresses() {
     let (backend, log) = fake_backend(BackendOpts::default()).await;
-    let cfg = with_proxy_protocol(&config(backend, ""), "10.0.0.0/8");
+    let cfg = with_proxy_protocol(&config(backend, ""), "optional", "10.0.0.0/8");
     let (_p, addr) = start_proxy(&cfg).await;
     // 127.0.0.1 is not trusted here: a PROXY header is just a broken handshake.
     let out = pumbo_testclient::run(
@@ -937,6 +941,29 @@ async fn proxy_header_only_from_trusted_addresses() {
     let l = log.lock().unwrap();
     assert_eq!(l.forwarded.len(), 1);
     assert_eq!(l.forwarded[0].ip, "127.0.0.1");
+}
+
+/// `proxy-protocol: true` (required): a direct connection from outside
+/// `trusted-proxies` is refused before its handshake and counted.
+#[tokio::test(flavor = "multi_thread")]
+async fn required_proxy_header_refuses_direct_connections() {
+    let (backend, log) = fake_backend(BackendOpts::default()).await;
+    let cfg = with_proxy_protocol(&config(backend, ""), "true", "10.0.0.0/8");
+    let (proxy, addr) = start_proxy(&cfg).await;
+    for name in ["Direct", "Again"] {
+        let out = pumbo_testclient::run(addr, module(777), &opts(name))
+            .await
+            .unwrap();
+        assert_ne!(out.ending, Ending::Finished, "{name}");
+    }
+    assert_eq!(
+        proxy
+            .metrics
+            .rejected_proxy_untrusted
+            .load(std::sync::atomic::Ordering::Relaxed),
+        2
+    );
+    assert!(log.lock().unwrap().forwarded.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]

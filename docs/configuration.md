@@ -34,8 +34,9 @@ listener:
 | --- | --- | --- | --- |
 | `bind` | required | `ip:port` to listen on | restart |
 | `transport` | `java-tcp` | Listener type; `java-tcp` (Java Edition over TCP) is the only one | restart |
-| `proxy-protocol` | `false` | Read a PROXY protocol header (v1 or v2) before the handshake, for a proxy or DDoS protection in front. Needs `trusted-proxies` | restart |
-| `trusted-proxies` | `[]` | CIDR ranges (`203.0.113.0/24`, `2001:db8::/32`) allowed to send that header. From other addresses no header is read: those connections count as direct | restart |
+| `proxy-protocol` | `false` | Read a PROXY protocol header (v1 or v2) before the handshake, for a proxy or DDoS protection in front. Needs `trusted-proxies`. `true` (or `required`): only `trusted-proxies` may connect, everyone else is refused, so nobody can bypass the protection by connecting to this address directly. `optional`: other addresses connect directly, without a header | restart |
+| `trusted-proxies` | `[]` | CIDR ranges (`203.0.113.0/24`, `2001:db8::/32`) allowed to send that header. Public ranges wider than `/8` (IPv4) or `/16` (IPv6), such as `0.0.0.0/0`, are refused: anyone in them could claim any address, and IP bans and per-address limits would stop working. Private, Tailscale and `fd..` ranges may be any size | restart |
+| `allow-any-proxy` | `false` | Accept such a wide range anyway | restart |
 
 ## status
 

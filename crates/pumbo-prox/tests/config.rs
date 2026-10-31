@@ -244,3 +244,39 @@ fn unresolved_server_names_only_warn() {
     assert_eq!(warnings.len(), 1, "{warnings:?}");
     assert!(warnings[0].contains("does not resolve"), "{warnings:?}");
 }
+
+#[test]
+fn proxy_protocol_modes_and_wide_ranges() {
+    use pumbo_prox::config::ProxyProtocol;
+    let listener = |mode: &str, cidr: &str| {
+        Config::parse(&SAMPLE.replace(
+            "  - bind: \"127.0.0.1:0\"\n",
+            &format!("  - bind: \"127.0.0.1:0\"\n    proxy-protocol: {mode}\n    trusted-proxies: [\"{cidr}\"]\n"),
+        ))
+    };
+    for (mode, want) in [
+        ("true", ProxyProtocol::Required),
+        ("required", ProxyProtocol::Required),
+        ("optional", ProxyProtocol::Optional),
+        ("false", ProxyProtocol::Off),
+    ] {
+        let cfg = listener(mode, "10.0.0.0/8").unwrap();
+        assert_eq!(cfg.listener[0].proxy_protocol, want, "{mode}");
+    }
+    let err = listener("sometimes", "10.0.0.0/8").unwrap_err().to_string();
+    assert!(err.contains("\"optional\""), "{err}");
+    for wide in ["0.0.0.0/0", "::/0", "2000::/3"] {
+        let err = listener("true", wide).unwrap_err().to_string();
+        assert!(err.contains(&format!("trusted-proxies {wide}")), "{err}");
+        assert!(err.contains("allow-any-proxy: true"), "{err}");
+    }
+    listener("true", "2400:cb00::/29").unwrap();
+    listener("optional", "fd00::/8").unwrap();
+    // Not read without proxy-protocol.
+    listener("false", "0.0.0.0/0").unwrap();
+    Config::parse(&SAMPLE.replace(
+        "  - bind: \"127.0.0.1:0\"\n",
+        "  - bind: \"127.0.0.1:0\"\n    proxy-protocol: true\n    trusted-proxies: [0.0.0.0/0]\n    allow-any-proxy: true\n",
+    ))
+    .unwrap();
+}

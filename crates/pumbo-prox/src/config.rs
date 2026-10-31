@@ -89,12 +89,55 @@ pub struct ListenerConfig {
     pub transport: String,
     /// Read a PROXY protocol header (v1 or v2) from `trusted-proxies` (§3.4).
     #[serde(default)]
-    pub proxy_protocol: bool,
+    pub proxy_protocol: ProxyProtocol,
     /// CIDR ranges allowed to send a PROXY header on this listener.
     #[serde(default)]
     pub trusted_proxies: Vec<String>,
+    /// Accept `trusted-proxies` wider than any provider's range (`0.0.0.0/0`).
+    #[serde(default)]
+    pub allow_any_proxy: bool,
     #[serde(flatten)]
     pub rest: ModuleConfig,
+}
+
+/// `proxy-protocol: true | required | optional | false`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ProxyProtocol {
+    #[default]
+    Off,
+    /// `true` or `required`: only `trusted-proxies` may connect, with a header.
+    Required,
+    /// A header from `trusted-proxies`; other addresses connect directly.
+    Optional,
+}
+
+impl ProxyProtocol {
+    pub fn on(self) -> bool {
+        self != Self::Off
+    }
+}
+
+impl<'de> Deserialize<'de> for ProxyProtocol {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Bool(bool),
+            Text(String),
+        }
+        match Raw::deserialize(d)? {
+            Raw::Bool(true) => Ok(Self::Required),
+            Raw::Bool(false) => Ok(Self::Off),
+            Raw::Text(t) => match t.as_str() {
+                "true" | "required" => Ok(Self::Required),
+                "optional" => Ok(Self::Optional),
+                "false" => Ok(Self::Off),
+                other => Err(serde::de::Error::custom(format!(
+                    "proxy-protocol must be true, false, \"required\" or \"optional\", not \"{other}\""
+                ))),
+            },
+        }
+    }
 }
 
 fn default_transport() -> String {
@@ -616,10 +659,22 @@ impl Config {
         let bad = |m: String| Err(ConfigError::Invalid(m));
         for l in &self.listener {
             let cidrs = self.trusted(l)?;
-            if l.proxy_protocol && cidrs.is_empty() {
+            if !l.proxy_protocol.on() {
+                continue;
+            }
+            if cidrs.is_empty() {
                 return bad(format!(
-                    "listener {}: proxy-protocol: true needs trusted-proxies",
+                    "listener {}: proxy-protocol needs trusted-proxies",
                     l.bind
+                ));
+            }
+            if let Some(i) = cidrs.iter().position(|c| c.too_wide())
+                && !l.allow_any_proxy
+            {
+                return bad(format!(
+                    "listener {}: trusted-proxies {} lets anyone send a PROXY header with any address (IP bans and per-IP limits stop working); list your proxy's ranges or set allow-any-proxy: true",
+                    l.bind,
+                    l.trusted_proxies.get(i).map_or("", String::as_str)
                 ));
             }
         }
