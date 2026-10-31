@@ -358,6 +358,9 @@ struct Play<'a> {
     /// In the Pumbox (or on the way there) since this runtime: a newer one
     /// lets the player try the servers again.
     pumbox: Option<Arc<Runtime>>,
+    /// The backend health seen then: a change (a server offline, back, or
+    /// its wait over) also lets the player try again.
+    pumbox_health: u64,
     own_keep_alive_at: Instant,
     /// Next render of the `tab` header and footer.
     next_tab: Instant,
@@ -441,6 +444,7 @@ pub(crate) async fn run(
         enter_on_ack: None,
         return_to: None,
         pumbox: None,
+        pumbox_health: 0,
         own_keep_alive_at: now,
         next_tab: now,
         pending_kick: None,
@@ -460,7 +464,6 @@ pub(crate) async fn run(
             _ => break,
         }
     }
-    let candidates = play.candidates(SelectReason::InitialJoin, None);
     let end = if let Some(end) = early {
         end
     } else if rt.config.virtual_world.test_gate {
@@ -481,23 +484,28 @@ pub(crate) async fn run(
             proxy.send_to(id, cmd);
         });
         play.run().await
-    } else if candidates.is_empty() {
-        let text = play.no_server_text();
-        match play.wait_in_pumbox(text) {
-            Some(end) => end,
-            None => play.run().await,
-        }
     } else {
-        play.request = Some(Request {
-            purpose: Purpose::Join,
-            candidates,
-            target: String::new(),
-            refusal: None,
-            redirects: 0,
-        });
-        match play.try_next() {
-            Some(end) => end,
-            None => play.run().await,
+        // Only here: picking the candidates hands out the one retry of an
+        // offline server, which the gates' release picks again on its own.
+        let candidates = play.candidates(SelectReason::InitialJoin, None);
+        if candidates.is_empty() {
+            let text = play.no_server_text();
+            match play.wait_in_pumbox(text) {
+                Some(end) => end,
+                None => play.run().await,
+            }
+        } else {
+            play.request = Some(Request {
+                purpose: Purpose::Join,
+                candidates,
+                target: String::new(),
+                refusal: None,
+                redirects: 0,
+            });
+            match play.try_next() {
+                Some(end) => end,
+                None => play.run().await,
+            }
         }
     };
     let name = play.player.profile.name.clone();
@@ -751,9 +759,10 @@ impl Play<'_> {
         // A new server list: a player in the Pumbox tries the servers again.
         if self.waiting()
             && let Some(seen) = &self.pumbox
-            && !Arc::ptr_eq(seen, &self.rt)
+            && (!Arc::ptr_eq(seen, &self.rt) || self.proxy.health.version() != self.pumbox_health)
         {
             self.pumbox = Some(self.rt.clone());
+            self.pumbox_health = self.proxy.health.version();
             let candidates = self.candidates(SelectReason::InitialJoin, None);
             if !candidates.is_empty() {
                 self.request = Some(Request {
@@ -948,6 +957,8 @@ impl Play<'_> {
     }
 
     /// Candidate servers in order, without those the client cannot join.
+    /// An offline server whose wait is over keeps its place only for this
+    /// caller, so the list is picked only to be tried.
     fn candidates(&self, reason: SelectReason, previous: Option<&str>) -> VecDeque<String> {
         let protocol = self.module.protocol();
         let ctx = SelectContext {
@@ -956,7 +967,8 @@ impl Play<'_> {
             client_protocol: protocol,
             previous,
         };
-        self.rt
+        let (mut up, down): (VecDeque<_>, VecDeque<_>) = self
+            .rt
             .modules
             .selector
             .candidates(&ctx, &self.rt.backends)
@@ -967,7 +979,10 @@ impl Play<'_> {
                     .iter()
                     .any(|b| &b.name == name && self.reachable(b))
             })
-            .collect()
+            .partition(|name| self.proxy.server_up(&self.rt, name));
+        // Servers that are down are still tried, after the others.
+        up.extend(down);
+        up
     }
 
     /// The translation chain lets the client on this server: same version or
@@ -1113,6 +1128,14 @@ impl Play<'_> {
         warn!("{}: backend {target}: {why}", self.player.profile.name);
     }
 
+    /// The login to the request's server got through or failed before the
+    /// server answered (its health; a kick from the server does not count).
+    fn login_result(&self, reached: bool) {
+        if let Some(req) = &self.request {
+            self.proxy.backend_login(&req.target, reached);
+        }
+    }
+
     /// The server refused the player: other candidates are tried only on fallback.
     fn refused(&mut self, text: Component) {
         if let Some(req) = self.request.as_mut() {
@@ -1128,6 +1151,7 @@ impl Play<'_> {
         match ev {
             NextEvent::Login(Ok(mut conn)) => {
                 Metrics::inc(&self.proxy.metrics.backend_connects);
+                self.login_result(true);
                 // Like a client right after login_acknowledged (§3.3 step 5).
                 let (s, b) = (
                     self.tracked.client_information.is_some(),
@@ -1156,6 +1180,7 @@ impl Play<'_> {
                 self.try_next()
             }
             NextEvent::Login(Err(BackendFail::Unavailable(why))) => {
+                self.login_result(false);
                 self.next_failed(why);
                 self.try_next()
             }
@@ -1855,6 +1880,7 @@ impl Play<'_> {
             return Some(End::Kick(Box::new(text)));
         }
         let was = self.pumbox.replace(self.rt.clone());
+        self.pumbox_health = self.proxy.health.version();
         if was.is_none() {
             info!(
                 "{} waits in the Pumbox: {}",

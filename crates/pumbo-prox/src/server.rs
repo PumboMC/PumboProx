@@ -285,6 +285,8 @@ pub struct Proxy {
     pub bridge: OnceLock<Arc<crate::bridge::Bridge>>,
     /// Servers run by the proxy, when `managed-servers.enabled`.
     pub servers: OnceLock<Arc<pumbo_servers::Manager>>,
+    /// Backends that failed their last logins (passive health).
+    pub health: crate::health::Health,
     /// `/prox claim`: the operator code and the wrong tries so far; gone
     /// for good once the network has a server.
     pub(crate) claim: Mutex<Option<(String, u8)>>,
@@ -361,6 +363,7 @@ impl Proxy {
             plugins: OnceLock::new(),
             bridge: OnceLock::new(),
             servers: OnceLock::new(),
+            health: crate::health::Health::default(),
             claim: Mutex::new(None),
         }))
     }
@@ -488,6 +491,43 @@ impl Proxy {
         if let Some(p) = self.plugins.get() {
             p.servers_changed(self);
         }
+    }
+
+    /// A login to `server` got through (`reached`) or failed before the
+    /// server answered: its health changes, and plugins hear when it goes
+    /// offline or comes back.
+    pub fn backend_login(&self, server: &str, reached: bool) {
+        let changed = if reached {
+            let back = self.health.succeeded(server);
+            if back {
+                info!("server {server} is back online");
+            }
+            back
+        } else {
+            let went = self.health.failed(server);
+            if let Some(wait) = went {
+                info!(
+                    "server {server} is offline after {} failed logins in a row: players try the other servers first, and it again in {} s",
+                    crate::health::FAILURES,
+                    wait.as_secs()
+                );
+            }
+            went.is_some()
+        };
+        if changed && let Some(p) = self.plugins.get() {
+            p.servers_changed(self);
+        }
+    }
+
+    /// Whether players try `server` in its place, not last: it is not offline
+    /// (or its wait is over) and a server run by the proxy is ready.
+    pub fn server_up(&self, rt: &Runtime, server: &str) -> bool {
+        let ready = !rt.managed.iter().any(|m| m == server)
+            || self
+                .servers
+                .get()
+                .is_some_and(|m| m.state(server) == pumbo_servers::State::Ready);
+        ready && self.health.usable(server)
     }
 
     pub fn newest(&self) -> Arc<dyn VersionModule> {
@@ -674,6 +714,29 @@ impl Proxy {
         Ok(out)
     }
 
+    /// `pumboprox_backend_online{server="…"}`: 1 unless the server is
+    /// offline after failed logins or a server run by the proxy is not ready.
+    pub fn render_health(&self) -> String {
+        use std::fmt::Write as _;
+        let rt = self.runtime();
+        let mut out = String::from("# TYPE pumboprox_backend_online gauge\n");
+        for b in &rt.backends {
+            let ready = !rt.managed.contains(&b.name)
+                || self
+                    .servers
+                    .get()
+                    .is_some_and(|m| m.state(&b.name) == pumbo_servers::State::Ready);
+            let up = ready && self.health.online(&b.name);
+            let name = b.name.replace('\\', "\\\\").replace('"', "\\\"");
+            let _ = writeln!(
+                out,
+                "pumboprox_backend_online{{server=\"{name}\"}} {}",
+                u8::from(up)
+            );
+        }
+        out
+    }
+
     /// Accepts connections on all listeners until [`Proxy::stop`], then waits
     /// up to five seconds for sessions to end.
     pub async fn serve(
@@ -686,11 +749,13 @@ impl Proxy {
                 Ok(l) => {
                     info!("metrics on http://{addr}/metrics");
                     let plugins = self.plugins.get().cloned();
+                    let me = Arc::downgrade(&self);
                     let extra: Arc<dyn Fn() -> String + Send + Sync> = Arc::new(move || {
-                        plugins
-                            .as_ref()
-                            .map(|p| p.host.render_metrics())
-                            .unwrap_or_default()
+                        let mut out = me.upgrade().map(|p| p.render_health()).unwrap_or_default();
+                        if let Some(p) = &plugins {
+                            out.push_str(&p.host.render_metrics());
+                        }
+                        out
                     });
                     tokio::spawn(crate::metrics::serve(l, self.metrics.clone(), extra));
                 }

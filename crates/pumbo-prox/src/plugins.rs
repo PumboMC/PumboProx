@@ -337,10 +337,10 @@ impl Plugins {
     }
 
     /// Gives plugins the current server list and player limit (start,
-    /// reload, servers of the proxy created, removed, ready or down). A
-    /// server of the proxy is online while it is ready; config servers have
-    /// no health check yet and count as online. Player counts come from the
-    /// host's own player list.
+    /// reload, servers of the proxy created, removed, ready or down, a
+    /// server offline after failed logins or back). A server is online
+    /// unless its last logins failed, and a server of the proxy also only
+    /// while it is ready. Player counts come from the host's own player list.
     pub fn servers_changed(&self, proxy: &Proxy) {
         let rt = proxy.runtime();
         self.host.set_max_players(rt.config.status.max_players);
@@ -352,8 +352,10 @@ impl Plugins {
                     name: b.name.clone(),
                     address: b.address.clone(),
                     protocol: b.protocol.map(|p| p.0),
-                    online: !rt.managed.contains(&b.name)
-                        || manager.is_some_and(|m| m.state(&b.name) == pumbo_servers::State::Ready),
+                    online: proxy.health.online(&b.name)
+                        && (!rt.managed.contains(&b.name)
+                            || manager
+                                .is_some_and(|m| m.state(&b.name) == pumbo_servers::State::Ready)),
                     players: 0,
                     groups: Vec::new(),
                     enforces_secure_chat: None,

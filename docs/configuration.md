@@ -107,7 +107,9 @@ Which server a player joins.
 | Key | Default | Description | Applies |
 | --- | --- | --- | --- |
 | `selector` | `try` | How a server is picked; `try` is the only one | reload |
-| `try` | `[]` | Server names in the order players try them; offline servers are skipped, and a player dropped from one goes to the next | reload |
+| `try` | `[]` | Server names in the order players try them; offline servers are tried last (see below), and a player dropped from one goes to the next | reload |
+
+A server whose logins fail three times in a row before it answers (no connection, a timeout, the connection closed) counts as offline: players try the other servers first and it last, so a network with a single lobby still reaches it. After 5 seconds one player tries it in its place again, and each failed try doubles the wait up to a minute. One login that gets through brings it back. A kick from the server itself (a ban, a whitelist) never counts. Both changes are logged once, plugins see the server as offline, and with `metrics-bind` the gauge `pumboprox_backend_online{server="…"}` shows it. A server run by the proxy also counts as offline while it is not ready.
 
 `/prox route` shows and edits this from the game or the console: see [The way into the network](servers.md#the-way-into-the-network).
 

@@ -1515,3 +1515,109 @@ async fn a_transfer_in_configuration_is_a_failed_connect() {
     p.close().await;
     proxy.stop();
 }
+
+/// A server whose logins fail before it answers goes offline after three in
+/// a row: players go to the next server without trying it first, it shows
+/// as offline in the metrics, and it is still tried when nothing else is left.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failing_server_goes_offline_and_is_tried_last() {
+    // Accepts and closes at once: the connection ends before the login.
+    let dead = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dead_addr = dead.local_addr().unwrap();
+    let tries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let t = tries.clone();
+    tokio::spawn(async move {
+        while let Ok((s, _)) = dead.accept().await {
+            t.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            drop(s);
+        }
+    });
+    let tries = move || tries.load(std::sync::atomic::Ordering::SeqCst);
+    let survival = Backend::start(spec("survival")).await;
+    let text = config(&[("survival", &survival)], "").replace(
+        "routing:\n  try: [survival]",
+        &format!(
+            "  lobby: {{ address: \"{dead_addr}\", protocol: {PROTOCOL} }}\nrouting:\n  try: [lobby, survival]"
+        ),
+    );
+    let (proxy, addr) = start_proxy(&text).await;
+    for i in 0..3 {
+        let p = join(addr, &format!("Early{i}")).await;
+        assert_eq!(tries(), i + 1);
+        p.close().await;
+    }
+    assert!(
+        proxy
+            .render_health()
+            .contains("pumboprox_backend_online{server=\"lobby\"} 0"),
+        "{}",
+        proxy.render_health()
+    );
+    for i in 0..3 {
+        let p = join(addr, &format!("Late{i}")).await;
+        p.close().await;
+    }
+    assert_eq!(tries(), 3, "players skip the offline lobby");
+    // With survival gone too, the lobby is tried anyway.
+    proxy.backend_login("survival", false);
+    proxy.backend_login("survival", false);
+    proxy.backend_login("survival", false);
+    let p = join(addr, "Last").await;
+    assert!(
+        tries() >= 4,
+        "an offline server is still tried after the others"
+    );
+    p.close().await;
+    // A login that gets through brings it back.
+    proxy.backend_login("lobby", true);
+    assert!(
+        proxy
+            .render_health()
+            .contains("pumboprox_backend_online{server=\"lobby\"} 1")
+    );
+    proxy.stop();
+}
+
+/// Once its wait is over, an offline server is tried in its place by the
+/// next player, also when a gate holds the player first: the gate's release
+/// picks the servers, not the login before it. Takes about 5 s.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_offline_server_is_tried_again_after_the_gates() {
+    let dead = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dead_addr = dead.local_addr().unwrap();
+    let tries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let t = tries.clone();
+    tokio::spawn(async move {
+        while let Ok((s, _)) = dead.accept().await {
+            t.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            drop(s);
+        }
+    });
+    let survival = Backend::start(spec("survival")).await;
+    let text = config(
+        &[("survival", &survival)],
+        "virtual:\n  test-gate: true\n  test-gate-seconds: 0\n",
+    )
+    .replace(
+        "routing:\n  try: [survival]",
+        &format!(
+            "  lobby: {{ address: \"{dead_addr}\", protocol: {PROTOCOL} }}\nrouting:\n  try: [lobby, survival]"
+        ),
+    );
+    let (proxy, addr) = start_proxy(&text).await;
+    for _ in 0..pumbo_prox::health::FAILURES {
+        proxy.backend_login("lobby", false);
+    }
+    tokio::time::sleep(Duration::from_millis(5200)).await;
+    let mut p = join(addr, "AfterWait").await;
+    assert!(p.pump(WAIT, |p| !p.maps.is_empty()).await.unwrap());
+    p.command("gate release").await.unwrap();
+    next_login(&mut p).await;
+    assert_eq!(
+        tries.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the lobby is tried first once its wait is over"
+    );
+    p.close().await;
+    proxy.stop();
+}

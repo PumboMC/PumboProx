@@ -7,6 +7,7 @@ pub mod bungee;
 pub mod commands;
 pub mod config;
 pub mod conn;
+pub mod health;
 pub mod limits;
 pub mod logging;
 pub mod metrics;
