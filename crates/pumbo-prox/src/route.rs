@@ -224,18 +224,20 @@ pub(crate) fn save(
     edit: impl FnOnce(&str) -> Result<String, String>,
 ) -> Result<(), String> {
     let path = proxy.config_path().ok_or("no config file")?.to_path_buf();
-    // Read, edit, write and reload as one step: two edits at once would
-    // each start from the same file and one would be lost.
-    let _one = proxy.config_lock();
-    let old = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let new = edit(&old)?;
-    Config::parse(&new).map_err(|e| format!("the change would break the config: {e}"))?;
-    write(&path, &new)?;
-    if let Err(e) = proxy.reload_locked() {
-        let _ = write(&path, &old);
-        return Err(format!("not applied: {e}"));
-    }
-    Ok(())
+    crate::server::off_worker(|| {
+        // Read, edit, write and reload as one step: two edits at once would
+        // each start from the same file and one would be lost.
+        let _one = proxy.config_lock();
+        let old = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let new = edit(&old)?;
+        Config::parse(&new).map_err(|e| format!("the change would break the config: {e}"))?;
+        write(&path, &new)?;
+        if let Err(e) = proxy.reload_locked() {
+            let _ = write(&path, &old);
+            return Err(format!("not applied: {e}"));
+        }
+        Ok(())
+    })
 }
 
 /// A new temporary file, never more open than the old file, written and

@@ -258,6 +258,10 @@ pub struct ServerConfig {
     /// of this proxy: a transfer could send players to any host.
     #[serde(default)]
     pub allow_transfers: bool,
+    /// Allow an address outside loopback and private networks: forwarding
+    /// answers travel unencrypted and could be replayed.
+    #[serde(default)]
+    pub allow_public: bool,
 }
 
 /// Cancelling a signed message leaves a gap in the signature chain. Vanilla
@@ -632,11 +636,15 @@ impl Config {
         }
         let mut lower: BTreeMap<String, &str> = BTreeMap::new();
         for (name, s) in &self.servers {
-            if split_host_port(&s.address).is_none() {
+            let Some((host, _)) = split_host_port(&s.address) else {
                 return bad(format!(
                     "server {name}: address {} is not host:port",
                     s.address
                 ));
+            };
+            // Names are resolved by `check_backend_names`, at start and reload.
+            if let Ok(ip) = host.parse::<IpAddr>() {
+                check_private(name, s, &[ip]).map_err(ConfigError::Invalid)?;
             }
             // Permission contexts name servers in lower case.
             if let Some(other) = lower.insert(name.to_ascii_lowercase(), name) {
@@ -672,6 +680,33 @@ impl Config {
             );
         }
         Ok(())
+    }
+
+    /// Servers given by a host name: every address the name resolves to has
+    /// to pass the same check as an address in the file. A name that does
+    /// not resolve now is a warning (returned), not an error. Blocking DNS:
+    /// for the start and `reload`, not for every refresh of the server list.
+    pub fn check_backend_names(&self) -> Result<Vec<String>, ConfigError> {
+        use std::net::ToSocketAddrs;
+        let mut warnings = Vec::new();
+        for (name, s) in &self.servers {
+            let Some((host, port)) = split_host_port(&s.address) else {
+                continue;
+            };
+            if s.allow_public || host.parse::<IpAddr>().is_ok() {
+                continue;
+            }
+            match (host, port).to_socket_addrs() {
+                Ok(addrs) => {
+                    let ips: Vec<IpAddr> = addrs.map(|a| a.ip()).collect();
+                    check_private(name, s, &ips).map_err(ConfigError::Invalid)?;
+                }
+                Err(e) => warnings.push(format!(
+                    "server {name}: {host} does not resolve now ({e}); it is checked again on reload"
+                )),
+            }
+        }
+        Ok(warnings)
     }
 
     /// `routing.try` and `forced-hosts` name only servers of `servers`.
@@ -725,16 +760,31 @@ pub fn split_host_port(address: &str) -> Option<(&str, u16)> {
 
 /// Whether a backend host is local, private or in a tunnel range (§3.4).
 pub fn is_private_host(host: &str) -> bool {
-    if host.eq_ignore_ascii_case("localhost") {
-        return true;
-    }
-    match host.parse::<IpAddr>() {
-        Ok(IpAddr::V4(v4)) => {
+    host.eq_ignore_ascii_case("localhost") || host.parse().is_ok_and(is_private_ip)
+}
+
+/// Loopback, a private network, CGNAT (Tailscale, 100.64.0.0/10) or IPv6
+/// unique local.
+pub fn is_private_ip(ip: IpAddr) -> bool {
+    match ip.to_canonical() {
+        IpAddr::V4(v4) => {
             let [a, b, ..] = v4.octets();
             v4.is_loopback() || v4.is_private() || (a == 100 && (64..128).contains(&b))
         }
-        Ok(IpAddr::V6(v6)) => v6.is_loopback() || v6.is_unique_local(),
-        Err(_) => false,
+        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local(),
+    }
+}
+
+/// A server whose address (or one its name resolves to) is public needs
+/// `allow-public`: modern forwarding answers are signed, not encrypted, so
+/// anyone on the way can read one and log in as that player.
+fn check_private(name: &str, s: &ServerConfig, ips: &[IpAddr]) -> Result<(), String> {
+    match ips.iter().find(|ip| !is_private_ip(**ip)) {
+        Some(ip) if !s.allow_public => Err(format!(
+            "server {name}: {} ({ip}) is outside loopback and private networks; forwarding answers are signed, not encrypted, and could be replayed. Reach the server over a private network or a tunnel (WireGuard, Tailscale 100.64.x) or set servers.{name}.allow-public: true",
+            s.address
+        )),
+        _ => Ok(()),
     }
 }
 

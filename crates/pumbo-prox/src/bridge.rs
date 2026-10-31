@@ -48,6 +48,8 @@ pub struct BridgeConfig {
     pub trusted_plugins: Vec<String>,
     pub stats_ms: u32,
     pub player_stats_ms: u32,
+    /// Allow `listen` outside loopback and private networks.
+    pub allow_public: bool,
 }
 
 impl Default for BridgeConfig {
@@ -60,14 +62,29 @@ impl Default for BridgeConfig {
             trusted_plugins: vec!["pumbo-core".into()],
             stats_ms: 5000,
             player_stats_ms: 2000,
+            allow_public: false,
         }
     }
 }
 
 impl BridgeConfig {
     pub fn validate(&self) -> Result<(), String> {
-        if self.enabled && self.listen.parse::<SocketAddr>().is_err() {
+        if !self.enabled {
+            return Ok(());
+        }
+        let Ok(addr) = self.listen.parse::<SocketAddr>() else {
             return Err(format!("bridge.listen {} is not ip:port", self.listen));
+        };
+        if !self.allow_public && !crate::config::is_private_ip(addr.ip()) {
+            let what = if addr.ip().is_unspecified() {
+                "listens on every interface, public ones too"
+            } else {
+                "is outside loopback and private networks"
+            };
+            return Err(format!(
+                "bridge.listen {} {what}; bridge frames are signed, not encrypted. Bind a private address (10.x, 192.168.x, Tailscale 100.64.x) or set bridge.allow-public: true",
+                self.listen
+            ));
         }
         Ok(())
     }

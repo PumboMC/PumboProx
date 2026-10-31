@@ -92,10 +92,11 @@ servers:
 
 | Key | Default | Description | Applies |
 | --- | --- | --- | --- |
-| `address` | required | `host:port`; IPv6 in brackets (`[::1]:25566`). A server outside loopback and private networks gives a warning: reach it through a tunnel | reload |
+| `address` | required | `host:port`; IPv6 in brackets (`[::1]:25566`). It has to be on loopback, a private network (`10.x`, `172.16-31.x`, `192.168.x`, IPv6 `fd..`) or a tunnel (Tailscale `100.64.x`): forwarding answers are signed, not encrypted, so someone on the way could read one and join as that player. A host name (a Docker container, for example) is resolved at start and on `reload`, and every address it gives must be private; a name that does not resolve yet is only a warning | reload |
 | `protocol` | not set | The server's protocol number (`777` is 26.3). With it the proxy can translate older clients for this server; without it a client joins with its own version unchanged | reload |
 | `chat-session-forwarding` | `true` | Pass the client's chat session to the server. `false`: the server treats all chat as unsigned | reload |
 | `signed-chat-cancel` | `drop` | What happens when a plugin cancels a signed chat message on this server. `drop`: the message is dropped and the player stays. `kick`: the player is disconnected with `messages.signed-chat-blocked`. Vanilla and Paper reject every later signed message after a dropped one until the player reconnects; Pumpkin does not check | reload |
+| `allow-public` | `false` | Accept an `address` outside private networks anyway. Use it only when the connection is protected some other way | reload |
 | `allow-transfers` | `false` | Pass the server's `transfer` packets on to the client. Without it a transfer to another server of the network becomes a normal switch and any other transfer is dropped | reload |
 
 Servers of [`managed-servers`](#managed-servers) join this list on their own; a server here wins over one of the proxy with the same name.
@@ -244,7 +245,8 @@ Where the [PumboBridge](bridge.md) plugin on your Pumpkin servers connects. Unkn
 | Key | Default | Description | Applies |
 | --- | --- | --- | --- |
 | `enabled` | `true` | Accept bridges | restart |
-| `listen` | `127.0.0.1:25578` | `ip:port` the bridges connect to; loopback or a private network | restart |
+| `listen` | `127.0.0.1:25578` | `ip:port` the bridges connect to: loopback, a private network or Tailscale (`100.64.x`). `0.0.0.0`, `[::]` and public addresses are refused, since bridge frames are signed, not encrypted | restart |
+| `allow-public` | `false` | Accept a `listen` address on every interface or a public one anyway | restart |
 | `key-file` | `bridge.key` | The bridge key (64 hex digits), created on the first start. `prox bridge key` in the console prints it | restart |
 | `command-timeout-ms` | `5000` | How long a command sent to a server waits for its answer | restart |
 | `trusted-plugins` | `[pumbo-core]` | Plugins that may send commands to the servers; any plugin that uses the bridge may read from them | restart |

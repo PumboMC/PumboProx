@@ -145,6 +145,12 @@ fn check_config(path: &str) -> ExitCode {
     let result = load(path).and_then(|cfg| {
         // Warnings of the checks (e.g. a backend outside private networks) go to stderr.
         pumbo_prox::logging::init(&cfg.logging);
+        for w in cfg
+            .check_backend_names()
+            .map_err(|e| format!("{path}: {e}"))?
+        {
+            warn!("{w}");
+        }
         Runtime::build(cfg, &(String::new(), String::new()))
     });
     match result {
@@ -212,6 +218,13 @@ fn run(path: &str) -> ExitCode {
         }
     };
     pumbo_prox::logging::init(&cfg.logging);
+    match cfg.check_backend_names() {
+        Ok(warnings) => warnings.iter().for_each(|w| warn!("{w}")),
+        Err(e) => {
+            error!("config error: {path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
     if created {
         info!("created {path} with the default settings");
     }

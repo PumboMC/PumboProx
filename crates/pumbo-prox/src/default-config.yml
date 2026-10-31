@@ -13,6 +13,8 @@ login:
 
 # Servers you run yourself. For example:
 #   lobby: { address: "127.0.0.1:25566" }
+# Addresses outside private networks (and Tailscale) are refused unless the
+# server has allow-public: true: forwarding is not encrypted.
 servers: {}
 
 # Servers the proxy downloads and runs itself: /prox download, /prox servers.

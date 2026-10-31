@@ -17,7 +17,7 @@ use tokio::sync::{Notify, Semaphore, mpsc, watch};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use crate::config::{Config, is_loopback_host, is_private_host, split_host_port};
+use crate::config::{Config, is_loopback_host, split_host_port};
 use crate::limits::IpLimiter;
 use crate::logging::IpDisplay;
 use crate::metrics::Metrics;
@@ -55,12 +55,6 @@ impl Runtime {
                     "server {name}: forwarding \"{}\" is only allowed for backends on 127.0.0.1",
                     modules.forwarding.name()
                 ));
-            }
-            if !is_private_host(host) {
-                warn!(
-                    "server {name} ({}) is outside loopback and private networks: forwarding answers can be replayed, use a tunnel (WireGuard/Tailscale)",
-                    s.address
-                );
             }
         }
         let backends = config
@@ -407,8 +401,10 @@ impl Proxy {
     /// commands at once; `logging.level` and `plugins.required-gates` apply
     /// at once too. Returns the changed settings that wait for a restart.
     pub fn reload(&self) -> Result<Vec<String>, String> {
-        let _one = self.config_lock();
-        self.reload_locked()
+        off_worker(|| {
+            let _one = self.config_lock();
+            self.reload_locked()
+        })
     }
 
     /// Holds off other reloads, refreshes and edits of the config file.
@@ -427,6 +423,7 @@ impl Proxy {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let at = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
         let config = Config::parse(&text).map_err(|e| at(&e))?;
+        let unresolved = config.check_backend_names().map_err(|e| at(&e))?;
         let host = pumbo_host::HostConfig::parse(&text).map_err(|e| at(&e))?;
         let old = self.runtime();
         let mut restart = restart_needed(&old.config, &config);
@@ -442,6 +439,9 @@ impl Proxy {
             p.host.set_required_gates(host.plugins.required_gates);
         }
         self.commit(runtime);
+        for w in unresolved {
+            warn!("{w}");
+        }
         if level != old.config.logging.level
             && let Err(e) = crate::logging::set_level(&level)
         {
@@ -458,13 +458,15 @@ impl Proxy {
     /// The server list again after a server of `managed-servers` was
     /// created or deleted; the rest of the config stays.
     pub fn refresh(&self) -> Result<(), String> {
-        let _one = self.config_lock();
-        let old = self.runtime();
-        let mut config = old.config.clone();
-        for name in &old.managed {
-            config.servers.remove(name);
-        }
-        self.replace(config)
+        off_worker(|| {
+            let _one = self.config_lock();
+            let old = self.runtime();
+            let mut config = old.config.clone();
+            for name in &old.managed {
+                config.servers.remove(name);
+            }
+            self.replace(config)
+        })
     }
 
     /// A new runtime from `config` plus the servers of `managed-servers`
@@ -852,5 +854,49 @@ impl Proxy {
                 },
             }
         }
+    }
+}
+
+/// Runs `f`, which may wait on the config lock, the config file or DNS
+/// (server names on reload), without holding up the other tasks of a
+/// runtime worker: they move to another thread meanwhile.
+pub(crate) fn off_worker<R>(f: impl FnOnce() -> R) -> R {
+    use tokio::runtime::{Handle, RuntimeFlavor};
+    match Handle::try_current() {
+        Ok(h) if h.runtime_flavor() == RuntimeFlavor::MultiThread => tokio::task::block_in_place(f),
+        _ => f(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A refresh that waits for the config lock (held by a reload that
+    /// resolves server names) leaves the other tasks of its worker running.
+    #[test]
+    fn waiting_for_the_config_lock_keeps_the_worker_running() {
+        let cfg = Config::parse(
+            "listener:\n  - bind: \"127.0.0.1:0\"\nlogin:\n  online-mode: false\nforwarding:\n  mode: none\n",
+        )
+        .unwrap();
+        let proxy = Proxy::new(cfg, None).unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let held = proxy.config_lock();
+        let p = proxy.clone();
+        let refresh = rt.spawn(async move { p.refresh() });
+        std::thread::sleep(Duration::from_millis(200));
+        let (tx, rx) = std::sync::mpsc::channel();
+        rt.spawn(async move {
+            let _ = tx.send(());
+        });
+        let ran = rx.recv_timeout(Duration::from_secs(5)).is_ok();
+        drop(held);
+        assert!(ran, "the only worker is stuck waiting for the lock");
+        rt.block_on(refresh).unwrap().unwrap();
     }
 }

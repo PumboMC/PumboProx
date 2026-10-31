@@ -196,3 +196,51 @@ async fn reload_resizes_the_login_limits() {
     assert_eq!(proxy.auth_slots.available_permits(), 8);
     let _ = std::fs::remove_file(&path);
 }
+
+/// Forwarding answers and bridge frames are not encrypted: a public server
+/// or bridge address needs `allow-public`.
+#[test]
+fn public_servers_and_bridge_need_allow_public() {
+    let with = |extra: &str| Config::parse(&format!("{SAMPLE}\n{extra}"));
+    let server = |lobby: &str| {
+        Config::parse(&SAMPLE.replace(r#"{ address: "127.0.0.1:25570", protocol: 777 }"#, lobby))
+    };
+    for private in [
+        "10.0.0.5:25566",
+        "100.64.1.2:25566",
+        "[fd00::5]:25566",
+        "localhost:25566",
+    ] {
+        let cfg = server(&format!("{{ address: \"{private}\" }}")).unwrap();
+        assert!(cfg.check_backend_names().unwrap().is_empty(), "{private}");
+    }
+    let err = server(r#"{ address: "203.0.113.5:25566" }"#)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("servers.lobby.allow-public: true"), "{err}");
+    server(r#"{ address: "203.0.113.5:25566", allow-public: true }"#).unwrap();
+
+    let err = with("bridge:\n  listen: \"0.0.0.0:25578\"\n")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("every interface"), "{err}");
+    assert!(err.contains("bridge.allow-public: true"), "{err}");
+    let err = with("bridge:\n  listen: \"[::]:25578\"\n")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("every interface"), "{err}");
+    with("bridge:\n  listen: \"0.0.0.0:25578\"\n  allow-public: true\n").unwrap();
+    with("bridge:\n  listen: \"192.168.1.2:25578\"\n").unwrap();
+    with("bridge:\n  enabled: false\n  listen: \"0.0.0.0:25578\"\n").unwrap();
+}
+
+/// A server name that does not resolve now is a warning, not a refusal (a
+/// container of the same network may start after the proxy).
+#[test]
+fn unresolved_server_names_only_warn() {
+    let cfg =
+        Config::parse(&SAMPLE.replace("127.0.0.1:25570", "pumbo-nowhere.invalid:25566")).unwrap();
+    let warnings = cfg.check_backend_names().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("does not resolve"), "{warnings:?}");
+}
