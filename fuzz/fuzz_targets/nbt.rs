@@ -1,12 +1,14 @@
 #![no_main]
 //! Network NBT under client limits. What decodes must encode; one more
 //! decode/encode cycle gives the same bytes (vanilla accepts non-canonical
-//! modified UTF-8, which re-encodes canonically).
+//! modified UTF-8, which re-encodes canonically). Backend limits (deeper and
+//! larger) must refuse or read the same input without a panic.
 
 use libfuzzer_sys::fuzz_target;
 use pumbo_nbt::{Limits, read_network, write_network};
 
 fuzz_target!(|data: &[u8]| {
+    let _ = read_network(&mut &data[..], Limits::BACKEND);
     let mut input = data;
     if let Ok(tag) = read_network(&mut input, Limits::CLIENT) {
         let mut out = Vec::new();

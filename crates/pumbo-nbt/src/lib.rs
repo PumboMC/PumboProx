@@ -243,10 +243,21 @@ impl<'a> Reader<'a, '_> {
     /// before anything is allocated.
     fn len(&mut self, elem_size: usize) -> Result<usize, NbtError> {
         let n = usize::try_from(self.i32()?).map_err(|_| NbtError::NegativeLength)?;
-        if n.saturating_mul(elem_size.max(1)) > self.input.len() {
+        self.fits(n, elem_size.max(1))?;
+        Ok(n)
+    }
+
+    /// Whether `n` elements of at least `size` bytes each fit in both the input
+    /// and the remaining byte budget.
+    fn fits(&self, n: usize, size: usize) -> Result<(), NbtError> {
+        let need = n.saturating_mul(size);
+        if need > self.input.len() {
             return Err(NbtError::UnexpectedEof);
         }
-        Ok(n)
+        if need > self.limits.max_bytes.saturating_sub(self.consumed) {
+            return Err(NbtError::TooLarge(self.limits.max_bytes));
+        }
+        Ok(())
     }
 
     fn string(&mut self) -> Result<String, NbtError> {
@@ -277,10 +288,10 @@ impl<'a> Reader<'a, '_> {
                 if element == id::END && n > 0 {
                     return Err(NbtError::UntypedList);
                 }
-                if n.saturating_mul(size) > self.input.len() {
-                    return Err(NbtError::UnexpectedEof);
-                }
-                let mut items = Vec::with_capacity(n);
+                self.fits(n, size)?;
+                // A `Tag` is several times larger than its smallest encoding, so
+                // only a small part is reserved up front; the rest grows as read.
+                let mut items = Vec::with_capacity(n.min(1024));
                 for _ in 0..n {
                     items.push(self.payload(element, depth + 1)?);
                 }
