@@ -281,9 +281,24 @@ impl Drop for LeftOnCancel {
 }
 
 impl Plugins {
-    /// Starts the host, creating the plugin directory if it is missing (so
-    /// `prox plugins load` has a place); `None` if it cannot be created.
+    /// Starts the host and waits for its plugins to load, creating the plugin
+    /// directory if it is missing (so `prox plugins load` has a place);
+    /// `None` if it cannot be created.
     pub async fn start(
+        config_text: &str,
+        proxy: &Arc<Proxy>,
+        natives: Vec<pumbo_host::Native>,
+    ) -> Result<Option<Arc<Plugins>>, String> {
+        let Some(plugins) = Self::launch(config_text, proxy, natives).await? else {
+            return Ok(None);
+        };
+        plugins.wait_started().await?;
+        Ok(Some(plugins))
+    }
+
+    /// `start` without the wait: the plugins load in the background, so the
+    /// caller can stop them while they do.
+    pub async fn launch(
         config_text: &str,
         proxy: &Arc<Proxy>,
         natives: Vec<pumbo_host::Native>,
@@ -305,15 +320,20 @@ impl Plugins {
             next: AtomicU64::new(1),
         };
         plugins.servers_changed(proxy);
-        plugins
-            .host
+        Ok(Some(Arc::new(plugins)))
+    }
+
+    /// Waits until every plugin has loaded or failed (a required one that
+    /// failed is an error).
+    pub async fn wait_started(&self) -> Result<(), String> {
+        self.host
             .wait_started(std::time::Duration::from_secs(30))
             .await
             .map_err(|e| e.to_string())?;
-        for slot in plugins.host.plugins() {
+        for slot in self.host.plugins() {
             tracing::info!(plugin = %slot.id, status = ?slot.status(), "plugin loaded");
         }
-        Ok(Some(Arc::new(plugins)))
+        Ok(())
     }
 
     /// Gives plugins the current server list and player limit (start,

@@ -9,9 +9,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
+use pumbo_core::listener::Listener;
 use pumbo_prox::config::Config;
 use pumbo_prox::modules;
-use pumbo_prox::server::{Proxy, Runtime};
+use pumbo_prox::server::{ListenerSettings, Proxy, Runtime};
 use tokio::io::AsyncBufReadExt;
 use tracing::{error, info, warn};
 
@@ -225,6 +226,8 @@ fn run(path: &str) -> ExitCode {
         }
     };
     let code = rt.block_on(async {
+        // First, so a signal during the start stops what already runs.
+        let mut signals = Signals::new();
         let proxy = match Proxy::new(cfg, Some(PathBuf::from(path))) {
             Ok(p) => p,
             Err(e) => {
@@ -232,49 +235,19 @@ fn run(path: &str) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        // PumboBridge (before the plugin host: it provides pumbo:bridge).
-        let bridge_cfg = proxy.runtime().config.bridge.clone();
-        let mut natives = Vec::new();
-        if bridge_cfg.enabled {
-            match pumbo_prox::bridge::Bridge::new(&proxy, bridge_cfg) {
-                Ok(b) => {
-                    natives.push(b.native());
-                    let _ = proxy.bridge.set(b);
+        let listeners = tokio::select! {
+            r = start(&proxy, path) => match r {
+                Some(l) => l,
+                None => return ExitCode::FAILURE,
+            },
+            () = signals.recv() => {
+                info!("stopping (signal during the start)");
+                tokio::select! {
+                    () = shutdown(&proxy) => {}
+                    () = signals.recv() => forced_stop(),
                 }
-                Err(e) => {
-                    error!("cannot start the bridge: {e}");
-                    return ExitCode::FAILURE;
-                }
-            }
-        }
-        // Plugin host (E5), from the same file; a missing plugin directory is created.
-        let text = std::fs::read_to_string(path).unwrap_or_default();
-        match pumbo_prox::plugins::Plugins::start(&text, &proxy, natives).await {
-            Ok(Some(p)) => {
-                let _ = proxy.plugins.set(p);
-            }
-            Ok(None) => warn!("no plugin directory, running without plugins"),
-            Err(e) => {
-                error!("cannot start plugins: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
-        if let Some(b) = proxy.bridge.get()
-            && let Err(e) = b.start().await
-        {
-            error!("cannot start: {e}");
-            return ExitCode::FAILURE;
-        }
-        // Servers from the proxy (after the bridge: new servers get its key).
-        if let Err(e) = pumbo_prox::servers::start(&proxy) {
-            error!("cannot start: {e}");
-            return ExitCode::FAILURE;
-        }
-        let listeners = match proxy.bind().await {
-            Ok(l) => l,
-            Err(e) => {
-                error!("cannot start: {e}");
-                return ExitCode::FAILURE;
+                info!("stopped");
+                return ExitCode::SUCCESS;
             }
         };
         info!("PumboProx {} started", env!("CARGO_PKG_VERSION"));
@@ -285,17 +258,16 @@ fn run(path: &str) -> ExitCode {
             warn!("{}", pumbo_prox::commands::claim_hint(&proxy, &code));
         }
         tokio::spawn(console(proxy.clone()));
-        tokio::spawn(signals(proxy.clone()));
-        let plugins = proxy.plugins.get().cloned();
-        let servers = proxy.servers.get().cloned();
-        proxy.serve(listeners).await;
-        if let Some(m) = servers {
-            info!("stopping the servers run by the proxy");
-            m.shutdown().await;
-        }
-        if let Some(p) = plugins {
-            let _ = tokio::time::timeout(Duration::from_secs(4), p.host.shutdown()).await;
-        }
+        let stopping = proxy.clone();
+        tokio::spawn(async move {
+            signals.recv().await;
+            info!("stopping (signal)");
+            stopping.stop();
+            signals.recv().await;
+            forced_stop();
+        });
+        proxy.clone().serve(listeners).await;
+        shutdown(&proxy).await;
         info!("stopped");
         ExitCode::SUCCESS
     });
@@ -393,27 +365,126 @@ async fn console(proxy: std::sync::Arc<Proxy>) {
     }
 }
 
-async fn signals(proxy: std::sync::Arc<Proxy>) {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{SignalKind, signal};
-        let (Ok(mut term), Ok(mut int)) = (
-            signal(SignalKind::terminate()),
-            signal(SignalKind::interrupt()),
-        ) else {
-            return;
-        };
-        tokio::select! {
-            _ = term.recv() => {}
-            _ = int.recv() => {}
+/// Everything before the listeners accept players; `None` after an error
+/// (logged).
+async fn start(
+    proxy: &std::sync::Arc<Proxy>,
+    path: &str,
+) -> Option<Vec<(Box<dyn Listener>, std::sync::Arc<ListenerSettings>)>> {
+    // PumboBridge (before the plugin host: it provides pumbo:bridge).
+    let bridge_cfg = proxy.runtime().config.bridge.clone();
+    let mut natives = Vec::new();
+    if bridge_cfg.enabled {
+        match pumbo_prox::bridge::Bridge::new(proxy, bridge_cfg) {
+            Ok(b) => {
+                natives.push(b.native());
+                let _ = proxy.bridge.set(b);
+            }
+            Err(e) => {
+                error!("cannot start the bridge: {e}");
+                return None;
+            }
         }
     }
-    #[cfg(not(unix))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
+    // Plugin host (E5), from the same file; a missing plugin directory is created.
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let started = match pumbo_prox::plugins::Plugins::launch(&text, proxy, natives).await {
+        Ok(Some(p)) => {
+            let _ = proxy.plugins.set(p.clone());
+            p.wait_started().await
+        }
+        Ok(None) => {
+            warn!("no plugin directory, running without plugins");
+            Ok(())
+        }
+        Err(e) => Err(e),
+    };
+    if let Err(e) = started {
+        error!("cannot start plugins: {e}");
+        return None;
     }
-    info!("stopping (signal)");
-    proxy.stop();
+    if let Some(b) = proxy.bridge.get()
+        && let Err(e) = b.start().await
+    {
+        error!("cannot start: {e}");
+        return None;
+    }
+    // Servers from the proxy (after the bridge: new servers get its key).
+    if let Err(e) = pumbo_prox::servers::start(proxy) {
+        error!("cannot start: {e}");
+        return None;
+    }
+    match proxy.bind().await {
+        Ok(l) => Some(l),
+        Err(e) => {
+            error!("cannot start: {e}");
+            None
+        }
+    }
+}
+
+/// Stops the servers run by the proxy and the plugins (bounded).
+async fn shutdown(proxy: &Proxy) {
+    if let Some(m) = proxy.servers.get() {
+        info!("stopping the servers run by the proxy");
+        m.shutdown().await;
+    }
+    if let Some(p) = proxy.plugins.get() {
+        let _ = tokio::time::timeout(Duration::from_secs(4), p.host.shutdown()).await;
+    }
+}
+
+/// A second signal while stopping ends the process at once.
+fn forced_stop() -> ! {
+    warn!("forced stop: plugins and managed servers were not stopped");
+    std::process::exit(130);
+}
+
+/// SIGTERM and SIGINT (Ctrl+C elsewhere), registered when created.
+struct Signals {
+    #[cfg(unix)]
+    streams: Option<(tokio::signal::unix::Signal, tokio::signal::unix::Signal)>,
+}
+
+impl Signals {
+    fn new() -> Signals {
+        #[cfg(unix)]
+        let streams = {
+            use tokio::signal::unix::{SignalKind, signal};
+            match (
+                signal(SignalKind::terminate()),
+                signal(SignalKind::interrupt()),
+            ) {
+                (Ok(term), Ok(int)) => Some((term, int)),
+                _ => None,
+            }
+        };
+        Signals {
+            #[cfg(unix)]
+            streams,
+        }
+    }
+
+    /// The next signal (never, when they could not be registered).
+    async fn recv(&mut self) {
+        #[cfg(unix)]
+        {
+            if let Some((term, int)) = &mut self.streams {
+                tokio::select! {
+                    _ = term.recv() => {}
+                    _ = int.recv() => {}
+                }
+                return;
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                return;
+            }
+        }
+        std::future::pending::<()>().await;
+    }
 }
 
 #[cfg(test)]
