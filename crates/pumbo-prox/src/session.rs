@@ -131,8 +131,22 @@ async fn run(proxy: Arc<Proxy>, listener: Arc<ListenerSettings>, incoming: Incom
     }
     let _ip_guard = match proxy.ips.connect(peer.ip(), limits) {
         Ok(g) => g,
-        Err(IpReject::Rate) => return Metrics::inc(&m.rejected_ip_rate),
-        Err(IpReject::Concurrent) => return Metrics::inc(&m.rejected_ip_concurrent),
+        Err(IpReject::Rate) => {
+            debug!(
+                "connection from {} refused: limits.connections-per-ip-per-second ({})",
+                proxy.ip(peer),
+                limits.connections_per_ip_per_second
+            );
+            return Metrics::inc(&m.rejected_ip_rate);
+        }
+        Err(IpReject::Concurrent) => {
+            debug!(
+                "connection from {} refused: limits.concurrent-per-ip ({})",
+                proxy.ip(peer),
+                limits.concurrent_per_ip
+            );
+            return Metrics::inc(&m.rejected_ip_concurrent);
+        }
     };
     let hs_deadline = Instant::now() + Duration::from_millis(limits.handshake_timeout_ms);
     let first = match timeout_at(hs_deadline, handshake(&mut client)).await {
