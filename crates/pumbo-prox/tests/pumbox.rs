@@ -474,6 +474,39 @@ fn the_code_expires_for_good_when_a_server_is_added() {
     assert!(proxy.runtime().operators.is_empty());
 }
 
+/// Edits of the config file at the same time are applied one after the
+/// other: none is lost. A leftover `pumboprox.yml.tmp` is not written through.
+#[test]
+fn config_edits_at_once_keep_every_change() {
+    let path = file("edits-at-once", BASE);
+    let victim = path.with_file_name("victim.txt");
+    std::fs::write(&victim, "keep").unwrap();
+    let leftover = path.with_extension("yml.tmp");
+    let _ = std::fs::remove_file(&leftover);
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&victim, &leftover).unwrap();
+    let proxy = Proxy::new(Config::parse(BASE).unwrap(), Some(path.clone())).unwrap();
+    let ids: Vec<uuid::Uuid> = (1..=16).map(uuid::Uuid::from_u128).collect();
+    let start = std::sync::Barrier::new(ids.len());
+    std::thread::scope(|scope| {
+        for id in &ids {
+            let (proxy, start) = (&proxy, &start);
+            scope.spawn(move || {
+                start.wait();
+                let got = run(proxy, &Source::Console, &format!("prox op {id}"));
+                assert!(got.contains("now an operator"), "{got}");
+            });
+        }
+    });
+    let operators = proxy.runtime().operators.clone();
+    for id in &ids {
+        assert!(operators.contains(id), "{id} lost");
+    }
+    proxy.reload().unwrap();
+    assert_eq!(proxy.runtime().operators.len(), ids.len());
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+}
+
 #[test]
 fn op_and_deop_edit_the_operators() {
     let (_logs, buf) = common::capture_logs();

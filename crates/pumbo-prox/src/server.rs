@@ -277,6 +277,8 @@ pub struct Proxy {
     shutdown: watch::Sender<bool>,
     active: AtomicUsize,
     config_path: Option<PathBuf>,
+    /// One config change at a time: reload, refresh and edits of the file.
+    config_lock: Mutex<()>,
     /// The plugin host (E5); unset without a plugin directory.
     pub plugins: OnceLock<Arc<crate::plugins::Plugins>>,
     /// PumboBridge sessions, when `[bridge] enabled`.
@@ -355,6 +357,7 @@ impl Proxy {
             shutdown: watch::channel(false).0,
             active: AtomicUsize::new(0),
             config_path,
+            config_lock: Mutex::new(()),
             plugins: OnceLock::new(),
             bridge: OnceLock::new(),
             servers: OnceLock::new(),
@@ -377,6 +380,19 @@ impl Proxy {
     /// commands at once; `logging.level` and `plugins.required-gates` apply
     /// at once too. Returns the changed settings that wait for a restart.
     pub fn reload(&self) -> Result<Vec<String>, String> {
+        let _one = self.config_lock();
+        self.reload_locked()
+    }
+
+    /// Holds off other reloads, refreshes and edits of the config file.
+    pub(crate) fn config_lock(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.config_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// [`Proxy::reload`] for a caller that holds [`Proxy::config_lock`].
+    pub(crate) fn reload_locked(&self) -> Result<Vec<String>, String> {
         let path = self
             .config_path
             .as_ref()
@@ -415,6 +431,7 @@ impl Proxy {
     /// The server list again after a server of `managed-servers` was
     /// created or deleted; the rest of the config stays.
     pub fn refresh(&self) -> Result<(), String> {
+        let _one = self.config_lock();
         let old = self.runtime();
         let mut config = old.config.clone();
         for name in &old.managed {

@@ -36,6 +36,7 @@ All notable changes to PumboProx, one section per release. The format follows [K
 
 ### Fixed
 
+- `reload`, `/prox op`, `/prox route` changes and the server list updates of servers run by the proxy happen one at a time, so two changes at once no longer lose one of them. `pumboprox.yml` is written through a new temporary file that is never more open than the old one and is synced to disk before it replaces it.
 - A login that timed out while a plugin was still handling the player's profile or login no longer leaves that player behind in the plugins; they now get the player's `disconnect`.
 - A plugin stuck in a loop that keeps calling the proxy is stopped instead of holding a worker thread, and `reload`, `unload` and stopping the proxy get through while a plugin is busy.
 - A flood of player input (movement, chat, plugin messages) can no longer pile up in one batch for a plugin: low-priority input is dropped first and counted in `pumbo_virtual_inputs_dropped_total`.

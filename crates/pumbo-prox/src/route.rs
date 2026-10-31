@@ -224,26 +224,61 @@ pub(crate) fn save(
     edit: impl FnOnce(&str) -> Result<String, String>,
 ) -> Result<(), String> {
     let path = proxy.config_path().ok_or("no config file")?.to_path_buf();
+    // Read, edit, write and reload as one step: two edits at once would
+    // each start from the same file and one would be lost.
+    let _one = proxy.config_lock();
     let old = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let new = edit(&old)?;
     Config::parse(&new).map_err(|e| format!("the change would break the config: {e}"))?;
     write(&path, &new)?;
-    if let Err(e) = proxy.reload() {
+    if let Err(e) = proxy.reload_locked() {
         let _ = write(&path, &old);
         return Err(format!("not applied: {e}"));
     }
     Ok(())
 }
 
-/// A temporary file with the old file's permissions, then a rename.
+/// A new temporary file, never more open than the old file, written and
+/// synced, then renamed over it.
 fn write(path: &std::path::Path, text: &str) -> Result<(), String> {
-    let tmp = path.with_extension("yml.tmp");
-    let err = |e: std::io::Error| format!("{}: {e}", path.display());
-    std::fs::write(&tmp, text).map_err(err)?;
-    if let Ok(meta) = std::fs::metadata(path) {
-        std::fs::set_permissions(&tmp, meta.permissions()).map_err(err)?;
+    use std::io::Write as _;
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = path.with_extension(format!("yml.{}.{n}.tmp", std::process::id()));
+    let old = std::fs::metadata(path).ok().map(|m| m.permissions());
+    let result = (|| {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if let Some(p) = &old {
+            use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+            options.mode(p.mode() & 0o777);
+        }
+        let mut file = options.open(&tmp)?;
+        file.write_all(text.as_bytes())?;
+        if let Some(p) = old {
+            file.set_permissions(p)?;
+        }
+        file.sync_all()?;
+        std::fs::rename(&tmp, path)
+    })();
+    if let Err(e) = result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("{}: {e}", path.display()));
     }
-    std::fs::rename(&tmp, path).map_err(err)
+    // The rename itself survives a power cut once the directory is synced.
+    #[cfg(unix)]
+    if let Some(dir) = path.parent() {
+        let dir = if dir.as_os_str().is_empty() {
+            std::path::Path::new(".")
+        } else {
+            dir
+        };
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+    }
+    Ok(())
 }
 
 // ------------------------------------------------------------------ view
