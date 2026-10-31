@@ -58,8 +58,8 @@ const PENDING: &str = "PpPend7x";
 const PLAIN: &str = "PpPlain7x";
 const SLOW: &str = "PpSlow7x";
 const STRANGER: &str = "PpNew7x";
-/// Bots of N12 and N13: four, because the proxy lets five connections in
-/// per address by default and the admin takes one.
+/// Bots of N12 and N13, besides the admin. All bots share 127.0.0.1, so
+/// `tools/dev-network.sh` raises the proxy's per-address limits.
 const LOAD: [&str; 4] = [OP, PLAIN, PENDING, SLOW];
 const LOGS: [&str; 3] = ["proxy", "lobby", "survival"];
 /// Names in the database of N16 and J10, as `names_fixture` of

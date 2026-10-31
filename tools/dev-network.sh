@@ -120,6 +120,9 @@ plugins:
   dir: plugins
 bridge:
   listen: "127.0.0.1:$BRIDGE_PORT"
+# Every test player comes from 127.0.0.1: the per-address defaults (3 new
+# connections a second, 5 open) would refuse the bots of a quick test run.
+limits: { connections-per-ip-per-second: 100, concurrent-per-ip: 100 }
 EOF
   for s in $SERVERS; do
     port=$(server_port "$s")
