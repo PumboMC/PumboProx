@@ -14,6 +14,8 @@ pub const MAX_MEMORY_KIB: u32 = 128 * 1024;
 pub const MAX_ITERATIONS: u32 = 10;
 pub const MAX_PARALLELISM: u32 = 4;
 pub const MAX_PASSWORD: usize = 1024;
+/// Highest bcrypt cost verified; each step doubles the time, cost 31 runs for hours.
+pub const MAX_BCRYPT_COST: u32 = 14;
 
 pub fn check_params(p: &Argon2Params) -> Result<Params, String> {
     if p.memory_kib > MAX_MEMORY_KIB
@@ -85,6 +87,16 @@ pub async fn bcrypt_verify(limit: &Semaphore, password: String, hash: String) ->
     if password.len() > MAX_PASSWORD || hash.len() > 128 {
         return false;
     }
+    // An unparseable hash is left to `verify`, which refuses it.
+    if let Ok(parts) = hash.parse::<bcrypt::HashParts>()
+        && parts.get_cost() > MAX_BCRYPT_COST
+    {
+        tracing::warn!(
+            "bcrypt hash with cost {} refused (limit {MAX_BCRYPT_COST})",
+            parts.get_cost()
+        );
+        return false;
+    }
     blocking(limit, move || {
         bcrypt::verify(password, &hash).unwrap_or(false)
     })
@@ -117,5 +129,18 @@ mod tests {
         let bc = bcrypt::hash("pw", 4).unwrap();
         assert!(bcrypt_verify(&limit, "pw".into(), bc.clone()).await);
         assert!(!bcrypt_verify(&limit, "nope".into(), bc).await);
+    }
+
+    /// A cost-31 hash would hold a blocking thread for hours: refused at once.
+    #[tokio::test]
+    async fn bcrypt_cost_above_the_limit_is_refused() {
+        let limit = Semaphore::new(2);
+        let hash = bcrypt::hash("pw", 4).unwrap().replacen("$04$", "$31$", 1);
+        let got = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            bcrypt_verify(&limit, "pw".into(), hash),
+        )
+        .await;
+        assert_eq!(got, Ok(false));
     }
 }
