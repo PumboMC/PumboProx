@@ -1098,6 +1098,10 @@ pub(crate) fn container_set_content(ctx: &mut Ctx<'_>, mut r: &[u8]) -> Option<V
     window_id(ctx, &mut r, &mut out)?;
     copy_var_int(&mut r, &mut out)?;
     let n = r.get_len()?;
+    // Every slot takes at least one byte, and missing slots are padded below.
+    if n > r.len() {
+        return None;
+    }
     out.put_len(n);
     for _ in 0..=n {
         if r.is_empty() {

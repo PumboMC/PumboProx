@@ -508,3 +508,26 @@ fn trail_without_options_reaches_older_clients_repaired() {
         );
     }
 }
+
+#[test]
+fn container_contents_longer_than_the_packet_are_refused() {
+    let (client, server) = (Side::new(772), Side::new(777));
+    let tables = Arc::new(mv::Tables::new(client.data.clone(), server.data.clone()).unwrap());
+    let mut t = mv::Translator::new(tables);
+    let mut out = mv::Output::default();
+    t.to_client(server.packet(0, "finish_configuration"), &[], &mut out);
+    out.clear();
+    // Container 1, state 0, then a slot count far beyond the two slots that follow.
+    let mut p = vec![1, 0];
+    var_int(&mut p, 1 << 20);
+    p.extend_from_slice(&[0, 0]);
+    t.to_client(server.packet(1, "container_set_content"), &p, &mut out);
+    assert!(out.to_client.iter().all(|(_, b)| b.len() < 1024));
+    // Two slots and the carried stack, all empty, still go through.
+    let mut p = vec![1, 0];
+    var_int(&mut p, 2);
+    p.extend_from_slice(&[0, 0, 0]);
+    out.clear();
+    t.to_client(server.packet(1, "container_set_content"), &p, &mut out);
+    assert_eq!(out.to_client.len(), 1);
+}
