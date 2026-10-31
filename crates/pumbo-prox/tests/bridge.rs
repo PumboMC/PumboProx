@@ -87,7 +87,20 @@ struct FakeBridge {
 impl FakeBridge {
     /// Connects and runs the handshake; `Err` when the proxy refuses.
     async fn connect(addr: SocketAddr, key: &wire::Key) -> Result<FakeBridge, String> {
-        let sock = TcpStream::connect(addr).await.unwrap();
+        Self::handshake(TcpStream::connect(addr).await.unwrap(), key).await
+    }
+
+    /// `connect` with a small receive buffer, so the proxy's writes block
+    /// soon once the bridge stops reading.
+    async fn connect_small(addr: SocketAddr, key: &wire::Key) -> FakeBridge {
+        let sock = tokio::net::TcpSocket::new_v4().unwrap();
+        sock.set_recv_buffer_size(2048).unwrap();
+        Self::handshake(sock.connect(addr).await.unwrap(), key)
+            .await
+            .unwrap()
+    }
+
+    async fn handshake(sock: TcpStream, key: &wire::Key) -> Result<FakeBridge, String> {
         let mut b = FakeBridge {
             sock,
             codec: Codec::new(Side::Bridge),
@@ -978,4 +991,51 @@ async fn provider_reload_with_a_player_keeps_the_bridge() {
     back.pair(&mut s.lobby).await;
     let set = back.perm_set().await.expect("Steve's set with sync");
     assert_eq!(set.nodes, only("minecraft:command.ban"));
+}
+
+/// Fills the proxy's queue to the bridge, which reads nothing: commands go
+/// out until the writes block and the queue is full (a call is `busy`).
+async fn fill_queue(s: &Setup) {
+    let busy = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    for _ in 0..200 {
+        for _ in 0..100 {
+            let (b, busy) = (s.bridge.clone(), busy.clone());
+            tokio::spawn(async move {
+                let r = call(&b, "pumbo-core", method::SET_GAMEMODE, &gamemode("lobby")).await;
+                if rejected(&r) == err::BUSY {
+                    busy.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        if busy.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+    }
+    panic!("the queue to the bridge never filled");
+}
+
+/// A bridge that stops reading (its server hangs in a write) blocks the
+/// proxy's write; after 10 s the session ends with the reason. Takes 10 to 15 s.
+#[tokio::test]
+async fn bridge_that_reads_nothing_is_closed() {
+    logs();
+    let mut s = setup("stuck", 60_000).await;
+    let mut fb = FakeBridge::connect_small(s.addr, &s.key).await;
+    assert_eq!(fb.pair(&mut s.lobby).await, "lobby");
+    fill_queue(&s).await;
+    let mut lost = false;
+    for _ in 0..100 {
+        if s.bridge.status(Some("lobby"))[0].state == api::State::Lost {
+            lost = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(lost, "the proxy closes a bridge that reads nothing");
+    assert!(
+        logged("bridge on lobby closed: write timed out").await,
+        "{}",
+        logs()
+    );
 }

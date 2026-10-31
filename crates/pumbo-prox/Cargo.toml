@@ -50,6 +50,7 @@ proptest.workspace = true
 pumbo-datagen = { path = "../pumbo-datagen" }
 pumbo-identity = { workspace = true, features = ["test-endpoints"] }
 pumbo-testclient.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

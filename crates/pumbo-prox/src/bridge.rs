@@ -76,6 +76,9 @@ impl BridgeConfig {
 const HANDSHAKE: Duration = Duration::from_secs(5);
 const PING_EVERY: Duration = Duration::from_secs(5);
 const SILENCE: Duration = Duration::from_secs(15);
+/// A write to the bridge that makes no progress for this long (the server
+/// stopped reading) ends the session; a slow link that keeps reading does not.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 const PAIR_EVERY: Duration = Duration::from_secs(10);
 const PAIR_TRIES: u32 = 3;
 const MAX_UNAUTHENTICATED: usize = 8;
@@ -518,9 +521,13 @@ impl Bridge {
                             Err(e) => break 'session format!("cannot send: {e}"),
                         }
                     }
-                    if let Err(e) = wr.write_all(&bytes).await {
-                        break format!("write: {e}");
+                    let began = Instant::now();
+                    if let Err(e) = write_moving(&mut wr, &bytes).await {
+                        break e;
                     }
+                    // Nothing is read while a write runs, so its time does
+                    // not count as silence of the bridge.
+                    last_rx += began.elapsed();
                 }
                 _ = ping.tick() => {
                     if last_rx.elapsed() > SILENCE {
@@ -1516,9 +1523,56 @@ pub fn is_channel(channel: &str) -> bool {
     channel.starts_with("pumbo:bridge")
 }
 
+/// Writes all of `rest`, giving up only when the bridge takes nothing for
+/// [`WRITE_TIMEOUT`]: a slow link that keeps reading is not cut off, however
+/// long the whole batch takes.
+async fn write_moving<W: tokio::io::AsyncWrite + Unpin>(
+    wr: &mut W,
+    mut rest: &[u8],
+) -> Result<(), String> {
+    while !rest.is_empty() {
+        match tokio::time::timeout(WRITE_TIMEOUT, wr.write(rest)).await {
+            Ok(Ok(0)) => return Err("write: the connection is closed".into()),
+            Ok(Ok(n)) => rest = rest.get(n..).unwrap_or_default(),
+            Ok(Err(e)) => return Err(format!("write: {e}")),
+            Err(_) => return Err("write timed out (the bridge read nothing for 10 s)".into()),
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A batch that takes 30 s on a link the bridge keeps reading goes out
+    /// whole; a bridge that reads nothing ends it after `WRITE_TIMEOUT`.
+    #[tokio::test(start_paused = true)]
+    async fn writes_time_out_only_without_progress() {
+        let (mut wr, mut rd) = tokio::io::duplex(1024);
+        let reader = tokio::spawn(async move {
+            let (mut got, mut buf) = (0, [0u8; 1024]);
+            loop {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                match rd.read(&mut buf).await {
+                    Ok(0) | Err(_) => break got,
+                    Ok(n) => got += n,
+                }
+            }
+        });
+        let batch = vec![7u8; 30 * 1024];
+        let started = Instant::now();
+        assert_eq!(write_moving(&mut wr, &batch).await, Ok(()));
+        assert!(started.elapsed() > WRITE_TIMEOUT * 2);
+        drop(wr);
+        assert_eq!(reader.await.unwrap(), batch.len());
+
+        let (mut wr, _rd) = tokio::io::duplex(1024);
+        let started = Instant::now();
+        let err = write_moving(&mut wr, &batch).await.unwrap_err();
+        assert!(err.starts_with("write timed out"), "{err}");
+        assert!(started.elapsed() < WRITE_TIMEOUT + Duration::from_secs(1));
+    }
 
     #[test]
     fn teleport_states() {
