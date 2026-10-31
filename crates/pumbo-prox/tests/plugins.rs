@@ -224,6 +224,47 @@ async fn gate_plugin_decides_at_login() {
     }
 }
 
+/// A login dropped by its timeout while a plugin works on the profile
+/// leaves no player behind in the plugin host.
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelled_login_leaves_no_player() {
+    let dir = plugin_dir("cancel", true);
+    std::fs::write(
+        dir.join("auth.yml"),
+        "id: auth\nversion: 0.1.0\napi: \"0.1\"\nevents: [gate, profile]\ngate: { name: auth }\nprofile: { priority: 0 }\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.join("auth")).unwrap();
+    std::fs::write(dir.join("auth/config.yml"), "tag: slow\n").unwrap();
+    let text = config(&dir);
+    let (proxy, _) = start_proxy(&text).await;
+    let plugins = Plugins::start(&text, &proxy, Vec::new())
+        .await
+        .unwrap()
+        .expect("plugin directory");
+    let profile = pumbo_core::profile::GameProfile {
+        id: Uuid::from_u128(7),
+        name: "steve".into(),
+        properties: Vec::new(),
+    };
+    let conn = pumbo_prox::plugins::connection("127.0.0.1:5000".parse().unwrap(), "localhost", 0);
+    let login = tokio::time::timeout(
+        Duration::from_millis(300),
+        plugins.joined(profile, false, conn),
+    );
+    assert!(login.await.is_err(), "the login timed out");
+    for _ in 0..100 {
+        if plugins.host.player(1).is_none() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        plugins.host.player(1).is_none(),
+        "the host forgot the player"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn missing_required_gate_closes_login() {
     let dir = plugin_dir("missing", false);

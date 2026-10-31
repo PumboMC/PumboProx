@@ -23,7 +23,8 @@
 //!   `nogames*` players; a join to `lobby` of `togo*` players goes to `games`,
 //! - `on-server-kicked` with "redirect me" in the reason moves to `lobby`,
 //! - `on-chat` with `echo:<n>` sends `echo:<n-1>` back to the player,
-//! - `on-profile` appends `tag` to the property `trail`,
+//! - `on-profile` appends `tag` to the property `trail` (with `tag: slow`
+//!   after 3 s),
 //! - services: `ping <n>` calls `peer` with `n-1` (cycles A→B→A), `slow`,
 //!   `spin`, `hang`, `size <n>` (answer of n bytes),
 //! - shared services (part B): `/push <key> <value> [context]`,
@@ -742,6 +743,9 @@ impl pumbo_sdk::Plugin for TestPlugin {
 
     async fn on_profile(&self, p: PlayerInfo) -> ProfilePatch {
         let tag = self.config.get().tag.clone();
+        if tag == "slow" {
+            pumbo_sdk::scheduler::sleep(3000).await;
+        }
         let before = p
             .profile
             .properties

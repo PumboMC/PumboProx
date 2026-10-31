@@ -257,6 +257,29 @@ pub fn connection(peer: SocketAddr, virtual_host: &str, protocol: i32) -> w::Con
     }
 }
 
+/// Forgets a player whose login was dropped (its timeout) while plugins
+/// still worked on `on-profile` or `on-login`, so the host keeps no player
+/// that never joined and never left.
+struct LeftOnCancel {
+    host: Host,
+    id: PlayerId,
+    armed: bool,
+}
+
+impl Drop for LeftOnCancel {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        // No runtime left (the proxy stops): nobody to tell.
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            let host = self.host.clone();
+            let id = self.id;
+            rt.spawn(async move { host.player_left(id).await });
+        }
+    }
+}
+
 impl Plugins {
     /// Starts the host, creating the plugin directory if it is missing (so
     /// `prox plugins load` has a place); `None` if it cannot be created.
@@ -365,12 +388,18 @@ impl Plugins {
             in_virtual: false,
         };
         self.host.player_joined(info);
+        let mut cancelled = LeftOnCancel {
+            host: self.host.clone(),
+            id,
+            armed: true,
+        };
         let result = async {
             let patched = core_profile(&self.host.on_profile(id).await?);
             self.host.on_login(id).await?;
             Ok(patched)
         }
         .await;
+        cancelled.armed = false;
         let final_uuid = result.as_ref().map(|p| p.id);
         let registered = match final_uuid {
             Ok(u) => self
