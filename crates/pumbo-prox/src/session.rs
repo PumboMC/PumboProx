@@ -99,7 +99,7 @@ async fn run(proxy: Arc<Proxy>, listener: Arc<ListenerSettings>, incoming: Incom
     let m = proxy.metrics.clone();
     Metrics::inc(&m.connections);
     let rt = proxy.runtime();
-    let Ok(pending) = rt.pending.clone().try_acquire_owned() else {
+    let Ok(pending) = proxy.pending.clone().try_acquire_owned() else {
         Metrics::inc(&m.rejected_pending);
         return;
     };
@@ -553,7 +553,7 @@ async fn login(
                 }
                 Premium::Ask => {
                     Metrics::inc(&m.premium_lookups);
-                    let _slot = rt.auth_slots.acquire().await.map_err(|_| Fail::Closed)?;
+                    let _slot = proxy.auth_slots.acquire().await.map_err(|_| Fail::Closed)?;
                     match auth.is_premium(&start.name).await {
                         Ok(premium) => {
                             cache.store(&start.name, premium, std::time::Instant::now());
@@ -613,7 +613,7 @@ async fn login(
             .map_err(|e| Fail::Protocol(e.to_string()))?;
         if online {
             let server_hash = pumbo_identity::server_hash(&[b"", &secret, proxy.key.public_der()]);
-            let _slot = rt.auth_slots.acquire().await.map_err(|_| Fail::Closed)?;
+            let _slot = proxy.auth_slots.acquire().await.map_err(|_| Fail::Closed)?;
             let started = Instant::now();
             let result = auth
                 .authenticate(AuthRequest {

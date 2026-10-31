@@ -35,10 +35,6 @@ pub struct Runtime {
     /// `status.favicon` as a `data:` URL, read at start and reload.
     pub favicon: Option<String>,
     pub version_name: String,
-    /// Connections before the end of login (§2.7).
-    pub pending: Arc<Semaphore>,
-    /// Requests to the authentication service in flight.
-    pub auth_slots: Arc<Semaphore>,
     /// `commands.operators` parsed.
     pub operators: HashSet<Uuid>,
     /// `commands.sensitive` in lower case.
@@ -100,14 +96,33 @@ impl Runtime {
             sensitive,
             motd: crate::status::parse_text(&config.status.motd),
             favicon: crate::status::load_favicon(&config.status.favicon),
-            pending: Arc::new(Semaphore::new(config.limits.max_pending_logins)),
-            auth_slots: Arc::new(Semaphore::new(config.limits.max_concurrent_has_joined)),
             config,
             modules,
             backends,
             version_name,
             managed: Vec::new(),
         })
+    }
+}
+
+/// A semaphore of `from` permits to `to`. Permits held now stay valid; a
+/// smaller limit takes free permits at once and the rest as they come back.
+fn resize(sem: &Arc<Semaphore>, from: usize, to: usize) {
+    if to >= from {
+        sem.add_permits(to - from);
+        return;
+    }
+    let rest = (from - to).saturating_sub(sem.forget_permits(from - to));
+    if rest == 0 {
+        return;
+    }
+    let (sem, rest) = (sem.clone(), u32::try_from(rest).unwrap_or(u32::MAX));
+    if let Ok(rt) = tokio::runtime::Handle::try_current() {
+        rt.spawn(async move {
+            if let Ok(p) = sem.acquire_many(rest).await {
+                p.forget();
+            }
+        });
     }
 }
 
@@ -271,6 +286,11 @@ pub struct Proxy {
     warned: Mutex<HashSet<(&'static str, String)>>,
     pub metrics: Arc<Metrics>,
     pub ips: Arc<IpLimiter>,
+    /// Connections before the end of login (§2.7). It outlives the runtime,
+    /// so a reload resizes it instead of opening a fresh pool.
+    pub pending: Arc<Semaphore>,
+    /// Requests to the authentication service in flight, the same way.
+    pub auth_slots: Arc<Semaphore>,
     /// Premium-name answers and their lookup limit; kept across reloads.
     pub premium: crate::limits::PremiumCache,
     ip_display: IpDisplay,
@@ -341,6 +361,8 @@ impl Proxy {
             release(versions.newest(), true),
         );
         let ip_display = IpDisplay::new(config.logging.log_ips);
+        let pending = Arc::new(Semaphore::new(config.limits.max_pending_logins));
+        let auth_slots = Arc::new(Semaphore::new(config.limits.max_concurrent_has_joined));
         let runtime = Runtime::build(config, &releases)?;
         let key = ServerKey::generate().map_err(|e| e.to_string())?;
         Ok(Arc::new(Self {
@@ -354,6 +376,8 @@ impl Proxy {
             warned: Mutex::new(HashSet::new()),
             metrics: Arc::new(Metrics::default()),
             ips: Arc::new(IpLimiter::default()),
+            pending,
+            auth_slots,
             premium: crate::limits::PremiumCache::default(),
             ip_display,
             shutdown: watch::channel(false).0,
@@ -487,6 +511,17 @@ impl Proxy {
         if !runtime.backends.is_empty() && self.claim.lock().is_ok_and(|mut c| c.take().is_some()) {
             info!("The operator code expired: the network has a server now.");
         }
+        let (old, new) = (&self.runtime().config.limits, &runtime.config.limits);
+        resize(
+            &self.pending,
+            old.max_pending_logins,
+            new.max_pending_logins,
+        );
+        resize(
+            &self.auth_slots,
+            old.max_concurrent_has_joined,
+            new.max_concurrent_has_joined,
+        );
         self.runtime.send_replace(Arc::new(runtime));
         if let Some(p) = self.plugins.get() {
             p.servers_changed(self);

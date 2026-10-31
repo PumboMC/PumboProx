@@ -159,3 +159,40 @@ fn fresh_network_has_bridge_enabled() {
     assert_eq!(cfg.bridge.listen, "127.0.0.1:25578");
     assert_eq!(cfg.bridge.key_file, "bridge.key");
 }
+
+/// Logins in flight keep their permits through a reload, and a smaller
+/// limit stays a hard one: the pools are resized, not replaced.
+#[tokio::test]
+async fn reload_resizes_the_login_limits() {
+    use std::time::Duration;
+    let path = std::env::temp_dir().join(format!("pumbo-limits-{}.yml", std::process::id()));
+    let write = |pending: usize, auth: usize| {
+        let text = format!(
+            "{SAMPLE}\nlimits:\n  max-pending-logins: {pending}\n  max-concurrent-has-joined: {auth}\n"
+        );
+        std::fs::write(&path, &text).unwrap();
+        text
+    };
+    let text = write(10, 4);
+    let proxy =
+        pumbo_prox::server::Proxy::new(Config::parse(&text).unwrap(), Some(path.clone())).unwrap();
+    let held = proxy.pending.clone().try_acquire_many_owned(8).unwrap();
+    write(5, 2);
+    proxy.reload().unwrap();
+    assert_eq!(proxy.auth_slots.available_permits(), 2);
+    assert_eq!(proxy.pending.available_permits(), 0);
+    drop(held);
+    // Three of the eight returned permits go to the smaller limit.
+    for _ in 0..50 {
+        if proxy.pending.available_permits() == 5 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(proxy.pending.available_permits(), 5);
+    write(20, 8);
+    proxy.reload().unwrap();
+    assert_eq!(proxy.pending.available_permits(), 20);
+    assert_eq!(proxy.auth_slots.available_permits(), 8);
+    let _ = std::fs::remove_file(&path);
+}
