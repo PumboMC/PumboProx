@@ -17,6 +17,19 @@ fn be_len(r: &mut &[u8], width: usize) -> Option<usize> {
     }
 }
 
+/// Smallest encoded size of one payload of `tag` type.
+fn min_size(tag: u8) -> Option<usize> {
+    Some(match tag {
+        0 => 0,
+        1 | 10 => 1,
+        2 | 8 => 2,
+        3 | 5 | 7 | 11 | 12 => 4,
+        9 => 5,
+        4 | 6 => 8,
+        _ => return None,
+    })
+}
+
 /// Skips one payload of `tag` type.
 fn skip_payload(r: &mut &[u8], tag: u8, depth: usize) -> Option<()> {
     if depth > MAX_DEPTH {
@@ -47,6 +60,12 @@ fn skip_payload(r: &mut &[u8], tag: u8, depth: usize) -> Option<()> {
         9 => {
             let element = r.get_u8()?;
             let count = be_len(r, 4)?;
+            // An untyped list with elements is malformed, and every element
+            // takes at least `min_size` bytes, so a count the input cannot hold
+            // is refused before the loop.
+            if (element == 0 && count > 0) || count.checked_mul(min_size(element)?)? > r.len() {
+                return None;
+            }
             for _ in 0..count {
                 skip_payload(r, element, depth + 1)?;
             }
@@ -148,6 +167,22 @@ mod tests {
             deep.extend_from_slice(&[9, 0, 0, 0, 1]);
         }
         assert!(split(&mut deep.as_slice()).is_none());
+    }
+
+    #[test]
+    fn refuses_list_counts_the_input_cannot_hold() {
+        // A list of End tags with i32::MAX elements consumes nothing per element.
+        let end_list = [9u8, 0, 0x7F, 0xFF, 0xFF, 0xFF];
+        assert!(split(&mut &end_list[..]).is_none());
+        // An empty untyped list is fine.
+        let empty = [9u8, 0, 0, 0, 0, 0, 0xAB];
+        let mut r = &empty[..];
+        assert_eq!(split(&mut r).map(<[u8]>::len), Some(6));
+        // Two ints need eight bytes, only four follow.
+        let short = [9u8, 3, 0, 0, 0, 2, 0, 0, 0, 1];
+        assert!(split(&mut &short[..]).is_none());
+        let ints = [9u8, 3, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 2];
+        assert_eq!(split(&mut &ints[..]).map(<[u8]>::len), Some(ints.len()));
     }
 
     #[test]
