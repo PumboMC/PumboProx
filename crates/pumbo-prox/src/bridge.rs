@@ -546,6 +546,10 @@ impl Bridge {
     /// A session ended: one line says why, its server loses the bridge,
     /// calls in flight end with `disconnected`.
     fn dropped(&self, link: &Arc<Link>, why: &str) {
+        // Sets still queued are lost: none counts as sent.
+        if let Ok(mut s) = link.perms_sent.lock() {
+            s.clear();
+        }
         let mut lost = None;
         {
             let mut st = self.lock();
@@ -768,14 +772,15 @@ impl Bridge {
         }
     }
 
-    /// A command whose answer nobody waits for (the bridge still answers).
-    fn notify(&self, link: &Link, m: &str, args: ciborium::Value) {
+    /// A command whose answer nobody waits for (the bridge still answers);
+    /// `false` when the queue to the bridge is full.
+    fn notify(&self, link: &Link, m: &str, args: ciborium::Value) -> bool {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         link.send(Msg::Cmd {
             id,
             method: m.into(),
             args,
-        });
+        })
     }
 
     /// Sends the player's decisions for `server` unless they did not change
@@ -847,8 +852,15 @@ impl Bridge {
             });
             (set, (!answer).then_some(last.asked))
         };
-        if let Some(v) = set.and_then(|s| wire::value(&s).ok()) {
-            self.notify(link, method::PERM_SET, v);
+        if let Some(v) = set.and_then(|s| wire::value(&s).ok())
+            && !self.notify(link, method::PERM_SET, v)
+        {
+            // Not sent: the next chance sends the full set (and an answer to
+            // the info request in flight finds no entry and is dropped).
+            if let Ok(mut sent) = link.perms_sent.lock() {
+                sent.remove(&player);
+            }
+            return None;
         }
         asked
     }

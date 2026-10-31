@@ -1039,3 +1039,21 @@ async fn bridge_that_reads_nothing_is_closed() {
         logs()
     );
 }
+
+/// A set that did not fit in the full queue does not count as sent: once the
+/// bridge reads again, the next change sends the whole set.
+#[tokio::test(flavor = "multi_thread")]
+async fn set_dropped_by_a_full_queue_is_sent_again() {
+    let (_dir, extra) = host_files("fullqueue", false);
+    let mut s = setup_with("fullqueue", 5000, Some(&extra)).await;
+    let mut fb = FakeBridge::connect_small(s.addr, &s.key).await;
+    fb.pair(&mut s.lobby).await;
+    let _guard = steve(&s).await;
+    fill_queue(&s).await;
+    s.bridge.connecting(STEVE, "lobby");
+    // The bridge reads again and gets everything that was queued.
+    while fb.next_of(method::PERM_SET, 500).await.is_some() {}
+    s.bridge.perms_changed(STEVE, Some("lobby"));
+    let set = fb.perm_set().await.expect("the set again");
+    assert_eq!(set.nodes, gamemode_set());
+}
