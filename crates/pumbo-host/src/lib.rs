@@ -853,6 +853,7 @@ async fn describe_in(
     let component = inner
         .runtime
         .compile(&slot.wasm)
+        .await
         .map_err(|e| format!("{e:#}"))?;
     let mut store = inner
         .runtime

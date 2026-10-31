@@ -406,11 +406,14 @@ async fn supervise(host: Arc<HostInner>, slot: Arc<PluginSlot>, mut rx: Receiver
     let mut component: Option<Component> = None;
     loop {
         if component.is_none() {
-            let compiled = crate::manifest::check_update(&slot).and_then(|()| {
-                host.runtime
+            let compiled = match crate::manifest::check_update(&slot) {
+                Ok(()) => host
+                    .runtime
                     .compile(&slot.wasm)
-                    .map_err(|e| format!("{e:#}"))
-            });
+                    .await
+                    .map_err(|e| format!("{e:#}")),
+                Err(e) => Err(e),
+            };
             match compiled {
                 Ok(c) => component = Some(c),
                 Err(e) => {

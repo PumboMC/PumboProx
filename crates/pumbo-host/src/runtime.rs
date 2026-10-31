@@ -98,6 +98,7 @@ pub(crate) struct Runtime {
     pub engine: Engine,
     pub linker: Linker<PluginState>,
     stop_ticker: Arc<AtomicBool>,
+    compiling: tokio::sync::Mutex<()>,
 }
 
 impl Runtime {
@@ -129,11 +130,20 @@ impl Runtime {
             engine,
             linker,
             stop_ticker,
+            compiling: tokio::sync::Mutex::new(()),
         })
     }
 
-    pub fn compile(&self, path: &Path) -> wasmtime::Result<Component> {
-        Component::from_file(&self.engine, path)
+    /// Compiles a plugin on a blocking thread, so player sessions keep
+    /// running. One plugin at a time (in start order), which keeps the memory
+    /// peak of compiling many plugins at once low.
+    pub async fn compile(&self, path: &Path) -> wasmtime::Result<Component> {
+        let _one = self.compiling.lock().await;
+        let engine = self.engine.clone();
+        let path = path.to_path_buf();
+        tokio::task::spawn_blocking(move || Component::from_file(&engine, path))
+            .await
+            .map_err(|e| wasmtime::Error::msg(format!("compile: {e}")))?
     }
 
     /// A store for a new instance: WASI with `/data` (read-write) and

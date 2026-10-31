@@ -993,3 +993,36 @@ async fn virtual_input_flood_is_bounded() {
     eprintln!("[measure] flood of 6000 plugin messages: {dropped} dropped");
     assert!(dropped > 0, "{metrics}");
 }
+
+/// Compiling a plugin does not stop the thread that runs player sessions: on
+/// a runtime with one thread, another task keeps ticking during the start,
+/// which compiling takes most of.
+#[tokio::test(flavor = "current_thread")]
+async fn compiling_leaves_sessions_running() {
+    let env = Env::new("compilefree");
+    env.plugin("one", "test", r#"events: [chat]"#);
+    let longest = Arc::new(AtomicU64::new(0));
+    let ticker = tokio::spawn({
+        let longest = longest.clone();
+        async move {
+            let mut last = Instant::now();
+            loop {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                let gap = u64::try_from(last.elapsed().as_millis()).unwrap_or(u64::MAX);
+                longest.fetch_max(gap, Ordering::Relaxed);
+                last = Instant::now();
+            }
+        }
+    });
+    let t = Instant::now();
+    let (host, _) = start(env.host_config("")).await;
+    let took = u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX);
+    ticker.abort();
+    let longest = longest.load(Ordering::Relaxed);
+    eprintln!("[measure] plugin start {took} ms, longest stall {longest} ms");
+    assert_eq!(host.plugin("one").unwrap().status(), Status::Running);
+    assert!(
+        longest * 3 < took,
+        "the runtime stalled for {longest} of {took} ms"
+    );
+}
