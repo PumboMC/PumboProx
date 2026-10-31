@@ -719,6 +719,143 @@ async fn operator_can_use_prox_plugins() {
     proxy.stop();
 }
 
+/// `*` and `pumbo.proxy.*` do not grant the operator nodes (`op`, the
+/// bridge key, route edits): only an entry for exactly the node does, and
+/// `op` needs an operator anyway. A negated wildcard still takes them away.
+/// Other `/prox` nodes still follow wildcards, and `/prox debug perms` shows
+/// what is enforced.
+#[tokio::test(flavor = "multi_thread")]
+async fn wildcards_do_not_grant_operator_nodes() {
+    use pumbo_prox::commands::{self, Source};
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("pumbo-exact-perms-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("permissions.yml");
+    std::fs::write(
+        &file,
+        "players:\n  Admin:\n    permissions: [\"*\"]\n  Staff:\n    permissions: [\"pumbo.proxy.*\"]\n  \
+         Keeper:\n    permissions: [\"*\", pumbo.proxy.bridge.key, pumbo.proxy.route.edit, pumbo.proxy.op]\n  \
+         Boss:\n    permissions: [\"*\", -pumbo.proxy.op]\n  \
+         Locked:\n    permissions: [pumbo.proxy.route.edit]\n    server:\n      lobby: { permissions: [\"-pumbo.proxy.*\"] }\n  \
+         Muted:\n    permissions: [\"-pumbo.proxy.*\"]\n",
+    )
+    .unwrap();
+    let boss = pumbo_identity::offline_uuid("Boss");
+    let muted = pumbo_identity::offline_uuid("Muted");
+    let extra = format!(
+        "permissions:\n  file: {:?}\ncommands:\n  operators: [{boss}, {muted}]\n",
+        file.display().to_string()
+    );
+    let (proxy, addr, _plugins) = pumbox_with_plugin("exact-perms", &extra).await;
+    let mut joined = Vec::new();
+    for name in ["Admin", "Staff", "Keeper", "Boss", "Locked", "Muted"] {
+        let p = pumbo_testclient::Player::join(
+            addr,
+            module(777),
+            pumbo_testclient::JoinOptions::new(name),
+        )
+        .await
+        .unwrap();
+        joined.push(p);
+    }
+    let rt = proxy.runtime();
+    let can = |name: &str, node: &str| {
+        let who = Source::Player {
+            id: pumbo_identity::offline_uuid(name),
+            server: None,
+        };
+        commands::permitted(&proxy, &rt, &who, node)
+    };
+    for name in ["Admin", "Staff"] {
+        for node in [
+            "pumbo.proxy.op",
+            "pumbo.proxy.bridge.key",
+            "pumbo.proxy.route.edit",
+        ] {
+            assert!(!can(name, node), "{name} {node}");
+        }
+        for node in [
+            "pumbo.proxy.reload",
+            "pumbo.proxy.plugins",
+            "pumbo.proxy.bridge",
+        ] {
+            assert!(can(name, node), "{name} {node}");
+        }
+    }
+    assert!(can("Keeper", "pumbo.proxy.bridge.key"));
+    assert!(can("Keeper", "pumbo.proxy.route.edit"));
+    assert!(!can("Keeper", "pumbo.proxy.op"), "op needs an operator");
+    assert!(
+        !can("Boss", "pumbo.proxy.op"),
+        "an exact entry takes it away"
+    );
+    assert!(can("Boss", "pumbo.proxy.bridge.key"), "an operator");
+    // A wildcard denial still counts: on lobby, and for an operator.
+    assert!(can("Locked", "pumbo.proxy.route.edit"));
+    let on_lobby = Source::Player {
+        id: pumbo_identity::offline_uuid("Locked"),
+        server: Some("lobby"),
+    };
+    assert!(!commands::permitted(
+        &proxy,
+        &rt,
+        &on_lobby,
+        "pumbo.proxy.route.edit"
+    ));
+    assert!(!can("Muted", "pumbo.proxy.bridge.key"));
+    assert!(!can("Muted", "pumbo.proxy.op"));
+
+    let run = |name: &str, line: &str| {
+        let who = Source::Player {
+            id: pumbo_identity::offline_uuid(name),
+            server: None,
+        };
+        commands::run(&proxy, &rt, &who, line)
+            .unwrap()
+            .lines
+            .iter()
+            .map(|l| l.plain_text())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let got = run("Admin", "prox op Staff");
+    assert!(
+        got.contains("Only an operator or the console may do that; * and pumbo.proxy.*"),
+        "{got}"
+    );
+    let got = run("Staff", "prox route servers add lobby");
+    assert!(
+        got.contains("pumbo.proxy.route.edit needs an exact entry or an operator"),
+        "{got}"
+    );
+    // The debug check shows the same rules.
+    let got = run("Admin", "prox debug perms Admin pumbo.proxy.route.edit");
+    assert!(
+        got.contains("pumbo.proxy.route.edit = operators only"),
+        "{got}"
+    );
+    let got = run("Admin", "prox debug perms Keeper pumbo.proxy.op");
+    assert!(
+        got.contains("pumbo.proxy.op = true") && got.contains("only for an operator"),
+        "{got}"
+    );
+    let got = run(
+        "Admin",
+        "prox debug perms Locked pumbo.proxy.route.edit lobby",
+    );
+    assert!(got.contains("pumbo.proxy.route.edit = false"), "{got}");
+    assert!(
+        !proxy
+            .runtime()
+            .operators
+            .contains(&pumbo_identity::offline_uuid("Staff"))
+    );
+    for p in joined {
+        p.close().await;
+    }
+    proxy.stop();
+}
+
 /// `/pp` arguments complete on the proxy as on Pumpkin: online players, then
 /// groups and permission nodes; the first word only what the player may use
 /// (`PUMBO_PERMS_WASM`: a built `pumbo-perms.wasm`; without it the test does

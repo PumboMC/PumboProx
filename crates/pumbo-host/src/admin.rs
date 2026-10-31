@@ -239,6 +239,15 @@ pub const STANDARD: &[&str] = &["reload", "version", "debug"];
 const BRAND: &str = "#F28C28";
 const COMMAND: &str = "#FFC27A";
 
+/// `/prox debug perms check`: the extra rule of `pumbo.proxy.op`.
+fn op_rule(node: &str) -> &'static str {
+    if node.eq_ignore_ascii_case("pumbo.proxy.op") {
+        ", and only for an operator"
+    } else {
+        ""
+    }
+}
+
 fn reply(host: &HostInner, lines: Vec<String>) -> CommandOutcome {
     CommandOutcome::Reply(lines.iter().map(|l| host.message(l)).collect())
 }
@@ -886,7 +895,28 @@ pub(crate) fn proxy_command(
                     Some(s) => crate::permissions::levels(Some(s), &host.cfg.groups_of(s)),
                     None => host.player_levels(p.id),
                 };
-                let line = match host.perms.decide(p.id, node, &lv) {
+                let exact = crate::EXACT_ONLY.contains(&node.to_ascii_lowercase().as_str());
+                let decision = if exact {
+                    host.perms.decide_exact(p.id, node, &lv)
+                } else {
+                    host.perms.decide(p.id, node, &lv)
+                };
+                let line = match decision {
+                    // What `/prox` enforces for the operator-level nodes.
+                    Some(d) if exact => format!(
+                        "{} = {} <muted>({} in {:?}, {:?}; only an exact entry grants it{})",
+                        escape_mini(node),
+                        d.value,
+                        escape_mini(&d.entry.node),
+                        d.entry.context,
+                        d.layer,
+                        op_rule(node)
+                    ),
+                    None if exact => format!(
+                        "{} = operators only <muted>(no exact entry; * and pumbo.proxy.* do not grant it{})",
+                        escape_mini(node),
+                        op_rule(node)
+                    ),
                     Some(d) => format!(
                         "{} = {} <muted>({} in {:?}, {:?})",
                         escape_mini(node),

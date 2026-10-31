@@ -87,6 +87,15 @@ use crate::wit::admin::PluginDescription;
 use crate::wit::servers::ServerInfo;
 use crate::wit::types::{PlayerContext, PlayerId, PlayerInfo};
 
+/// Proxy nodes as strong as an operator: no wildcard grants them, only an
+/// entry for exactly the node ([`Host::exact_permission_decision`]).
+/// `pumbo.proxy.op` also needs an operator.
+pub const EXACT_ONLY: &[&str] = &[
+    "pumbo.proxy.op",
+    "pumbo.proxy.bridge.key",
+    "pumbo.proxy.route.edit",
+];
+
 #[derive(Debug, thiserror::Error)]
 pub enum HostError {
     #[error("plugin host config: {0}")]
@@ -504,6 +513,23 @@ impl Host {
             None => inner.player_levels(id),
         };
         inner.perms.decide(id, node, &lv).map(|d| d.value)
+    }
+
+    /// Like [`Host::permission_decision`], for nodes no wildcard may grant:
+    /// only an entry for exactly `node` grants it (`*` and `a.*` can still
+    /// deny it).
+    pub fn exact_permission_decision(
+        &self,
+        id: PlayerId,
+        node: &str,
+        server: Option<&str>,
+    ) -> Option<bool> {
+        let inner = &self.inner;
+        let lv = match server {
+            Some(s) => permissions::levels(Some(s), &inner.cfg.groups_of(s)),
+            None => inner.player_levels(id),
+        };
+        inner.perms.decide_exact(id, node, &lv).map(|d| d.value)
     }
 
     /// Server groups of a server (`[[server-group]]`, config order).

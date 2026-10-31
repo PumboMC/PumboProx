@@ -55,7 +55,7 @@ pub fn command(proxy: &Arc<Proxy>, rt: &Runtime, who: &Who<'_>, args: &[&str]) -
         );
     }
     if !permitted(proxy, rt, who, EDIT) {
-        return reply("<err>You do not have permission to do that.");
+        return reply(&crate::commands::exact_denied(EDIT));
     }
     let Some(target) = words.get(2).map(|s| s.to_string()) else {
         return usage(&format!("/prox route {} {} <name>", w(0), w(1)));

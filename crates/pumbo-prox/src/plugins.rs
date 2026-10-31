@@ -672,6 +672,12 @@ impl Plugins {
         self.host.permission_decision(self.id(uuid)?, node, server)
     }
 
+    /// The decision of an entry for exactly `node`, wildcards left out.
+    pub fn exact_permission(&self, uuid: Uuid, node: &str, server: Option<&str>) -> Option<bool> {
+        self.host
+            .exact_permission_decision(self.id(uuid)?, node, server)
+    }
+
     /// Tab completion of a plugin command past its name by the plugin
     /// (`None`: the proxy completes it).
     pub fn suggest(

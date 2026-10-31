@@ -19,6 +19,7 @@ All notable changes to PumboProx, one section per release. The format follows [K
 - After a crash the proxy takes over a managed server it left running only when the process is a `pumpkin` with the recorded start time running in the server's folder. Any other process that got the same PID is left alone, with no signal. A server left running by an older version has no recorded start time and is not taken over; stop that process yourself.
 - A plugin's bcrypt check refuses a hash with a cost above 14 at once, with a warning in the log, instead of holding a thread for hours.
 - `permissions.provider: auto` uses only PumboPerms (`pumbo-perms`); any other permission plugin must be named in `permissions.provider`. With only another one installed, or a PumboPerms that does not load, the proxy does not start and says what to set; next to PumboPerms it is ignored with a warning. Only the chosen plugin answers `pumbo:permissions` calls of other plugins, and `services.providers` cannot pick another one.
+- `/prox op` and `/prox deop` work only from the console or for an operator, and the log names who made each change. `pumbo.proxy.op`, `pumbo.proxy.bridge.key` and `pumbo.proxy.route.edit` are no longer granted by `*` or `pumbo.proxy.*`, only by an entry for exactly that node; a negated wildcard still takes them away.
 
 ### Added
 

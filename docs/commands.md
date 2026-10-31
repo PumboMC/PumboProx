@@ -36,11 +36,13 @@
 
 | Command | Arguments | What it does | Permission |
 | --- | --- | --- | --- |
-| `/prox op` | `<player\|uuid>` | Adds the player to `commands.operators` in `pumboprox.yml` (comments stay) and reloads. A name must be online; use a UUID for someone offline. Example: `/prox op Steve` | `pumbo.proxy.op` |
-| `/prox deop` | `<player\|uuid>` | Removes the player from `commands.operators` | `pumbo.proxy.op` |
+| `/prox op` | `<player\|uuid>` | Adds the player to `commands.operators` in `pumboprox.yml` (comments stay) and reloads. A name must be online; use a UUID for someone offline. Example: `/prox op Steve` | the console or an operator |
+| `/prox deop` | `<player\|uuid>` | Removes the player from `commands.operators` | the console or an operator |
 | `/prox claim` | `<code>` | Makes you an operator with the code from the console. Only on a new network, while it has no operator and no server; the code expires when the first server appears, and after five wrong tries | none |
 
-Operators have every proxy permission. Without a permission plugin, everything above belongs to the operators and the console.
+An operator is the network's root: operators have every proxy permission. Without a permission plugin, everything above belongs to the operators and the console. `/prox op` and `/prox deop` work only from the console or for an operator (a negated `pumbo.proxy.op` entry takes them away from an operator), and every change is logged with who made it.
+
+`pumbo.proxy.op`, `pumbo.proxy.bridge.key` and `pumbo.proxy.route.edit` are as strong as an operator, so `*` and `pumbo.proxy.*` do not include them: only an entry for exactly that node grants them. A negated wildcard such as `-pumbo.proxy.*` still takes them away, and `/prox debug perms` shows these rules.
 
 ## The way in: `/prox route`
 
@@ -119,3 +121,5 @@ players:
   Steve:
     groups: [staff]
 ```
+
+Steve gets every `/prox` command except `op`, `deop`, `bridge key` and the route changes; for those, add the exact node (for example `pumbo.proxy.route.edit`) or make him an operator.

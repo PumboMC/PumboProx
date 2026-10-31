@@ -341,17 +341,49 @@ pub fn allowed(proxy: &Proxy, rt: &Runtime, source: &Source<'_>, name: &str) -> 
     }
 }
 
+/// `/prox op` and `/prox deop`.
+pub(crate) const OP: &str = "pumbo.proxy.op";
+
+/// Nodes as strong as an operator: `*` and `pumbo.proxy.*` do not grant
+/// them, only an entry for exactly the node (else `commands.operators`);
+/// a negated wildcard still takes them away. `pumbo.proxy.op` also needs an
+/// operator: an entry can only take it away.
+const EXACT_ONLY: &[&str] = pumbo_host::EXACT_ONLY;
+
 /// A `pumbo.proxy.…` node of a `/prox` subcommand: the permission plugin
 /// decides where it has an entry, else `commands.operators` and the console.
 pub fn permitted(proxy: &Proxy, rt: &Runtime, source: &Source<'_>, node: &str) -> bool {
     match source {
         Source::Console => true,
-        Source::Player { id, server } => proxy
-            .plugins
-            .get()
-            .and_then(|p| p.permission(*id, node, *server))
-            .unwrap_or_else(|| rt.operators.contains(id)),
+        Source::Player { id, server } => {
+            let operator = rt.operators.contains(id);
+            if EXACT_ONLY.contains(&node) {
+                let exact = proxy
+                    .plugins
+                    .get()
+                    .and_then(|p| p.exact_permission(*id, node, *server));
+                return match node {
+                    OP => operator && exact != Some(false),
+                    _ => exact.unwrap_or(operator),
+                };
+            }
+            proxy
+                .plugins
+                .get()
+                .and_then(|p| p.permission(*id, node, *server))
+                .unwrap_or(operator)
+        }
     }
+}
+
+/// The refusal for a node of [`EXACT_ONLY`].
+pub(crate) fn exact_denied(node: &str) -> String {
+    if node == OP {
+        return "<err>Only an operator or the console may do that; * and pumbo.proxy.* do not include it.".into();
+    }
+    format!(
+        "<err>{node} needs an exact entry or an operator; * and pumbo.proxy.* do not include it."
+    )
 }
 
 /// Commands this source may run, for the command tree.
@@ -752,8 +784,8 @@ fn save_operator(proxy: &Proxy, id: Uuid, add: bool) -> Result<(), String> {
 /// `/prox op|deop <player|uuid>`: an online player's name or a UUID.
 fn op(proxy: &Proxy, rt: &Runtime, source: &Source<'_>, add: bool, who: Option<&str>) -> Reply {
     use crate::servers::{reply, usage};
-    if !permitted(proxy, rt, source, "pumbo.proxy.op") {
-        return denied();
+    if !permitted(proxy, rt, source, OP) {
+        return reply(&exact_denied(OP));
     }
     let Some(who) = who else {
         return usage(if add {
@@ -790,11 +822,19 @@ fn op(proxy: &Proxy, rt: &Runtime, source: &Source<'_>, add: bool, who: Option<&
     if let Err(e) = save_operator(proxy, id, add) {
         return reply(&format!("<err>Not saved: <s>{}", esc(&e)));
     }
+    let by = match source {
+        Source::Console => "the console".to_string(),
+        Source::Player { id, .. } => proxy
+            .players()
+            .into_iter()
+            .find(|p| p.id == *id)
+            .map_or_else(|| id.to_string(), |p| format!("{} ({id})", p.name)),
+    };
     if add {
-        info!("{name} ({id}) is now an operator");
+        info!("{name} ({id}) is now an operator, by {by}");
         reply(&format!("<ok><v>{}</v> is now an operator.", esc(&name)))
     } else {
-        info!("{name} ({id}) is no longer an operator");
+        info!("{name} ({id}) is no longer an operator, by {by}");
         reply(&format!(
             "<ok><v>{}</v> is no longer an operator.",
             esc(&name)

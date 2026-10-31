@@ -309,14 +309,17 @@ async fn a_player_without_permissions_claims_from_the_pumbox() {
     );
     assert!(!p.messages.iter().any(|m| m.contains("Reloads")));
     // Nothing else of /prox without permissions.
-    for denied in ["prox reload", "prox route", "prox op Owner"] {
+    for (denied, why) in [
+        ("prox reload", "You do not have permission"),
+        ("prox route", "You do not have permission"),
+        (
+            "prox op Owner",
+            "Only an operator or the console may do that",
+        ),
+    ] {
         p.messages.clear();
         p.command(denied).await.unwrap();
-        assert!(
-            message(&mut p, "You do not have permission").await,
-            "{denied}: {:?}",
-            p.messages
-        );
+        assert!(message(&mut p, why).await, "{denied}: {:?}", p.messages);
     }
     // An offline account without the login gate: refused, the console ops it.
     p.command(&format!("prox claim {code}")).await.unwrap();
@@ -473,6 +476,7 @@ fn the_code_expires_for_good_when_a_server_is_added() {
 
 #[test]
 fn op_and_deop_edit_the_operators() {
+    let (_logs, buf) = common::capture_logs();
     let path = file("op", BASE);
     let proxy = Proxy::new(Config::parse(BASE).unwrap(), Some(path.clone())).unwrap();
     let steve = pumbo_core::profile::GameProfile {
@@ -490,7 +494,10 @@ fn op_and_deop_edit_the_operators() {
         server: None,
     };
     let no = run(&proxy, &them, "prox op Steve");
-    assert!(no.contains("You do not have permission"), "{no}");
+    assert!(
+        no.contains("Only an operator or the console may do that"),
+        "{no}"
+    );
     assert!(run(&proxy, &console, "prox op Nobody").contains("no player Nobody online"));
     assert!(run(&proxy, &console, "prox op").contains("Usage: /prox op <player|uuid>"));
     // By name: in the file (the comment stays) and after a reload.
@@ -513,6 +520,17 @@ fn op_and_deop_edit_the_operators() {
     assert!(run(&proxy, &them, &format!("prox deop {alex}")).contains("is not an operator."));
     let gone = run(&proxy, &console, "prox deop Steve");
     assert!(gone.contains("Steve is no longer an operator."), "{gone}");
+    // Each change names who made it.
+    let log = String::from_utf8_lossy(&buf.lock().unwrap()).into_owned();
+    for want in [
+        format!("Steve ({}) is now an operator, by the console", steve.id),
+        format!(
+            "{alex} ({alex}) is no longer an operator, by Steve ({})",
+            steve.id
+        ),
+    ] {
+        assert!(log.contains(&want), "{want} in\n{log}");
+    }
     assert!(proxy.runtime().operators.is_empty());
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.contains("operators: []"), "{text}");

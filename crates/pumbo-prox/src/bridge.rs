@@ -1070,7 +1070,7 @@ impl Bridge {
                 "<p>Bridge key</p> <s>(config.yml of PumboBridge on every server):".into(),
                 format!("<ok>{}", wire::key_hex(&self.key)),
             ],
-            Some("key") => vec!["<err>You may not see the bridge key.".into()],
+            Some("key") => vec![crate::commands::exact_denied("pumbo.proxy.bridge.key")],
             None | Some("status") => {
                 let now = SystemTime::now();
                 let mut rows = vec![[

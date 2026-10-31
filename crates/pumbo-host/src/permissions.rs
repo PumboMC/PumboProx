@@ -77,6 +77,36 @@ impl Permissions {
         resolve(online.get(&id)?.layers(), node, levels)
     }
 
+    /// Like [`Permissions::decide`], from the entries for exactly `node`:
+    /// `*` and `a.*` entries never grant it, but their denials still count.
+    pub fn decide_exact(
+        &self,
+        id: PlayerId,
+        node: &str,
+        levels: &[PermContext],
+    ) -> Option<Decision> {
+        let online = self.online.read().ok()?;
+        let layers = online.get(&id)?.layers();
+        let node = node.to_ascii_lowercase();
+        let only = |s: &[PermissionEntry]| -> Vec<PermissionEntry> {
+            s.iter()
+                .filter(|e| e.node == node || !e.value)
+                .cloned()
+                .collect()
+        };
+        let (session, file, provider) = (
+            only(layers.session),
+            only(layers.file),
+            only(layers.provider),
+        );
+        let exact = Layers {
+            session: &session,
+            file: &file,
+            provider: &provider,
+        };
+        resolve(exact, &node, levels)
+    }
+
     pub fn load_file_layer(&self, id: PlayerId, who: &Subject) {
         let entries = self
             .file

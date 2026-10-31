@@ -558,3 +558,26 @@ async fn serve(stream: TcpStream, log: &Log) -> Result<(), String> {
         }
     }
 }
+
+/// Collects what the calling thread logs while the guard lives. Command code
+/// logs on the caller's thread; a global subscriber would race with
+/// [`start_proxy_at`], which installs the proxy's own.
+pub fn capture_logs() -> (tracing::subscriber::DefaultGuard, Arc<Mutex<Vec<u8>>>) {
+    struct Buf(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Buf {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let w = Arc::clone(&log);
+    let sub = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(move || Buf(Arc::clone(&w)))
+        .finish();
+    (tracing::subscriber::set_default(sub), log)
+}
