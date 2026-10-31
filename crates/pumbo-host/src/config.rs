@@ -284,8 +284,8 @@ pub enum OnLoadFailure {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case", default)]
 pub struct PermissionsConfig {
-    /// `auto` (the installed provider plugin, else the file), `file`, or
-    /// the id of a provider plugin.
+    /// `auto` (pumbo-perms when installed, else the file), `file`, or the
+    /// id of a provider plugin.
     pub provider: String,
     pub file: PathBuf,
     pub load_at: LoadAt,

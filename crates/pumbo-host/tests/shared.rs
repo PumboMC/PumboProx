@@ -647,12 +647,11 @@ async fn permission_writes_need_a_grant_and_own_nodes() {
     host.shutdown().await;
 }
 
-/// PumboPerms spec §16: without config the installed provider is taken
-/// (`auto`) and gets permissions.yml at its start; once it loaded a player
-/// its set replaces the file; when it is unloaded players keep its set, and
-/// when it comes back the players are loaded again. A named provider that is
-/// not installed, or a plugin that provides no permissions, stops the start
-/// instead of leaving the file in charge.
+/// PumboPerms spec §16: the provider gets permissions.yml at its start; once
+/// it loaded a player its set replaces the file; when it is unloaded players
+/// keep its set, and when it comes back the players are loaded again. A
+/// named provider that is not installed, or a plugin that provides no
+/// permissions, stops the start instead of leaving the file in charge.
 #[tokio::test(flavor = "multi_thread")]
 async fn provider_replaces_the_file_and_falls_back() {
     let env = Env::new("perm-fallback");
@@ -670,7 +669,7 @@ async fn provider_replaces_the_file_and_falls_back() {
         "permissions.yml",
         "groups:\n  default:\n    permissions: [pumbo.test.base]\nplayers:\n  Jeb_:\n    groups: [default]\n",
     );
-    let (host, bridge) = start(env.host_config("")).await;
+    let (host, bridge) = start(env.host_config(PERM)).await;
     host.player_joined(player(99, "reporter", None));
     let file_sent = |b: &FakeBridge| b.messages(99).iter().any(|m| m.starts_with("file "));
     for _ in 0..100 {
@@ -761,7 +760,7 @@ async fn large_permissions_file_reaches_the_provider() {
         ));
     }
     env.file("permissions.yml", &file);
-    let (host, bridge) = start(env.host_config("")).await;
+    let (host, bridge) = start(env.host_config(PERM)).await;
     host.player_joined(player(99, "reporter", None));
     let size = |b: &FakeBridge| {
         b.messages(99)
@@ -1313,7 +1312,7 @@ async fn export_keeps_proxy_rules_when_the_provider_fails() {
         "permissions.yml",
         "groups:\n  default:\n    permissions: [pumbo.test.base]\n",
     );
-    let (host, _) = start(env.host_config("")).await;
+    let (host, _) = start(env.host_config(PERM)).await;
     wait_status(&host, "perm", LONG, |s| *s == Status::Running).await;
     let text = host.permissions_export("survival").await;
     let x: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -1338,7 +1337,7 @@ async fn plugin_cannot_call_host_only_method() {
         "uses:\n  - { service: \"pumbo:permissions\", version: \"1.0\" }",
     );
     env.config_file("evil", "config.yml", "prefix: e\n");
-    let (host, bridge) = start(env.host_config("")).await;
+    let (host, bridge) = start(env.host_config(PERM)).await;
     host.player_joined(player(99, "reporter", None));
     host.player_joined(player(1, "a", None));
     wait_status(&host, "perm", LONG, |s| *s == Status::Running).await;
@@ -1430,33 +1429,55 @@ async fn shared_permission_prefix_fails_start() {
     );
 }
 
-/// `permissions.provider: auto` with several providers and no choice stops
-/// the start instead of falling back to permissions.yml.
+/// `permissions.provider: auto` takes only pumbo-perms. Another provider
+/// alone stops the start (its id or `file` goes into permissions.provider);
+/// next to pumbo-perms it is not used. Only the chosen plugin provides
+/// `pumbo:permissions`, and `services.providers` cannot pick another one.
 #[tokio::test(flavor = "multi_thread")]
-async fn auto_with_two_providers_fails_start() {
-    let env = Env::new("auto-two-providers");
-    env.plugin(
-        "perm-a",
-        "test",
-        "permission-provider: true\nprovides:\n  - { service: \"pumbo:permissions\", version: \"1.0\" }",
-    );
-    env.plugin(
-        "perm-b",
-        "test",
-        "permission-provider: true\nprovides:\n  - { service: \"pumbo:permissions\", version: \"2.0\" }",
-    );
-    let err = Host::start(env.host_config(""), Arc::new(FakeBridge::default()))
-        .await
-        .unwrap_err()
-        .to_string();
+async fn auto_takes_only_pumbo_perms() {
+    logs();
+    let env = Env::new("auto-provider");
+    env.plugin("perm-a", "test", PROVIDER);
+    env.plugin("perm-b", "test", PROVIDER);
+    let fails = async |extra: &str| {
+        Host::start(env.host_config(extra), Arc::new(FakeBridge::default()))
+            .await
+            .unwrap_err()
+            .to_string()
+    };
+    let err = fails("").await;
     assert!(
-        err.contains("perm-a, perm-b") && err.contains("services.providers"),
+        err.contains("auto, which picks only pumbo-perms; perm-a, perm-b also provides")
+            && err.contains(
+                "set permissions.provider: perm-a to use it, or permissions.provider: file"
+            ),
         "{err}"
     );
-    let cfg = env.host_config("services:\n  providers: { \"pumbo:permissions\": perm-b }\n");
-    let (host, _) = start(cfg).await;
+    let err = fails(
+        "permissions: { provider: perm-b }\nservices:\n  providers: { \"pumbo:permissions\": perm-a }\n",
+    )
+    .await;
+    assert!(err.contains("services.providers chooses perm-a"), "{err}");
+    // Named: the other provider of the same version is no conflict.
+    let (host, _) = start(env.host_config("permissions: { provider: perm-b }\n")).await;
     host.shutdown().await;
+    let (host, _) = start(env.host_config("permissions: { provider: file }\n")).await;
+    host.shutdown().await;
+
+    env.plugin("pumbo-perms", "test", PROVIDER);
+    let (host, _) = start(env.host_config("")).await;
+    host.shutdown().await;
+    let log = logs();
+    assert!(
+        log.contains(
+            "perm-a also provides permissions and is not used: permissions.provider is auto"
+        ),
+        "{log}"
+    );
 }
+
+/// Names the test provider `perm`; `auto` takes only pumbo-perms.
+const PERM: &str = "permissions: { provider: perm }\n";
 
 const PROVIDER: &str = "permission-provider: true\nprovides:\n  - { service: \"pumbo:permissions\", version: \"1.0\" }";
 
@@ -1505,7 +1526,7 @@ async fn until_provider_set(host: &Host, id: u64) {
 #[tokio::test(flavor = "multi_thread")]
 async fn provider_restart_keeps_last_sets() {
     let env = provider_env("provider-restart");
-    let (host, bridge) = start(env.host_config("")).await;
+    let (host, bridge) = start(env.host_config(PERM)).await;
     assert_eq!(login(&host, 1, "steve").await, GateOutcome::Pass);
     assert!(on_provider_set(&host, 1));
     env.config_file("perm", "config.yml", "report: 99\nfail_load: true\n");
@@ -1525,7 +1546,7 @@ async fn provider_restart_keeps_last_sets() {
 #[tokio::test(flavor = "multi_thread")]
 async fn reload_hands_a_changed_file_to_the_provider() {
     let env = provider_env("provider-file-reload");
-    let (host, bridge) = start(env.host_config("")).await;
+    let (host, bridge) = start(env.host_config(PERM)).await;
     host.player_joined(player(99, "reporter", None));
     let files = || -> Vec<String> {
         let all = bridge.messages(99).into_iter();
@@ -1555,7 +1576,7 @@ async fn reload_hands_a_changed_file_to_the_provider() {
 #[tokio::test(flavor = "multi_thread")]
 async fn failed_handoff_is_retried_by_the_next_reload() {
     let env = provider_env("provider-file-retry");
-    let (host, bridge) = start(env.host_config("")).await;
+    let (host, bridge) = start(env.host_config(PERM)).await;
     host.player_joined(player(99, "reporter", None));
     let files = || -> Vec<String> {
         let all = bridge.messages(99).into_iter();
@@ -1579,7 +1600,7 @@ async fn failed_handoff_is_retried_by_the_next_reload() {
 #[tokio::test(flavor = "multi_thread")]
 async fn provider_ends_with_the_newest_file() {
     let env = provider_env("provider-file-newest");
-    let (host, bridge) = start(env.host_config("")).await;
+    let (host, bridge) = start(env.host_config(PERM)).await;
     host.player_joined(player(99, "reporter", None));
     let files = || -> Vec<String> {
         let all = bridge.messages(99).into_iter();
@@ -1621,7 +1642,7 @@ async fn provider_ends_with_the_newest_file_after_a_timeout() {
         "test",
         "permission-provider: true\nprovides:\n  - { service: \"pumbo:permissions\", version: \"1.0\", max-timeout-ms: 200 }",
     );
-    let (host, bridge) = start(env.host_config("")).await;
+    let (host, bridge) = start(env.host_config(PERM)).await;
     host.player_joined(player(99, "reporter", None));
     let files = || -> Vec<String> {
         let all = bridge.messages(99).into_iter();
@@ -1650,7 +1671,7 @@ async fn provider_ends_with_the_newest_file_after_a_timeout() {
 async fn disabled_provider_denies_new_logins_keeps_online() {
     logs();
     let env = provider_env("provider-disabled");
-    let (host, _) = start(env.host_config("")).await;
+    let (host, _) = start(env.host_config(PERM)).await;
     assert_eq!(login(&host, 1, "steve").await, GateOutcome::Pass);
     host.plugin("perm").unwrap().unload().await.unwrap();
     assert!(on_provider_set(&host, 1));
@@ -1676,7 +1697,7 @@ async fn provider_down_warning_only_when_it_is_down() {
     logs();
     let env = Env::new("provider-down-warning");
     env.plugin("perm-alarm", "test", PROVIDER);
-    let (host, _) = start(env.host_config("")).await;
+    let (host, _) = start(env.host_config("permissions: { provider: perm-alarm }\n")).await;
     let down = || {
         logs()
             .matches("permission provider perm-alarm is down")
@@ -1698,7 +1719,7 @@ async fn provider_down_warning_only_when_it_is_down() {
 #[tokio::test(flavor = "multi_thread")]
 async fn file_only_lets_new_logins_in_on_file() {
     let env = provider_env("provider-file-only");
-    let cfg = env.host_config("permissions: { on-load-failure: file-only }\n");
+    let cfg = env.host_config("permissions: { provider: perm, on-load-failure: file-only }\n");
     let (host, _) = start(cfg).await;
     assert_eq!(login(&host, 1, "steve").await, GateOutcome::Pass);
     host.plugin("perm").unwrap().unload().await.unwrap();
@@ -1714,7 +1735,7 @@ async fn file_only_lets_new_logins_in_on_file() {
 #[tokio::test(flavor = "multi_thread")]
 async fn export_keeps_proxy_rules_when_the_provider_is_disabled() {
     let env = provider_env("export-disabled");
-    let (host, _) = start(env.host_config("")).await;
+    let (host, _) = start(env.host_config(PERM)).await;
     host.plugin("perm").unwrap().unload().await.unwrap();
     let text = host.permissions_export("survival").await;
     let x: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -1729,7 +1750,7 @@ async fn export_keeps_proxy_rules_when_the_provider_is_disabled() {
 #[tokio::test(flavor = "multi_thread")]
 async fn older_load_does_not_overwrite_replace() {
     let env = provider_env("older-load");
-    let (host, bridge) = start(env.host_config("")).await;
+    let (host, bridge) = start(env.host_config(PERM)).await;
     host.player_joined(player(1, "slowload_steve", None));
     let gates = {
         let host = host.clone();
@@ -1750,7 +1771,7 @@ async fn older_load_does_not_overwrite_replace() {
 #[tokio::test(flavor = "multi_thread")]
 async fn eligible_unloaded_players_are_retried() {
     let env = provider_env("retry-unloaded");
-    let cfg = env.host_config("permissions: { on-load-failure: file-only }\n");
+    let cfg = env.host_config("permissions: { provider: perm, on-load-failure: file-only }\n");
     let (host, _) = start(cfg).await;
     assert_eq!(login(&host, 1, "flaky_steve").await, GateOutcome::Pass);
     assert!(
@@ -1794,7 +1815,7 @@ fn with_manifest(wasm: &[u8], manifest: &str) -> Vec<u8> {
 #[tokio::test(flavor = "multi_thread")]
 async fn duplicate_provider_id_stops_start() {
     let env = Env::new("duplicate-provider");
-    let manifest = format!("id: perm\nversion: 0.1.0\napi: \"0.1\"\n{PROVIDER}\n");
+    let manifest = format!("id: pumbo-perms\nversion: 0.1.0\napi: \"0.1\"\n{PROVIDER}\n");
     let file = with_manifest(&std::fs::read(wasm("test")).unwrap(), &manifest);
     std::fs::write(env.plugins().join("PumboPerms-old.wasm"), &file).unwrap();
     std::fs::write(env.plugins().join("PumboPerms-new.wasm"), &file).unwrap();
@@ -1811,12 +1832,13 @@ async fn duplicate_provider_id_stops_start() {
     // Another plugin in two files is skipped as before.
     let cfg = env.host_config("permissions: { provider: file }\n");
     let (host, _) = start(cfg).await;
-    assert!(host.plugin("perm").is_none());
+    assert!(host.plugin("pumbo-perms").is_none());
     host.shutdown().await;
 }
 
-/// A provider named in `permissions.provider` that does not load (a build
-/// for another plugin API) stops the start instead of handing over to the file.
+/// A provider named in `permissions.provider`, or pumbo-perms under `auto`,
+/// that does not load (a build for another plugin API) stops the start
+/// instead of handing over to the file.
 #[tokio::test(flavor = "multi_thread")]
 async fn named_provider_that_fails_to_load_stops_start() {
     let env = Env::new("broken-provider");
@@ -1829,13 +1851,66 @@ async fn named_provider_that_fails_to_load_stops_start() {
         .unwrap_err()
         .to_string();
     assert!(
-        err.contains("did not load") && err.contains("PumboPerms.wasm"),
+        err.contains("did not load")
+            && err.contains("PumboPerms.wasm")
+            && err.contains("or set permissions.provider: file to run on"),
         "{err}"
     );
     // `provider: file` is the way out.
     let (host, _) = start(env.host_config("permissions: { provider: file }\n")).await;
     assert!(host.plugin("perm").is_none());
     host.shutdown().await;
+    std::fs::remove_file(env.plugins().join("PumboPerms.wasm")).unwrap();
+    let manifest = format!("id: pumbo-perms\nversion: 0.1.0\napi: \"0.0\"\n{PROVIDER}\n");
+    let file = with_manifest(&std::fs::read(wasm("test")).unwrap(), &manifest);
+    std::fs::write(env.plugins().join("PumboPerms-new.wasm"), &file).unwrap();
+    let err = Host::start(env.host_config(""), Arc::new(FakeBridge::default()))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("did not load")
+            && err.contains("PumboPerms-new.wasm")
+            && err.contains("or set permissions.provider: file to run on"),
+        "{err}"
+    );
+}
+
+/// A PumboPerms file whose manifest does not read (a broken download, a
+/// bad `pumbo-perms.yml`) is known by its name: under `auto` and when named
+/// it stops the start, and the error says how to run on the file instead.
+#[tokio::test(flavor = "multi_thread")]
+async fn provider_without_a_readable_manifest_stops_start() {
+    let env = Env::new("unreadable-provider");
+    let fails = async |extra: &str| {
+        Host::start(env.host_config(extra), Arc::new(FakeBridge::default()))
+            .await
+            .unwrap_err()
+            .to_string()
+    };
+    let garbage: Vec<u8> = (0..2000u32).map(|i| (i * 7919 % 251) as u8).collect();
+    for file in ["pumbo-perms.wasm", "PumboPerms.wasm"] {
+        std::fs::write(env.plugins().join(file), &garbage).unwrap();
+        for extra in ["", "permissions: { provider: pumbo-perms }\n"] {
+            let err = fails(extra).await;
+            assert!(
+                err.contains("did not load")
+                    && err.contains(file)
+                    && err.contains("or set permissions.provider: file"),
+                "{file} {extra}: {err}"
+            );
+        }
+        std::fs::remove_file(env.plugins().join(file)).unwrap();
+    }
+    let manifest = format!("id: pumbo-perms\nversion: 0.1.0\napi: \"0.1\"\n{PROVIDER}\n");
+    let file = with_manifest(&std::fs::read(wasm("test")).unwrap(), &manifest);
+    std::fs::write(env.plugins().join("pumbo-perms.wasm"), &file).unwrap();
+    std::fs::write(env.plugins().join("pumbo-perms.yml"), "id: [pumbo-perms\n").unwrap();
+    let err = fails("").await;
+    assert!(
+        err.contains("did not load") && err.contains("pumbo-perms.yml"),
+        "{err}"
+    );
 }
 
 /// While a plugin restarts its commands stay the proxy's: the player gets
@@ -1878,7 +1953,7 @@ async fn login_during_provider_start_loads_once() {
         "permissions.yml",
         "groups:\n  default:\n    permissions: [pumbo.test.base, pumbo.test.slowfile]\n",
     );
-    let (host, bridge) = start(env.host_config("")).await;
+    let (host, bridge) = start(env.host_config(PERM)).await;
     host.player_joined(player(99, "reporter", None));
     assert_eq!(login(&host, 7, "steve").await, GateOutcome::Pass);
     until_provider_set(&host, 7).await;
@@ -1897,7 +1972,7 @@ async fn offline_cache_cleared_on_replace() {
     let env = provider_env("offline-cache");
     env.plugin("asker", "test", "");
     env.config_file("asker", "config.yml", "prefix: q\n");
-    let (host, bridge) = start(env.host_config("")).await;
+    let (host, bridge) = start(env.host_config(PERM)).await;
     host.player_joined(player(99, "reporter", None));
     // Its UUID has the same high and low half, as `/qhasoff` builds them.
     let id = 0xabcd;

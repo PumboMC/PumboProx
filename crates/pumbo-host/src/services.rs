@@ -99,11 +99,13 @@ pub(crate) struct Services {
 
 impl Services {
     /// Registry from the manifests; several providers of one service need a
-    /// choice in `services.providers`.
+    /// choice in `services.providers`. `pumbo:permissions` comes only from
+    /// `permissions` (the plugin chosen in `permissions.provider`).
     pub fn new(
         plugins: &BTreeMap<String, Arc<PluginSlot>>,
         choice: &BTreeMap<String, String>,
         natives: Vec<Native>,
+        permissions: Option<&str>,
     ) -> Result<Services, String> {
         let mut candidates: BTreeMap<(String, u16), Vec<Provider>> = BTreeMap::new();
         for n in &natives {
@@ -139,6 +141,11 @@ impl Services {
                     };
                     if !allowed {
                         return Err(format!("{} may not provide {}", slot.id, p.service));
+                    }
+                    if p.service == pumbo_contracts::PERMISSIONS.name
+                        && permissions != Some(slot.id.as_str())
+                    {
+                        continue;
                     }
                 }
                 candidates

@@ -200,12 +200,17 @@ impl Host {
         }
         let commands = commands::Commands::new(&plugins).map_err(HostError::Config)?;
         check_unique(&plugins)?;
-        let services = services::Services::new(&plugins, &cfg.services.providers, natives)
-            .map_err(HostError::Config)?;
+        let perm_provider = permission_provider(&cfg, &plugins, &failed)?;
+        let services = services::Services::new(
+            &plugins,
+            &cfg.services.providers,
+            natives,
+            perm_provider.as_deref(),
+        )
+        .map_err(HostError::Config)?;
         let placeholders =
             placeholders::Placeholders::new(&plugins, &cfg).map_err(HostError::Config)?;
         check_failures(&cfg.plugins, &plugins, &failed)?;
-        let perm_provider = permission_provider(&cfg, &plugins, &failed)?;
         let blocked = services.blocked(&plugins);
         let styles = StyleSheet::new(cfg.style.iter().map(|(k, v)| (k.as_str(), v.as_str())));
         let mut http = http::Http::new(cfg.plugins.http_allow_private);
@@ -1251,12 +1256,19 @@ fn check_failures(
     Ok(())
 }
 
-/// The permission provider (`permissions.provider`): `auto` takes the plugin
-/// with `permission-provider: true` that provides `pumbo:permissions` (of
-/// several, the one chosen in `services.providers`, else a start error),
-/// `file` none. A named plugin that is not installed or provides no
-/// permissions stops the start instead of leaving an old `permissions.yml`
-/// in charge.
+/// The plugin `permissions.provider: auto` takes (the id of PumboPerms).
+/// Not the owner of `pumbo:permissions`: any plugin named in
+/// `permissions.provider` may provide it.
+const DEFAULT_PERMISSION_PROVIDER: &str = "pumbo-perms";
+
+/// The permission provider (`permissions.provider`): `auto` takes
+/// pumbo-perms when it is installed, else the file; another plugin with
+/// `permission-provider: true` that provides `pumbo:permissions` is used
+/// only when its id is named there. `file` uses no plugin. A named plugin
+/// that is not installed or provides no permissions stops the start
+/// instead of leaving an old `permissions.yml` in charge, and so does `auto`
+/// with only another provider installed. The services registry offers
+/// `pumbo:permissions` only from the plugin chosen here.
 fn permission_provider(
     cfg: &HostConfig,
     plugins: &BTreeMap<String, Arc<PluginSlot>>,
@@ -1273,11 +1285,10 @@ fn permission_provider(
         .filter(|s| provides(&s.manifest))
         .map(|s| &s.id)
         .collect();
+    let named = cfg.permissions.provider.as_str();
     // Starting without the provider would hand the network to the file and
     // take the backends out of proxy-rules, so two copies stop the start.
-    let wanted = |id: &str| {
-        cfg.permissions.provider == id || (cfg.permissions.provider == "auto" && able.is_empty())
-    };
+    let wanted = |id: &str| named == id || (named == "auto" && id == DEFAULT_PERMISSION_PROVIDER);
     let twins: Vec<&LoadFailure> = failed
         .iter()
         .filter(|f| {
@@ -1297,42 +1308,66 @@ fn permission_provider(
             ),
         });
     }
-    let named = cfg.permissions.provider.as_str();
-    if !matches!(named, "auto" | "file")
-        && let Some(f) = failed
-            .iter()
-            .find(|f| f.manifest.as_ref().is_some_and(|m| m.id == named))
+    let chosen = if named == "auto" {
+        DEFAULT_PERMISSION_PROVIDER
+    } else {
+        named
+    };
+    // A file whose manifest does not read is known only by its name
+    // (`pumbo-perms.wasm`, `PumboPerms.wasm`, `pumbo-perms.yml`).
+    let squash = |s: &str| -> String {
+        s.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|c| c.to_ascii_lowercase())
+            .collect()
+    };
+    let is_chosen = |f: &LoadFailure| match &f.manifest {
+        Some(m) => m.id == chosen,
+        None => std::path::Path::new(&f.file)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .is_some_and(|stem| squash(stem) == squash(chosen)),
+    };
+    if named != "file"
+        && let Some(f) = failed.iter().find(|f| is_chosen(f))
     {
         return Err(HostError::Plugin {
-            id: named.to_string(),
+            id: chosen.to_string(),
             message: format!(
-                "the permission provider did not load ({}): fix or replace {}, then start the proxy again",
-                f.reason, f.file
+                "the permission provider did not load ({}): fix or replace {}, or set permissions.provider: file to run on {} without it, then start the proxy again",
+                f.reason,
+                f.file,
+                cfg.permissions.file.display()
             ),
         });
     }
-    Ok(match cfg.permissions.provider.as_str() {
+    let provider = match named {
         "file" => None,
-        "auto" => match able.as_slice() {
-            [] => None,
-            [one] => Some((*one).clone()),
-            _ => {
-                let chosen = cfg
-                    .services
-                    .providers
-                    .get(pumbo_contracts::PERMISSIONS.name)
-                    .filter(|id| able.contains(id))
-                    .cloned();
-                if chosen.is_none() {
-                    let ids: Vec<&str> = able.iter().map(|s| s.as_str()).collect();
+        "auto" => {
+            let others: Vec<&str> = able
+                .iter()
+                .map(|s| s.as_str())
+                .filter(|id| *id != DEFAULT_PERMISSION_PROVIDER)
+                .collect();
+            if able.len() == others.len() {
+                if !others.is_empty() {
                     return Err(HostError::Config(format!(
-                        "permissions.provider: auto found several providers ({}); choose one in services.providers or permissions.provider",
-                        ids.join(", ")
+                        "permissions.provider is auto, which picks only {DEFAULT_PERMISSION_PROVIDER}; {} also provides permissions: set permissions.provider: {} to use it, or permissions.provider: file to use {}",
+                        others.join(", "),
+                        others.first().copied().unwrap_or_default(),
+                        cfg.permissions.file.display()
                     )));
                 }
-                chosen
+                None
+            } else {
+                for id in others {
+                    tracing::warn!(
+                        "{id} also provides permissions and is not used: permissions.provider is auto, which picks only {DEFAULT_PERMISSION_PROVIDER}; set permissions.provider: {id} to use it instead"
+                    );
+                }
+                Some(DEFAULT_PERMISSION_PROVIDER.to_string())
             }
-        },
+        }
         id if able.iter().any(|a| *a == id) => Some(id.to_string()),
         id if plugins.contains_key(id) => {
             return Err(HostError::Config(format!(
@@ -1345,7 +1380,21 @@ fn permission_provider(
                 cfg.plugins.dir.display()
             )));
         }
-    })
+    };
+    // `services.providers` cannot pick another plugin behind its back.
+    if let Some(other) = cfg
+        .services
+        .providers
+        .get(pumbo_contracts::PERMISSIONS.name)
+        .filter(|id| provider.as_deref() != Some(id.as_str()))
+    {
+        return Err(HostError::Config(format!(
+            "services.providers chooses {other} for {}, but permissions.provider picks {}: the permission plugin is chosen in permissions.provider (set permissions.provider: {other}), remove it from services.providers",
+            pumbo_contracts::PERMISSIONS.name,
+            provider.as_deref().unwrap_or("file")
+        )));
+    }
+    Ok(provider)
 }
 
 /// Start errors for names two plugins cannot share.

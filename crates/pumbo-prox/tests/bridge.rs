@@ -743,9 +743,10 @@ fn host_files(tag: &str, provider: bool) -> (PathBuf, String) {
         std::fs::copy(test_plugin(), plugins.join("perm.wasm")).unwrap();
     }
     let extra = format!(
-        "plugins:\n  dir: {:?}\npermissions:\n  file: {:?}\n  on-load-failure: file-only\n",
+        "plugins:\n  dir: {:?}\npermissions:\n  file: {:?}\n  on-load-failure: file-only\n  provider: {}\n",
         plugins.display().to_string(),
-        dir.join("permissions.yml").display().to_string()
+        dir.join("permissions.yml").display().to_string(),
+        if provider { "perm" } else { "file" }
     );
     (dir, extra)
 }
