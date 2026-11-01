@@ -14,7 +14,7 @@ use pumbo_protocol::crypto::ServerKey;
 use pumbo_protocol::{ProtocolVersion, VersionModule, VersionRegistry};
 use pumbo_text::Component;
 use tokio::sync::{Notify, Semaphore, mpsc, watch};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::config::{Config, ProxyProtocol, is_loopback_host, split_host_port};
@@ -251,7 +251,55 @@ pub struct PlayerEntry {
     commands_changed: Arc<Notify>,
     /// Teleports the client has not confirmed (PumboBridge holds its own).
     tp: crate::bridge::TpGate,
+    urgent: Arc<Urgent>,
 }
+
+/// A kick or a gate release for a session, kept apart from its queue so a
+/// full queue cannot lose it: a ban that lands while the player waits in a
+/// gate must not let the player in.
+#[derive(Debug, Default)]
+pub(crate) struct Urgent {
+    cmd: Mutex<Option<SessionCmd>>,
+    pub(crate) notify: Notify,
+    /// A command was dropped from the full queue and logged.
+    dropped: std::sync::atomic::AtomicBool,
+}
+
+impl Urgent {
+    /// A kick replaces a waiting release; the first kick stays, so a ban
+    /// reason is not replaced by a later text.
+    fn put(&self, cmd: SessionCmd) {
+        let mut slot = self
+            .cmd
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !matches!(*slot, Some(SessionCmd::Kick(_))) {
+            *slot = Some(cmd);
+        }
+        drop(slot);
+        self.notify.notify_one();
+    }
+
+    pub(crate) fn take(&self) -> Option<SessionCmd> {
+        self.cmd
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+}
+
+fn is_urgent(cmd: &SessionCmd) -> bool {
+    match cmd {
+        SessionCmd::Kick(_) => true,
+        SessionCmd::Virtual(v) => matches!(**v, crate::world::VirtualCmd::Release),
+        _ => false,
+    }
+}
+
+/// When a dropped session command was last logged at `warn`, for all players.
+static DROPPED_WARNED: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+/// At most one `warn` about dropped session commands in this time.
+const DROPPED_WARN_EVERY: Duration = Duration::from_secs(60);
 
 /// What a chat filter is asked about.
 #[derive(Debug, Clone, Copy)]
@@ -319,6 +367,8 @@ impl std::fmt::Debug for Proxy {
 pub struct PlayerGuard {
     proxy: Arc<Proxy>,
     id: Uuid,
+    /// Kicks and gate releases for the session.
+    pub(crate) urgent: Arc<Urgent>,
 }
 
 impl Drop for PlayerGuard {
@@ -594,6 +644,7 @@ impl Proxy {
             return None;
         }
         let (tx, rx) = mpsc::channel(SESSION_QUEUE);
+        let urgent = Arc::new(Urgent::default());
         p.insert(
             profile.id,
             PlayerEntry {
@@ -604,12 +655,14 @@ impl Proxy {
                 tx,
                 commands_changed: Arc::new(Notify::new()),
                 tp: crate::bridge::new_gate(),
+                urgent: urgent.clone(),
             },
         );
         Some((
             PlayerGuard {
                 proxy: self.clone(),
                 id: profile.id,
+                urgent,
             },
             rx,
         ))
@@ -654,14 +707,39 @@ impl Proxy {
     }
 
     /// Queues a command for a player's session; `false` if the player is
-    /// gone or the queue is full.
+    /// gone or the queue is full. Kicks and gate releases never wait in the
+    /// queue, so a full one cannot drop them.
     pub fn send_to(&self, id: Uuid, cmd: SessionCmd) -> bool {
-        let tx = self
-            .players
-            .lock()
-            .ok()
-            .and_then(|p| p.get(&id).map(|e| e.tx.clone()));
-        tx.is_some_and(|tx| tx.try_send(cmd).is_ok())
+        let Some((tx, urgent, name)) = self.players.lock().ok().and_then(|p| {
+            p.get(&id)
+                .map(|e| (e.tx.clone(), e.urgent.clone(), e.name.clone()))
+        }) else {
+            return false;
+        };
+        if is_urgent(&cmd) {
+            urgent.put(cmd);
+            return true;
+        }
+        match tx.try_send(cmd) {
+            Ok(()) => true,
+            Err(mpsc::error::TrySendError::Closed(_)) => false,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                Metrics::inc(&self.metrics.dropped_commands);
+                if !urgent.dropped.swap(true, Ordering::Relaxed) {
+                    debug!("the session of {name} is behind; commands for it are dropped");
+                }
+                let mut last = DROPPED_WARNED
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if last.is_none_or(|t| t.elapsed() >= DROPPED_WARN_EVERY) {
+                    *last = Some(std::time::Instant::now());
+                    warn!(
+                        "commands for players whose sessions are behind were dropped (pumboprox_dropped_packets_total{{kind=\"session_command\"}})"
+                    );
+                }
+                false
+            }
+        }
     }
 
     /// The player's visible commands changed; `false` if the player is gone.
@@ -881,6 +959,7 @@ pub(crate) fn off_worker<R>(f: impl FnOnce() -> R) -> R {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::VirtualCmd;
 
     /// A refresh that waits for the config lock (held by a reload that
     /// resolves server names) leaves the other tasks of its worker running.
@@ -908,5 +987,27 @@ mod tests {
         drop(held);
         assert!(ran, "the only worker is stuck waiting for the lock");
         rt.block_on(refresh).unwrap().unwrap();
+    }
+
+    #[test]
+    fn a_kick_beats_a_release_and_the_first_kick_stays() {
+        let u = Urgent::default();
+        let release = || SessionCmd::Virtual(Box::new(VirtualCmd::Release));
+        let kick = |t: &str| SessionCmd::Kick(Box::new(Component::text(t)));
+        u.put(release());
+        u.put(kick("You are banned."));
+        u.put(release());
+        u.put(kick("Kicked."));
+        assert!(
+            matches!(u.take(), Some(SessionCmd::Kick(t)) if t.plain_text() == "You are banned.")
+        );
+        assert!(u.take().is_none());
+        u.put(release());
+        assert!(matches!(u.take(), Some(SessionCmd::Virtual(_))));
+        assert!(is_urgent(&kick("x")) && is_urgent(&release()));
+        assert!(!is_urgent(&SessionCmd::Reconnect));
+        assert!(!is_urgent(&SessionCmd::Virtual(Box::new(
+            VirtualCmd::ClearInventory
+        ))));
     }
 }

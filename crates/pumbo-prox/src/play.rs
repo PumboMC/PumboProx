@@ -52,7 +52,7 @@ use crate::config::{PacksOnSwitch, SignedChatCancel, split_host_port};
 use crate::conn::{Conn, ConnError, WRITE_TIMEOUT};
 use crate::limits::TokenBucket;
 use crate::metrics::{GaugeGuard, Metrics};
-use crate::server::{ChatInput, PlayerGuard, Proxy, Runtime, SessionCmd};
+use crate::server::{ChatInput, PlayerGuard, Proxy, Runtime, SessionCmd, Urgent};
 use crate::session::{
     BackendFail, BackendVersion, Fail, backend_login, backend_version, ctx, forward, kick_in,
     queue, queue_out, random_bytes, stopped,
@@ -347,6 +347,8 @@ struct Play<'a> {
     deferred: Vec<SessionCmd>,
     last_reconnect: Option<Instant>,
     cmds: mpsc::Receiver<SessionCmd>,
+    /// Kicks and gate releases, outside the queue.
+    urgent: Arc<Urgent>,
     commands_changed: Arc<Notify>,
     packets: TokenBucket,
     bytes: TokenBucket,
@@ -440,6 +442,7 @@ pub(crate) async fn run(
         last_reconnect: None,
         commands_changed,
         cmds,
+        urgent: _guard.urgent.clone(),
         packets: TokenBucket::new(limits.client_packets_per_second),
         bytes: TokenBucket::new(limits.client_bytes_per_second),
         decoded: {
@@ -562,8 +565,15 @@ impl Play<'_> {
         let commands_changed = self.commands_changed.clone();
         let commands = commands_changed.notified();
         let timer = sleep_until(self.deadline(idle));
-        tokio::pin!(stop, commands, timer);
+        let urgent = self.urgent.clone();
+        let urgent_signal = urgent.notify.notified();
+        tokio::pin!(stop, commands, timer, urgent_signal);
         loop {
+            if let Some(cmd) = urgent.take()
+                && let Some(end) = self.urgent_cmd(cmd)
+            {
+                return end;
+            }
             self.follow_runtime();
             if let Err(end) = self.progress() {
                 return end;
@@ -585,6 +595,8 @@ impl Play<'_> {
             tokio::select! {
                 biased;
                 () = &mut stop => return end_kick("The proxy is shutting down."),
+                // Taken at the top of the loop.
+                () = &mut urgent_signal => urgent_signal.set(urgent.notify.notified()),
                 // The client is written here, so it is read while it takes its
                 // data slowly: holding its packets back would pass them on in
                 // one burst later, over the limits of the proxy and backend.
@@ -1444,6 +1456,19 @@ impl Play<'_> {
             }
         }
         None
+    }
+
+    /// A kick or a gate release (outside the queue). Commands queued before a
+    /// release go first, so a gate's last messages and worlds keep their order.
+    fn urgent_cmd(&mut self, cmd: SessionCmd) -> Option<End> {
+        if !matches!(cmd, SessionCmd::Kick(_)) {
+            while let Ok(queued) = self.cmds.try_recv() {
+                if let Some(end) = self.command(queued) {
+                    return Some(end);
+                }
+            }
+        }
+        self.command(cmd)
     }
 
     /// Permissions, context or plugin commands changed: the command tree and

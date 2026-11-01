@@ -790,6 +790,30 @@ async fn packet_flood_is_kicked_and_suggestion_flood_dropped() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_kick_is_not_lost_behind_a_full_queue() {
+    use pumbo_prox::server::SessionCmd;
+    let (backend, _) = fake_backend(BackendOpts::default()).await;
+    let (proxy, addr) = start_proxy(&config(backend, "")).await;
+    let mut c = login_to_play(addr, "Banned").await;
+    let id = proxy.find_player("Banned").unwrap().id;
+    let text = |t: &str| Box::new(pumbo_text::Component::text(t));
+    // Far more than the queue holds, faster than the session takes them.
+    let dropped = (0..5000)
+        .filter(|_| !proxy.send_to(id, SessionCmd::Message(text("spam"))))
+        .count();
+    assert!(dropped > 0);
+    assert!(proxy.send_to(id, SessionCmd::Kick(text("You are banned."))));
+    assert!(proxy.send_to(id, SessionCmd::Kick(text("Kicked."))));
+    assert_eq!(
+        wait_kick(&mut c, Duration::from_secs(10)).await.as_deref(),
+        Some("You are banned.")
+    );
+    let metrics = proxy.metrics.render();
+    let line = format!("pumboprox_dropped_packets_total{{kind=\"session_command\"}} {dropped}");
+    assert!(metrics.contains(&line), "{line}: {metrics}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn decompressed_bytes_are_limited_too() {
     let (backend, _) = fake_backend(BackendOpts::default()).await;
     let (proxy, addr) = start_proxy(&config(backend, "")).await;

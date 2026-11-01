@@ -61,6 +61,8 @@ metrics! {
     dropped_suggestions: counter "pumboprox_dropped_packets_total" "{kind=\"command_suggestion\"}";
     dropped_keep_alives: counter "pumboprox_dropped_packets_total" "{kind=\"keep_alive\"}";
     dropped_payloads: counter "pumboprox_dropped_packets_total" "{kind=\"custom_payload\"}";
+    /// Commands for a session whose queue was full (messages, titles, switches).
+    dropped_commands: counter "pumboprox_dropped_packets_total" "{kind=\"session_command\"}";
     bytes_from_clients: counter "pumboprox_bytes_total" "{from=\"client\"}";
     bytes_from_backends: counter "pumboprox_bytes_total" "{from=\"backend\"}";
     backend_connects: counter "pumboprox_backend_connects_total" "{result=\"ok\"}";
