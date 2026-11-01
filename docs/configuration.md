@@ -223,7 +223,7 @@ Worlds the proxy shows itself, without a server.
 
 | Key | Default | Description | Applies |
 | --- | --- | --- | --- |
-| `gate-timeout-ms` | `600000` | Longest time a plugin gate may hold a player in a virtual world | reload |
+| `gate-timeout-ms` | `120000` | Longest time the plugin gates may hold a player in a virtual world, all gates together: it starts when the player enters, while each gate's own `plugins.gate-timeout-ms` starts with that gate. Set it to at least the sum of the gates' timeouts (for example PumboFilter 30 s and PumboAuth 60 s: 90 s or more); the proxy warns at start when one gate alone is allowed longer | reload |
 | `test-gate` | `false` | For tests: every player first waits in a test world of the proxy, then goes to a server. `gate <player>` in the console sends a player there | reload |
 | `test-gate-seconds` | `10` | How long the test world holds a player; `0`: until the player types `/gate release` | reload |
 
@@ -295,7 +295,7 @@ The plugin host. Apart from `required-gates`, the plugin host reads this section
 | `budget-ms` | `200` | Longest stretch a plugin may run without returning to the proxy | restart |
 | `load-budget-ms` | `2000` | The same while a plugin loads (also after a reload or a restart of the plugin) | restart |
 | `init-timeout-ms` | `10000` | Time for a plugin to start | restart |
-| `gate-timeout-ms` | `300000` | Longest time one gate may hold a player | restart |
+| `gate-timeout-ms` | `120000` | Longest time one gate may hold a player; see also `virtual.gate-timeout-ms`. A gate plugin's own time limit above two minutes (PumboAuth `auth.timeout-seconds`, PumboFilter `captcha.timeout-seconds`) needs this and `virtual.gate-timeout-ms` raised too: the proxy does not read plugin settings and does not warn about them | restart |
 | `gate-timeouts` | `{}` | The same per gate name, for example `{ auth: 120000 }` | restart |
 | `gate-reload-wait-ms` | `10000` | How long players at a gate wait for that gate's plugin while it reloads or restarts | restart |
 | `timeouts` | `{}` | Deadline per event kind, for example `{ chat: 150 }`. Defaults: `handshake` and `status` 100, `pre-login`, `profile` and `login` 5000, `chat`, `backend-command` and `plugin-message` 200, `server-connect` and `server-kicked` 2000, `placeholder` 50, `permission-load` 2000, others 5000 | restart |

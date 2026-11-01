@@ -680,6 +680,26 @@ pub fn login_warnings(proxy: &Proxy) -> Vec<String> {
     out
 }
 
+/// Gate timeouts longer than `virtual.gate-timeout-ms`: that one counts the
+/// whole stay in the virtual world and ends it first.
+pub fn gate_timeout_warnings(host: &pumbo_host::HostConfig, virtual_ms: u64) -> Vec<String> {
+    let p = &host.plugins;
+    let mut over: Vec<(String, u64)> = p
+        .gate_timeouts
+        .iter()
+        .map(|(gate, ms)| (format!("plugins.gate-timeouts.{gate}"), *ms))
+        .collect();
+    over.push(("plugins.gate-timeout-ms".into(), p.gate_timeout_ms));
+    over.into_iter()
+        .filter(|(_, ms)| *ms > virtual_ms)
+        .map(|(key, ms)| {
+            format!(
+                "{key} ({ms}) is longer than virtual.gate-timeout-ms ({virtual_ms}), which limits the whole stay at the gates; set virtual.gate-timeout-ms to at least the sum of the gates' timeouts"
+            )
+        })
+        .collect()
+}
+
 /// What the console says about the claim code at the start.
 pub fn claim_hint(proxy: &Proxy, code: &str) -> String {
     let mode = proxy.runtime().config.login.online_mode();

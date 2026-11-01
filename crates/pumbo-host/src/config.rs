@@ -124,7 +124,7 @@ impl Default for PluginsConfig {
             budget_ms: 200,
             load_budget_ms: 2_000,
             gate_reload_wait_ms: 10_000,
-            gate_timeout_ms: 300_000,
+            gate_timeout_ms: 120_000,
             gate_timeouts: BTreeMap::new(),
             init_timeout_ms: 10_000,
             timeouts: BTreeMap::new(),

@@ -280,3 +280,25 @@ fn proxy_protocol_modes_and_wide_ranges() {
     ))
     .unwrap();
 }
+
+/// Both gate timeouts default to two minutes; a gate allowed longer than
+/// the virtual world's limit gets a warning at start.
+#[test]
+fn gate_timeouts_default_and_warn() {
+    use pumbo_prox::commands::gate_timeout_warnings;
+    let cfg = Config::parse(SAMPLE).unwrap();
+    let host = pumbo_host::HostConfig::parse(SAMPLE).unwrap();
+    assert_eq!(cfg.virtual_world.gate_timeout_ms, 120_000);
+    assert_eq!(host.plugins.gate_timeout_ms, 120_000);
+    assert!(gate_timeout_warnings(&host, cfg.virtual_world.gate_timeout_ms).is_empty());
+    let host = pumbo_host::HostConfig::parse(&format!(
+        "{SAMPLE}\nplugins:\n  gate-timeouts: {{ auth: 300000, filter: 30000 }}\n"
+    ))
+    .unwrap();
+    let w = gate_timeout_warnings(&host, 120_000);
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(
+        w[0].starts_with("plugins.gate-timeouts.auth (300000)"),
+        "{w:?}"
+    );
+}

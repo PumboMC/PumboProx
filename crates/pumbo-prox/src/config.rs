@@ -399,7 +399,9 @@ pub struct VirtualConfig {
     /// a server.
     pub test_gate: bool,
     pub test_gate_seconds: u64,
-    /// Hard limit for a player held by a gate in a virtual world (§5.6).
+    /// Hard limit for a player held by the gates in a virtual world (§5.6),
+    /// for the whole stay: it starts once, while each gate's own timeout
+    /// (`plugins.gate-timeout-ms`) starts with that gate.
     pub gate_timeout_ms: u64,
 }
 
@@ -408,7 +410,7 @@ impl Default for VirtualConfig {
         Self {
             test_gate: false,
             test_gate_seconds: 10,
-            gate_timeout_ms: 600_000,
+            gate_timeout_ms: 120_000,
         }
     }
 }

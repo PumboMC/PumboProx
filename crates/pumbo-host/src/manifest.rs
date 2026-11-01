@@ -412,7 +412,7 @@ impl EventKind {
             EventKind::PermissionLoad => 2000,
             EventKind::Placeholder => 50,
             // Gates have their own `gate-timeout` (plan §5.6).
-            EventKind::Gate => 300_000,
+            EventKind::Gate => 120_000,
             _ => 5000,
         }
     }

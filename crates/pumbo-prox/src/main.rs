@@ -267,6 +267,12 @@ fn run(path: &str) -> ExitCode {
         for w in pumbo_prox::commands::login_warnings(&proxy) {
             warn!("{w}");
         }
+        if let Some(p) = proxy.plugins.get() {
+            let virtual_ms = proxy.runtime().config.virtual_world.gate_timeout_ms;
+            for w in pumbo_prox::commands::gate_timeout_warnings(p.host.config(), virtual_ms) {
+                warn!("{w}");
+            }
+        }
         if let Some(code) = pumbo_prox::commands::claim_code(&proxy) {
             warn!("{}", pumbo_prox::commands::claim_hint(&proxy, &code));
         }
