@@ -43,6 +43,13 @@ plugins:
 #   enabled: true
 #   listen: "127.0.0.1:25578"
 #   key-file: bridge.key
+#   allow-public: false   # true accepts 0.0.0.0 or a public address
+
+# Players online at most (0: no limit; operators join anyway) and players
+# the login gates (PumboAuth, PumboFilter) hold at once.
+# limits:
+#   max-players: 0
+#   max-in-gates: 500
 
 # Players wait in an empty world while no server is available, and join one
 # as soon as it is ready.
