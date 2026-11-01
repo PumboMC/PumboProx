@@ -98,7 +98,7 @@ servers:
 | `chat-session-forwarding` | `true` | Pass the client's chat session to the server. `false`: the server treats all chat as unsigned | reload |
 | `signed-chat-cancel` | `drop` | What happens when a plugin cancels a signed chat message on this server. `drop`: the message is dropped and the player stays. `kick`: the player is disconnected with `messages.signed-chat-blocked`. Vanilla and Paper reject every later signed message after a dropped one until the player reconnects; Pumpkin does not check | reload |
 | `allow-public` | `false` | Accept an `address` outside private networks anyway. Use it only when the connection is protected some other way | reload |
-| `allow-transfers` | `false` | Pass the server's `transfer` packets on to the client. Without it a transfer to another server of the network becomes a normal switch and any other transfer is dropped | reload |
+| `allow-transfers` | `false` | Pass the server's `transfer` packets on to the client. Without it a transfer to another server of the network becomes a normal switch and any other transfer is dropped. Such a server also uses the player's own cookies in configuration and play, which go with a transfer; a cookie it asks for while the player logs in to it comes back empty, as the client is past its own login then. Any other server gets cookies the proxy keeps for it alone during the session | reload |
 
 Servers of [`managed-servers`](#managed-servers) join this list on their own; a server here wins over one of the proxy with the same name.
 
