@@ -20,9 +20,13 @@ use tokio::time::Instant;
 /// A write that takes longer than this means the peer stopped reading.
 pub(crate) const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 const READ_CHUNK: usize = 32 * 1024;
-/// A buffer that held more than this (the chunks of a join, say) gets a
-/// fresh allocation once it is empty, so a burst does not stay in memory.
-const SHRINK_ABOVE: usize = 256 * 1024;
+/// A read buffer that grew over this (with the chunks of a join, say) gets
+/// a fresh allocation once it is empty and the burst is over, so the burst
+/// does not stay in memory. Two reads' worth: it grows past that only
+/// around big frames.
+const SHRINK_READ_ABOVE: usize = 2 * READ_CHUNK;
+/// The same for the write buffers, once all they held is written.
+const SHRINK_WRITE_ABOVE: usize = 256 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConnError {
@@ -45,9 +49,12 @@ pub struct Conn {
     obuf: BytesMut,
     /// Since when bytes wait for the peer, and how many it took meanwhile.
     stalled: Option<(Instant, usize)>,
-    /// `rbuf`, or `wbuf` and `obuf`, held over [`SHRINK_ABOVE`] bytes.
+    /// `rbuf` grew over [`SHRINK_READ_ABOVE`], `wbuf` and `obuf` over
+    /// [`SHRINK_WRITE_ABOVE`].
     read_burst: bool,
     write_burst: bool,
+    /// The last read took less than [`READ_CHUNK`]: the peer sent all it had.
+    read_quiet: bool,
     pub inbound: FrameConfig,
     pub outbound: FrameConfig,
     decrypt: Option<Cfb8Decrypt>,
@@ -87,6 +94,7 @@ impl Conn {
             stalled: None,
             read_burst: false,
             write_burst: false,
+            read_quiet: false,
             inbound,
             outbound,
             decrypt: None,
@@ -140,18 +148,22 @@ impl Conn {
     }
 
     fn poll_fill(&mut self, cx: &mut Context<'_>) -> Poll<Result<usize, ConnError>> {
-        // Empty, so no frame is half-read.
-        if self.read_burst && self.rbuf.is_empty() {
+        // Empty, so no frame is half-read; quiet, so a burst does not get a
+        // small buffer to grow again for each of its frames.
+        if self.read_burst && self.read_quiet && self.rbuf.is_empty() {
             self.rbuf = BytesMut::new();
             self.read_burst = false;
         }
         let start = self.rbuf.len();
         self.rbuf.reserve(READ_CHUNK);
+        // Frames are taken off the front, so the length stays small while
+        // the allocation behind it grows.
+        self.read_burst |= self.rbuf.capacity() > SHRINK_READ_ABOVE;
         let n = ready!(pin!(self.stream.read_buf(&mut self.rbuf)).poll(cx))?;
         if n == 0 {
             return Poll::Ready(Err(ConnError::Closed));
         }
-        self.read_burst |= self.rbuf.len() > SHRINK_ABOVE;
+        self.read_quiet = n < READ_CHUNK;
         if let (Some(dec), Some(fresh)) = (&mut self.decrypt, self.rbuf.get_mut(start..)) {
             dec.apply(fresh);
         }
@@ -185,7 +197,7 @@ impl Conn {
             return Poll::Ready(Err(ConnError::WriteTimeout));
         }
         // Everything queued passes here, so this sees the most that waited.
-        self.write_burst |= self.pending() > SHRINK_ABOVE;
+        self.write_burst |= self.pending() > SHRINK_WRITE_ABOVE;
         if !self.wbuf.is_empty() {
             let mut fresh = self.wbuf.split();
             if let Some(enc) = &mut self.encrypt {
@@ -396,6 +408,11 @@ mod tests {
         assert_eq!((c.pending(), c.stalled_since()), (0, None));
     }
 
+    /// Over [`SHRINK_WRITE_ABOVE`].
+    const WRITE_BURST: usize = 300_000;
+    /// Over [`SHRINK_READ_ABOVE`], under [`SHRINK_WRITE_ABOVE`].
+    const READ_BURST: usize = 200_000;
+
     /// After a burst, empty buffers let go of the memory it took.
     #[tokio::test]
     async fn buffers_shrink_after_a_burst() {
@@ -405,30 +422,35 @@ mod tests {
             FrameConfig::from_client(),
             FrameConfig::from_client(),
         );
-        // Out: a megabyte, all taken by the peer.
-        c.queue(0, &[7; 1 << 20]).unwrap();
+        // Out: a burst, all taken by the peer.
+        c.queue(0, &[7; WRITE_BURST]).unwrap();
         let burst = c.wbuf.as_ptr_range();
         let (r, _) = tokio::join!(c.flush(), async {
-            let mut took = vec![0; c_len(1 << 20)];
+            let mut took = vec![0; c_len(WRITE_BURST)];
             peer.read_exact(&mut took).await.unwrap();
         });
         r.unwrap();
         let kept = |p: *const u8| p >= burst.start && p <= burst.end;
         assert!(!kept(c.wbuf.as_ptr()) && !kept(c.obuf.as_ptr()));
-        // In: a megabyte frame, then a small one.
+        // In: a big frame, then a small one.
         let mut big = BytesMut::new();
-        frame::encode(&mut big, 0, &[7; 1 << 20], &FrameConfig::from_client()).unwrap();
+        frame::encode(&mut big, 0, &[7; READ_BURST], &FrameConfig::from_client()).unwrap();
         frame::encode(&mut big, 0, &[7; 10], &FrameConfig::from_client()).unwrap();
         let (r, ()) = tokio::join!(peer.write_all(&big), async {
             let (f, _) = c.read_frame().await.unwrap();
-            assert_eq!(f.payload.len(), 1 << 20);
+            assert_eq!(f.payload.len(), READ_BURST);
             let (f, _) = c.read_frame().await.unwrap();
             assert_eq!(f.payload.len(), 10);
         });
         r.unwrap();
-        // The next read starts in a fresh buffer.
+        // Then a quiet read: the next one starts in a fresh buffer.
+        let mut small = BytesMut::new();
+        frame::encode(&mut small, 0, &[7; 10], &FrameConfig::from_client()).unwrap();
+        let (r, f) = tokio::join!(peer.write_all(&small), c.read_frame());
+        r.unwrap();
+        assert_eq!(f.unwrap().0.payload.len(), 10);
         let _ = tokio::time::timeout(Duration::from_millis(20), c.fill()).await;
-        assert!(c.rbuf.capacity() < SHRINK_ABOVE, "{}", c.rbuf.capacity());
+        assert!(c.rbuf.capacity() <= READ_CHUNK, "{}", c.rbuf.capacity());
     }
 
     /// Length of a frame with an uncompressed body of `n` bytes and id 0.
