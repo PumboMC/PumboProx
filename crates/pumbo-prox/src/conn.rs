@@ -242,6 +242,11 @@ impl Conn {
         let _ = self.rbuf.split_to(n.min(self.rbuf.len()));
     }
 
+    /// Decoded size of the next complete frame, before it is inflated.
+    pub fn next_size(&self) -> Option<usize> {
+        frame::decoded_size(&self.rbuf, &self.inbound)
+    }
+
     /// The next complete frame in the buffer, with its body as received
     /// (empty for a translated frame, which has no body to pass on).
     pub fn next_frame(&mut self) -> Result<Option<(RawFrame, Bytes)>, FrameError> {

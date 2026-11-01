@@ -887,6 +887,33 @@ async fn decompressed_bytes_are_limited_too() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_frame_is_charged_its_declared_size_before_inflating() {
+    let (backend, _) = fake_backend(BackendOpts::default()).await;
+    // 400 KB of decompressed data per second.
+    let extra = "  client-bytes-per-second: 100000\n";
+    let (_proxy, addr) = start_proxy(&config(backend, extra)).await;
+    let mut c = login_to_play(addr, "Declarer").await;
+    // A real 512 KiB packet uses the limit up.
+    let id = module(777)
+        .packet_id(Phase::Play, Direction::Serverbound, PacketKind::Pong)
+        .unwrap();
+    c.send_raw(id, &vec![0u8; 512 * 1024]).await.unwrap();
+    // A few bytes that declare 1 MiB: refused before any inflating, so
+    // the kick is the limit, not broken compressed data.
+    let mut body = Vec::new();
+    body.put_varint(1 << 20);
+    body.extend_from_slice(&[0x78, 0x9C, 0x03, 0x00]);
+    let mut frame = Vec::new();
+    frame.put_varint(body.len() as i32);
+    frame.extend_from_slice(&body);
+    c.write_bytes(&frame).await.unwrap();
+    assert_eq!(
+        wait_kick(&mut c, Duration::from_secs(3)).await.as_deref(),
+        Some("Too many packets.")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn compression_bomb_and_oversized_frames_close_the_connection() {
     let (backend, _) = fake_backend(BackendOpts::default()).await;
     let (proxy, addr) = start_proxy(&config(backend, "")).await;

@@ -2239,12 +2239,19 @@ impl Play<'_> {
     async fn client_frames(&mut self) -> Option<End> {
         self.follow_runtime();
         loop {
+            // Charged before inflating: a small frame may declare 2 MiB.
+            if let Some(n) = self.client.next_size()
+                && !self.decoded.take(n as f64)
+            {
+                Metrics::inc(&self.proxy.metrics.kicked_packet_rate);
+                return Some(end_kick("Too many packets."));
+            }
             let (f, body) = match self.client.next_frame() {
                 Ok(Some(x)) => x,
                 Ok(None) => return None,
                 Err(e) => return Some(End::Protocol(e.to_string())),
             };
-            if !self.packets.take(1.0) || !self.decoded.take(f.payload.len() as f64) {
+            if !self.packets.take(1.0) {
                 Metrics::inc(&self.proxy.metrics.kicked_packet_rate);
                 return Some(end_kick("Too many packets."));
             }

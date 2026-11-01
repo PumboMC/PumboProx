@@ -135,6 +135,23 @@ pub fn decode_raw(
     Ok(Some((frame, body)))
 }
 
+/// Size of the next complete frame in `buf` once decoded (the declared
+/// uncompressed length of a compressed one), read before anything is
+/// inflated; `None` while the frame is incomplete or its header is broken
+/// (decoding reports that).
+pub fn decoded_size(buf: &[u8], cfg: &FrameConfig) -> Option<usize> {
+    let (len, prefix) = peek_length(buf).ok()??;
+    let body = buf.get(prefix..prefix.checked_add(len)?)?;
+    if cfg.threshold.is_none() {
+        return Some(len);
+    }
+    let mut r = Reader::new(body);
+    match usize::try_from(r.varint().ok()?).ok()? {
+        0 => Some(r.remaining()),
+        declared => Some(declared),
+    }
+}
+
 /// Appends a frame body taken from [`decode_raw`]: the length prefix and the
 /// body unchanged. Only valid towards a peer with the same compression
 /// threshold as the side the body came from.
@@ -334,6 +351,21 @@ mod tests {
             assert_eq!((b.id, b.payload.len()), (0x7F, 1000));
             assert!(buf.is_empty());
             assert_eq!(decode(&mut buf, &c), Ok(None));
+        }
+    }
+
+    #[test]
+    fn decoded_size_is_known_before_inflating() {
+        for threshold in [None, Some(64)] {
+            let c = cfg(threshold);
+            let mut buf = BytesMut::new();
+            encode(&mut buf, 0x05, b"short", &c).unwrap();
+            encode(&mut buf, 0x7F, &[7u8; 1000], &c).unwrap();
+            assert_eq!(decoded_size(&buf, &c), Some(6));
+            decode(&mut buf, &c).unwrap();
+            // Id and payload, from the header of the compressed frame.
+            assert_eq!(decoded_size(&buf, &c), Some(1001));
+            assert_eq!(decoded_size(&buf[..buf.len() - 1], &c), None);
         }
     }
 
