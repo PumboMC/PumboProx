@@ -209,9 +209,10 @@ async fn gate_plugin_decides_at_login() {
         login(addr, "locale_steve").await.as_deref(),
         Some("locale pl_pl")
     );
-    // ...and settings that arrive a moment later in their own segment.
+    // ...and settings that arrive a moment later in their own segment. Another
+    // name: the proxy may still be closing the first session.
     assert_eq!(
-        login_with(addr, "locale_steve", Some(Duration::from_millis(100)))
+        login_with(addr, "locale_alex", Some(Duration::from_millis(100)))
             .await
             .as_deref(),
         Some("locale pl_pl")
