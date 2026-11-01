@@ -329,7 +329,12 @@ enum Step {
 struct Play<'a> {
     proxy: &'a Arc<Proxy>,
     rt: Arc<Runtime>,
-    module: Arc<dyn VersionModule>,
+    /// The client's version module, borrowed: packets read it without
+    /// touching the shared `Arc`'s count, which every session of the same
+    /// version would contend on.
+    module: &'a dyn VersionModule,
+    /// The same module, for what keeps its own handle (a virtual world).
+    module_arc: Arc<dyn VersionModule>,
     player: ForwardedPlayer,
     peer: SocketAddr,
     host: String,
@@ -427,7 +432,8 @@ pub(crate) async fn run(
         proxy,
         rt: rt.clone(),
         trail: pumpkin_trail(module.protocol()),
-        module,
+        module: &*module,
+        module_arc: module.clone(),
         player: ForwardedPlayer {
             profile,
             address: peer.ip(),
@@ -535,7 +541,7 @@ pub(crate) async fn run(
     let reason = match end {
         End::Kick(text) => {
             let phase = play.out_phase;
-            let _ = kick_in(&mut play.client, &*play.module, phase, &text).await;
+            let _ = kick_in(&mut play.client, play.module, phase, &text).await;
             text.plain_text()
         }
         End::BackendKicked => "kicked by the backend".into(),
@@ -779,7 +785,7 @@ impl Play<'_> {
             self.own_keep_alive = Some(id);
             self.own_keep_alive_at = now;
             let phase = self.out_phase;
-            if let Err(e) = queue_out(&mut self.client, &*self.module, phase, &KeepAlive { id }) {
+            if let Err(e) = queue_out(&mut self.client, self.module, phase, &KeepAlive { id }) {
                 return Some(e.into());
             }
         }
@@ -867,8 +873,8 @@ impl Play<'_> {
     /// Clears what would outlive the server and sends `start_configuration`
     /// (outside a bundle, §3.3 step 4).
     fn reconfigure(&mut self) -> Result<(), End> {
-        let module = self.module.clone();
-        let m = &*module;
+        let module = self.module;
+        let m = module;
         let c = &mut self.client;
         let p = Phase::Play;
         for id in std::mem::take(&mut self.tracked.bossbars) {
@@ -994,7 +1000,7 @@ impl Play<'_> {
 
     /// What a client sends right after login: settings and brand.
     fn send_settings(&self, conn: &mut Conn, settings: bool, brand: bool) -> Result<(), Fail> {
-        let m = &*self.module;
+        let m = self.module;
         let mut send = |kind: PacketKind, payload: &Bytes| -> Result<(), Fail> {
             if let Some(id) = m.packet_id(Phase::Configuration, Direction::Serverbound, kind) {
                 conn.queue(id, payload)?;
@@ -1267,8 +1273,8 @@ impl Play<'_> {
 
     /// Reads the ready server: answers keep-alives and pings, holds the rest.
     fn buffer_next(&mut self) -> Option<End> {
-        let module = self.module.clone();
-        let m = &*module;
+        let module = self.module;
+        let m = module;
         let limit = self.rt.config.switching.config_buffer_bytes;
         let cb = ctx(m, Direction::Clientbound);
         let target = self
@@ -1593,8 +1599,8 @@ impl Play<'_> {
         if !self.in_play() {
             return;
         }
-        let module = self.module.clone();
-        if let Err(e) = f(&*module, &mut self.client) {
+        let module = self.module;
+        if let Err(e) = f(module, &mut self.client) {
             debug!("{}: {e:?}", self.player.profile.name);
         }
     }
@@ -1647,7 +1653,7 @@ impl Play<'_> {
         let Some(p) = self.proxy.plugins.get() else {
             return;
         };
-        let sb = ctx(&*self.module, Direction::Serverbound);
+        let sb = ctx(self.module, Direction::Serverbound);
         if let Ok(c) = packets::decode::<pc::ClientInformation>(payload, &sb) {
             p.settings(self.player.profile.id, &c);
         }
@@ -1712,8 +1718,8 @@ impl Play<'_> {
     }
 
     fn plugin_message(&mut self, channel: String, data: Vec<u8>, to_backend: bool) {
-        let module = self.module.clone();
-        let m = &*module;
+        let module = self.module;
+        let m = module;
         let result = if to_backend {
             match self.backend.as_mut() {
                 Some(b) => queue(
@@ -1782,7 +1788,7 @@ impl Play<'_> {
         }
         let profile = crate::session::to_wire(&self.player.profile);
         let mut player =
-            VirtualPlayer::new(self.module.clone(), profile, e.world, e.at, e.commands);
+            VirtualPlayer::new(self.module_arc.clone(), profile, e.world, e.at, e.commands);
         let mut out = Vec::new();
         player
             .start(&mut out)
@@ -1906,22 +1912,19 @@ impl Play<'_> {
                     pitch,
                 },
                 Some(v),
-            ) if v.player.in_play() => pumbo_virtual::player::sound(
-                &*self.module,
-                &name,
-                v.player.position(),
-                volume,
-                pitch,
-            )
-            .and_then(|s| {
-                let payload = packets::encode(&s, &ctx(&*self.module, Direction::Clientbound))?;
-                let id = self
-                    .module
-                    .packet_id(Phase::Play, Direction::Clientbound, PacketKind::Sound)
-                    .ok_or(pumbo_virtual::Error::NoPacket(PacketKind::Sound))?;
-                out.push((id, Bytes::from(payload)));
-                Ok(())
-            }),
+            ) if v.player.in_play() => {
+                pumbo_virtual::player::sound(self.module, &name, v.player.position(), volume, pitch)
+                    .and_then(|s| {
+                        let payload =
+                            packets::encode(&s, &ctx(&*self.module, Direction::Clientbound))?;
+                        let id = self
+                            .module
+                            .packet_id(Phase::Play, Direction::Clientbound, PacketKind::Sound)
+                            .ok_or(pumbo_virtual::Error::NoPacket(PacketKind::Sound))?;
+                        out.push((id, Bytes::from(payload)));
+                        Ok(())
+                    })
+            }
             _ => Ok(()),
         };
         if let Err(e) = result {
@@ -2046,8 +2049,8 @@ impl Play<'_> {
             }],
             root: 0,
         };
-        add_literals(&*self.module, &mut tree, 0, names)?;
-        queue_out(&mut self.client, &*self.module, Phase::Play, &tree)
+        add_literals(self.module, &mut tree, 0, names)?;
+        queue_out(&mut self.client, self.module, Phase::Play, &tree)
     }
 
     /// In the Pumbox with nothing going on.
@@ -2065,8 +2068,8 @@ impl Play<'_> {
         kind: Option<PacketKind>,
         f: &RawFrame,
     ) -> Result<Step, Fail> {
-        let module = self.module.clone();
-        let sb = ctx(&*module, Direction::Serverbound);
+        let module = self.module;
+        let sb = ctx(module, Direction::Serverbound);
         match kind {
             Some(PacketKind::ClientInformation) => {
                 self.tracked.client_information = Some(f.payload.clone());
@@ -2149,7 +2152,7 @@ impl Play<'_> {
             content,
             overlay: false,
         };
-        if let Err(e) = queue_out(&mut self.client, &*self.module, Phase::Play, &msg) {
+        if let Err(e) = queue_out(&mut self.client, self.module, Phase::Play, &msg) {
             debug!("system message: {e:?}");
         }
     }
@@ -2198,12 +2201,7 @@ impl Play<'_> {
         );
         if in_bundle && phase == Phase::Play && self.out_phase == Phase::Play {
             // Close the bundle the server left open before start_configuration.
-            let _ = queue_out(
-                &mut self.client,
-                &*self.module,
-                Phase::Play,
-                &BundleDelimiter,
-            );
+            let _ = queue_out(&mut self.client, self.module, Phase::Play, &BundleDelimiter);
         }
         if self.request.is_some() {
             // A switch in progress goes on; a join or fallback tries the next candidate.
@@ -2272,8 +2270,8 @@ impl Play<'_> {
     }
 
     async fn client_step(&mut self, f: &RawFrame) -> Result<Step, Fail> {
-        let module = self.module.clone();
-        let sb = ctx(&*module, Direction::Serverbound);
+        let module = self.module;
+        let sb = ctx(module, Direction::Serverbound);
         let kind = module.packet_kind(self.client_phase, Direction::Serverbound, f.id);
         let m = &self.proxy.metrics;
         Ok(match (self.client_phase, kind) {
@@ -2547,7 +2545,7 @@ impl Play<'_> {
         {
             queue(
                 &mut b.conn,
-                &*self.module,
+                self.module,
                 Phase::Play,
                 Direction::Serverbound,
                 &ChatAck { offset },
@@ -2629,7 +2627,7 @@ impl Play<'_> {
     ) -> Result<Step, Fail> {
         let line = s.text.strip_prefix('/').unwrap_or(&s.text);
         let answer = suggestions(s.id, &s.text, line, start, matches);
-        queue_out(&mut self.client, &*self.module, Phase::Play, &answer)?;
+        queue_out(&mut self.client, self.module, Phase::Play, &answer)?;
         Ok(Step::Drop)
     }
 
@@ -2681,7 +2679,7 @@ impl Play<'_> {
                 if let Some(end) = fwd(self) {
                     return Some(end);
                 }
-                let cb = ctx(&*self.module, Direction::Clientbound);
+                let cb = ctx(self.module, Direction::Clientbound);
                 match packets::decode::<Login>(&f.payload, &cb) {
                     Ok(login) => self.joined(&login),
                     Err(e) => return Some(End::Protocol(format!("backend login: {e}"))),
@@ -2692,8 +2690,8 @@ impl Play<'_> {
     }
 
     fn backend_step(&mut self, f: &RawFrame) -> Result<Step, Fail> {
-        let module = self.module.clone();
-        let cb = ctx(&*module, Direction::Clientbound);
+        let module = self.module;
+        let cb = ctx(module, Direction::Clientbound);
         let Some((phase, joined)) = self.backend.as_ref().map(|b| (b.phase, b.joined)) else {
             return Ok(Step::Drop);
         };
@@ -2888,7 +2886,7 @@ impl Play<'_> {
         if self.transfers_allowed(&from) {
             return Ok(Step::Forward);
         }
-        let t: Transfer = packets::decode(&f.payload, &ctx(&*self.module, Direction::Clientbound))?;
+        let t: Transfer = packets::decode(&f.payload, &ctx(self.module, Direction::Clientbound))?;
         let to = self.transfer_blocked(&from, &t);
         if phase == Phase::Configuration {
             // A join or switch in progress tries the named server next.
@@ -2925,10 +2923,8 @@ impl Play<'_> {
             return Step::Forward;
         };
         let name = &self.player.profile.name;
-        match packets::decode::<StoreCookie>(
-            &f.payload,
-            &ctx(&*self.module, Direction::Clientbound),
-        ) {
+        match packets::decode::<StoreCookie>(&f.payload, &ctx(self.module, Direction::Clientbound))
+        {
             Ok(c) => {
                 let jar = self.tracked.cookies.entry(server.clone()).or_default();
                 if jar.len() < MAX_COOKIES || jar.contains_key(&c.key) {
@@ -2950,8 +2946,8 @@ impl Play<'_> {
         let Some(server) = self.cookie_jar_owner() else {
             return Ok(Step::Forward);
         };
-        let module = self.module.clone();
-        let c: CookieRequest = packets::decode(&f.payload, &ctx(&*module, Direction::Clientbound))?;
+        let module = self.module;
+        let c: CookieRequest = packets::decode(&f.payload, &ctx(module, Direction::Clientbound))?;
         let payload = self
             .tracked
             .cookies
@@ -2963,13 +2959,7 @@ impl Play<'_> {
                 key: c.key,
                 payload,
             };
-            queue(
-                &mut b.conn,
-                &*module,
-                phase,
-                Direction::Serverbound,
-                &answer,
-            )?;
+            queue(&mut b.conn, module, phase, Direction::Serverbound, &answer)?;
         }
         Ok(Step::Drop)
     }
@@ -3001,8 +2991,8 @@ impl Play<'_> {
 
     /// The new server's configuration ends: drop what the old one left (§3.3).
     fn before_finish(&mut self) -> Result<(), Fail> {
-        let module = self.module.clone();
-        let m = &*module;
+        let module = self.module;
+        let m = module;
         let cfg = Phase::Configuration;
         let epoch = self.epoch;
         let t = &mut self.tracked;
@@ -3050,13 +3040,7 @@ impl Play<'_> {
                         ResourcePackResponse::SUCCESSFULLY_LOADED,
                     ] {
                         let r = ResourcePackResponse { id: p.id, result };
-                        queue(
-                            &mut b.conn,
-                            &*self.module,
-                            phase,
-                            Direction::Serverbound,
-                            &r,
-                        )?;
+                        queue(&mut b.conn, self.module, phase, Direction::Serverbound, &r)?;
                     }
                 }
                 return Ok(Step::Drop);
@@ -3085,7 +3069,7 @@ impl Play<'_> {
             let mut data = Vec::new();
             data.put_string(&format!("{brand}{suffix}"), 32_767)?;
             let p = ClientboundCustomPayload { channel, data };
-            queue_out(&mut self.client, &*self.module, phase, &p)?;
+            queue_out(&mut self.client, self.module, phase, &p)?;
             return Ok(Step::Drop);
         }
         if bungee::is_channel(&channel) {
@@ -3101,7 +3085,7 @@ impl Play<'_> {
         }
         if f.payload.len() > pc::MAX_PAYLOAD_FROM_SERVER {
             // Decoding enforces the 1 MiB limit for backends.
-            let cb = ctx(&*self.module, Direction::Clientbound);
+            let cb = ctx(self.module, Direction::Clientbound);
             if packets::decode::<ClientboundCustomPayload>(&f.payload, &cb).is_err() {
                 Metrics::inc(&self.proxy.metrics.dropped_payloads);
                 return Ok(Step::Drop);
@@ -3126,7 +3110,7 @@ impl Play<'_> {
                 if let Some(b) = self.backend.as_mut()
                     && let Err(e) = queue(
                         &mut b.conn,
-                        &*self.module,
+                        self.module,
                         Phase::Play,
                         Direction::Serverbound,
                         &p,
@@ -3147,8 +3131,8 @@ impl Play<'_> {
     /// Adds the proxy commands to the backend's tree (§2.8); a tree that
     /// cannot be read goes through as it is.
     fn merge_commands(&mut self, f: &RawFrame) -> Result<Step, Fail> {
-        let module = self.module.clone();
-        let m = &*module;
+        let module = self.module;
+        let m = module;
         let cb = ctx(m, Direction::Clientbound);
         let mut tree: Commands = match packets::decode(&f.payload, &cb) {
             Ok(t) => t,
