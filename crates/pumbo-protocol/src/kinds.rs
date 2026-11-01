@@ -205,6 +205,8 @@ pub const KNOWN_PACKETS: &[(Phase, Direction, PacketKind)] = &[
     (Pl, C, K::Disconnect),
     (Pl, C, K::Transfer),
     (Pl, C, K::StoreCookie),
+    (Pl, C, K::ServerLinks),
+    (Pl, C, K::CustomReportDetails),
     (Pl, C, K::BundleDelimiter),
     (Pl, C, K::ResourcePackPush),
     (Pl, C, K::ResourcePackPop),

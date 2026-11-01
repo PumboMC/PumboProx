@@ -23,8 +23,9 @@ use pumbo_nbt::Tag;
 use pumbo_protocol::frame::FrameConfig;
 use pumbo_protocol::packets::commands::{Commands, FLAG_EXECUTABLE, NODE_LITERAL, NODE_ROOT, Node};
 use pumbo_protocol::packets::common::{
-    ClientboundCustomPayload, Disconnect, KeepAlive, ResourcePackPush, ResourcePackResponse,
-    ServerboundCustomPayload, Transfer,
+    ClientboundCustomPayload, CustomReportDetails, Disconnect, KeepAlive, ResourcePackPush,
+    ResourcePackResponse, ServerLink, ServerLinkLabel, ServerLinks, ServerboundCustomPayload,
+    Transfer,
 };
 use pumbo_protocol::packets::configuration::FinishConfiguration;
 use pumbo_protocol::packets::login::{
@@ -85,6 +86,8 @@ enum Ctl {
     Payload(&'static str, Vec<u8>),
     Bundle,
     Transfer(String, i32),
+    /// Server links and report details in play.
+    Links,
 }
 
 #[derive(Debug, Default)]
@@ -455,6 +458,16 @@ async fn serve(
                 }
                 Some(Ctl::Transfer(host, port)) => {
                     send(&mut c, m, p, &Transfer { host, port });
+                    c.flush().await.map_err(e)?;
+                }
+                Some(Ctl::Links) => {
+                    let links = vec![ServerLink {
+                        label: ServerLinkLabel::BuiltIn(0),
+                        url: "https://example.invalid/".into(),
+                    }];
+                    send(&mut c, m, p, &ServerLinks { links });
+                    let details = vec![("lobby".into(), "1".into())];
+                    send(&mut c, m, p, &CustomReportDetails { details });
                     c.flush().await.map_err(e)?;
                 }
             },
@@ -1158,6 +1171,34 @@ async fn cleanup_before_switch_and_bundles() {
             PacketKind::ClearDialog,
             PacketKind::StartConfiguration
         ]
+    );
+    p.close().await;
+    proxy.stop();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn links_and_report_details_set_in_play_go_with_their_server() {
+    let lobby = Backend::start(spec("lobby")).await;
+    let games = Backend::start(spec("games")).await;
+    let (proxy, addr) = start_proxy(&config(&[("lobby", &lobby), ("games", &games)], "")).await;
+    let mut p = join(addr, "Linked").await;
+    lobby.ctl(Ctl::Links);
+    assert!(
+        p.pump(WAIT, |p| saw(
+            p,
+            Phase::Play,
+            PacketKind::CustomReportDetails
+        ) == 1)
+            .await
+            .unwrap()
+    );
+    p.command("server games").await.unwrap();
+    next_login(&mut p).await;
+    // Empty ones in the configuration of the next server.
+    assert_eq!(saw(&p, Phase::Configuration, PacketKind::ServerLinks), 1);
+    assert_eq!(
+        saw(&p, Phase::Configuration, PacketKind::CustomReportDetails),
+        1
     );
     p.close().await;
     proxy.stop();

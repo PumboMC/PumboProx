@@ -44,6 +44,7 @@ All notable changes to PumboProx, one section per release. The format follows [K
 - Plugins see the current server list: servers added by `reload` or `/prox servers new` and removed ones show up at once, a server run by the proxy is online only while it is ready, and player counts per server are real.
 - `reload` checks the whole file, the plugin host sections and the permissions file too, before it changes anything, and keeps the old config on any error. It applies `logging.level` at once and names the changed settings that only take effect after a restart, instead of reporting success for them.
 - A connection lost for a reason other than a plain quit (for example a write timeout) is logged with the error instead of as `left`.
+- Server links and report details that a server sets while the player plays now go away when the player switches to another server, as those set in configuration already did. A network that wants the same links everywhere sets them on each server.
 - The warning that the permission provider is down and new logins are refused no longer shows on a plugin reload, a restart after a crash or when the proxy stops; it shows when the provider stays down.
 - A malformed chunk from a server no longer ends the session of a player on an older version; the chunk is dropped instead.
 - When the metrics endpoint cannot accept a connection (for example out of file descriptors), it logs a warning and waits briefly instead of keeping a CPU core busy.

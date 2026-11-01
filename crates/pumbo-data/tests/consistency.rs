@@ -167,7 +167,11 @@ fn early_phases_are_fully_known() {
 }
 
 /// Kinds the session checks in configuration and in play alike.
-const BOTH_PHASES: &[PacketKind] = &[PacketKind::CustomClickAction];
+const BOTH_PHASES: &[PacketKind] = &[
+    PacketKind::CustomClickAction,
+    PacketKind::ServerLinks,
+    PacketKind::CustomReportDetails,
+];
 
 #[test]
 fn kinds_checked_in_both_phases_are_known_in_both() {
