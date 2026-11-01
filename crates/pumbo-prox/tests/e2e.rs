@@ -71,6 +71,8 @@ struct BackendOpts {
     keep_alive_every: Duration,
     /// Play frames `(id, payload)` sent right after the play `login`.
     play: Vec<(i32, Vec<u8>)>,
+    /// Stops reading in play (keeps sending keep-alives).
+    deaf: bool,
 }
 
 impl Default for BackendOpts {
@@ -81,6 +83,7 @@ impl Default for BackendOpts {
             compression: Some(256),
             keep_alive_every: Duration::from_millis(300),
             play: Vec::new(),
+            deaf: false,
         }
     }
 }
@@ -242,7 +245,7 @@ async fn serve_backend(
     let mut next = 100;
     loop {
         tokio::select! {
-            r = c.fill() => {
+            r = c.fill(), if !opts.deaf => {
                 r.map_err(e)?;
                 while let Some((f, _)) = c.next_frame().map_err(|e| e.to_string())? {
                     match m.packet_kind(Phase::Play, Direction::Serverbound, f.id) {
@@ -811,6 +814,47 @@ async fn a_kick_is_not_lost_behind_a_full_queue() {
     let metrics = proxy.metrics.render();
     let line = format!("pumboprox_dropped_packets_total{{kind=\"session_command\"}} {dropped}");
     assert!(metrics.contains(&line), "{line}: {metrics}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_server_that_stops_reading_does_not_stop_the_session() {
+    use pumbo_prox::server::SessionCmd;
+    let (backend, _) = fake_backend(BackendOpts {
+        deaf: true,
+        ..BackendOpts::default()
+    })
+    .await;
+    let extra = "  client-bytes-per-second: 1000000000\n  client-packets-per-second: 1000000\n";
+    let (proxy, addr) = start_proxy(&config(backend, extra)).await;
+    let mut c = login_to_play(addr, "Stuffed").await;
+    let id = module(777)
+        .packet_id(Phase::Play, Direction::Serverbound, PacketKind::Pong)
+        .unwrap();
+    // Data that does not compress, until the proxy stops taking it.
+    let mut x: u32 = 1;
+    let chunk: Vec<u8> = (0..32 * 1024)
+        .map(|_| {
+            x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            x.to_be_bytes()[0]
+        })
+        .collect();
+    let started = tokio::time::Instant::now();
+    while let Ok(Ok(())) =
+        tokio::time::timeout(Duration::from_secs(1), c.send_raw(id, &chunk)).await
+    {
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "the proxy kept taking data"
+        );
+    }
+    // The session still takes commands at once, not after the write timeout.
+    let player = proxy.find_player("Stuffed").unwrap().id;
+    let bye = Box::new(pumbo_text::Component::text("Bye."));
+    assert!(proxy.send_to(player, SessionCmd::Kick(bye)));
+    assert_eq!(
+        wait_kick(&mut c, Duration::from_secs(3)).await.as_deref(),
+        Some("Bye.")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

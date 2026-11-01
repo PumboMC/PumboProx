@@ -109,14 +109,22 @@ impl Conn {
     /// [`Conn::fill`] that meanwhile writes the queued bytes as the peer takes
     /// them, so a peer that reads slowly does not stop the reading. With
     /// `room`, it also resolves (`None`) once fewer bytes than that wait.
+    /// Without `read` it only writes: it resolves on an error or `room`.
     /// Cancel-safe like `fill`: written bytes are gone from the queue at once.
-    pub async fn fill_writing(&mut self, room: Option<usize>) -> Result<Option<usize>, ConnError> {
+    pub async fn fill_writing(
+        &mut self,
+        room: Option<usize>,
+        read: bool,
+    ) -> Result<Option<usize>, ConnError> {
         poll_fn(|cx| {
             if let Poll::Ready(Err(e)) = self.poll_write_queued(cx) {
                 return Poll::Ready(Err(e));
             }
             if room.is_some_and(|r| self.pending() < r) {
                 return Poll::Ready(Ok(None));
+            }
+            if !read {
+                return Poll::Pending;
             }
             self.poll_fill(cx).map_ok(Some)
         })
@@ -192,6 +200,14 @@ impl Conn {
         }
         self.stalled = None;
         Poll::Ready(Ok(()))
+    }
+
+    /// Writes what the socket takes now, without waiting for the rest.
+    pub fn try_write(&mut self) -> Result<(), ConnError> {
+        match self.poll_write_queued(&mut Context::from_waker(std::task::Waker::noop())) {
+            Poll::Ready(Err(e)) => Err(e),
+            _ => Ok(()),
+        }
     }
 
     /// Bytes received but not yet decoded.
@@ -316,7 +332,7 @@ mod tests {
 
     /// Writes for a moment, as a session waiting for the client's packets does.
     async fn write_a_moment(c: &mut Conn) {
-        let _ = tokio::time::timeout(Duration::from_millis(50), c.fill_writing(None)).await;
+        let _ = tokio::time::timeout(Duration::from_millis(50), c.fill_writing(None, true)).await;
     }
 
     /// A peer that takes less than one read's worth stays stalled since the
@@ -343,7 +359,7 @@ mod tests {
         let since = c.stalled_since().unwrap();
         // 30 s on: the next write gives up.
         c.stalled = Some((since.checked_sub(WRITE_TIMEOUT).unwrap(), 0));
-        let r = c.fill_writing(None).await;
+        let r = c.fill_writing(None, false).await;
         assert!(matches!(r, Err(ConnError::WriteTimeout)), "{r:?}");
         assert_eq!((c.pending(), c.stalled_since()), (0, None));
         // Everything taken: no stall.

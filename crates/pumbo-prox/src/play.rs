@@ -67,9 +67,9 @@ const ACK_TIMEOUT: Duration = Duration::from_secs(5);
 const OWN_KEEP_ALIVE: Duration = Duration::from_secs(10);
 /// Keep-alive IDs of the backend waiting for the client's answer (§2.9).
 const MAX_PENDING_KEEP_ALIVES: usize = 32;
-/// Bytes waiting for a slow client above which its backend is not read
-/// until the client takes them (Velocity's high write mark, 2 MiB).
-const CLIENT_BACKLOG: usize = 2 << 20;
+/// Bytes waiting for a slow peer above which the other side is not read
+/// until the peer takes them (2 MiB).
+const BACKLOG: usize = 2 << 20;
 
 type LoginFuture = Pin<Box<dyn Future<Output = Result<Conn, BackendFail>> + Send>>;
 /// A kick waiting for `on-server-kicked` (E5): decision, kick text, shutdown-like.
@@ -184,7 +184,11 @@ enum NextEvent {
 async fn next_event(next: &mut Next) -> NextEvent {
     match next {
         Next::Connecting(fut) => NextEvent::Login(fut.as_mut().await),
-        Next::Ready { conn, .. } => NextEvent::Read(conn.fill().await),
+        Next::Ready { conn, .. } => NextEvent::Read(
+            conn.fill_writing(None, true)
+                .await
+                .map(Option::unwrap_or_default),
+        ),
         Next::Idle => std::future::pending().await,
     }
 }
@@ -223,9 +227,14 @@ async fn kick_decision(
     }
 }
 
-async fn fill_opt(conn: Option<&mut Conn>) -> Result<usize, ConnError> {
+/// Writes the current server and, with `read`, reads it ([`Conn::fill_writing`]).
+async fn backend_io(
+    conn: Option<&mut Conn>,
+    room: Option<usize>,
+    read: bool,
+) -> Result<Option<usize>, ConnError> {
     match conn {
-        Some(c) => c.fill().await,
+        Some(c) => c.fill_writing(room, read).await,
         None => std::future::pending().await,
     }
 }
@@ -578,7 +587,7 @@ impl Play<'_> {
             if let Err(end) = self.progress() {
                 return end;
             }
-            if let Err(end) = self.flush().await {
+            if let Err(end) = self.write_servers() {
                 return end;
             }
             // Every client packet moves the deadline later. The armed timer is
@@ -589,9 +598,11 @@ impl Play<'_> {
                 timer.as_mut().reset(deadline);
             }
             // While a kick waits for plugins the backend is not read any more,
-            // nor while the client has a backlog.
+            // nor while the client has a backlog; the client is not read while
+            // the backend has one. Both are still written.
             let kick_pending = self.pending_kick.is_some();
             let client_full = self.client_full();
+            let backend_full = self.backend_full();
             tokio::select! {
                 biased;
                 () = &mut stop => return end_kick("The proxy is shutting down."),
@@ -600,7 +611,7 @@ impl Play<'_> {
                 // The client is written here, so it is read while it takes its
                 // data slowly: holding its packets back would pass them on in
                 // one burst later, over the limits of the proxy and backend.
-                r = self.client.fill_writing(client_full.then_some(CLIENT_BACKLOG)) => {
+                r = self.client.fill_writing(client_full.then_some(BACKLOG), !backend_full) => {
                     let n = match r {
                         Ok(n) => n,
                         Err(e) => return End::client_lost(e),
@@ -623,9 +634,15 @@ impl Play<'_> {
                         return end;
                     }
                 }
-                r = fill_opt(self.backend.as_mut().filter(|_| !kick_pending && !client_full).map(|b| &mut b.conn)) => {
+                r = backend_io(
+                    self.backend.as_mut().map(|b| &mut b.conn),
+                    backend_full.then_some(BACKLOG),
+                    !kick_pending && !client_full,
+                ) => {
                     let end = match r {
-                        Ok(n) => {
+                        // It took its backlog: the client is read again.
+                        Ok(None) => continue,
+                        Ok(Some(n)) => {
                             Metrics::add(&m.bytes_from_backends, n as u64);
                             if let Some(b) = self.backend.as_mut() {
                                 b.last_read = Instant::now();
@@ -678,15 +695,36 @@ impl Play<'_> {
         }
     }
 
-    /// The client is behind by more than [`CLIENT_BACKLOG`].
+    /// The client is behind by more than [`BACKLOG`].
     fn client_full(&self) -> bool {
-        self.client.pending() > CLIENT_BACKLOG
+        self.client.pending() > BACKLOG
+    }
+
+    /// The current server is behind by more than [`BACKLOG`].
+    fn backend_full(&self) -> bool {
+        self.backend
+            .as_ref()
+            .is_some_and(|b| b.conn.pending() > BACKLOG)
     }
 
     fn deadline(&self, idle: Duration) -> Instant {
-        let mut d = self.last_client + idle;
-        // The next write to a client that stopped reading fails (`run` ends).
-        if let Some(s) = self.client.stalled_since() {
+        // Not read while its server has a backlog, so not idle either.
+        let mut d = if self.backend_full() {
+            Instant::now() + idle
+        } else {
+            self.last_client + idle
+        };
+        // The next write to a peer that stopped reading fails: the client
+        // ends the session, a server is lost.
+        let stalls = [
+            self.client.stalled_since(),
+            self.backend.as_ref().and_then(|b| b.conn.stalled_since()),
+            match &self.next {
+                Next::Ready { conn, .. } => conn.stalled_since(),
+                _ => None,
+            },
+        ];
+        for s in stalls.into_iter().flatten() {
             d = d.min(s + WRITE_TIMEOUT);
         }
         match &self.backend {
@@ -712,7 +750,7 @@ impl Play<'_> {
 
     fn timers(&mut self, idle: Duration) -> Option<End> {
         let now = Instant::now();
-        if now >= self.last_client + idle {
+        if !self.backend_full() && now >= self.last_client + idle {
             Metrics::inc(&self.proxy.metrics.timeouts_idle);
             return Some(end_kick("Timed out."));
         }
@@ -755,16 +793,17 @@ impl Play<'_> {
         None
     }
 
-    /// Writes to the servers; the client is written while it is read (`run`).
-    async fn flush(&mut self) -> Result<(), End> {
+    /// Writes to the servers what their sockets take now; the rest goes out
+    /// in `run` while the session goes on, as for the client.
+    fn write_servers(&mut self) -> Result<(), End> {
         if let Some(b) = self.backend.as_mut()
-            && b.conn.flush().await.is_err()
+            && b.conn.try_write().is_err()
             && let Some(end) = self.backend_lost(None)
         {
             return Err(end);
         }
         if let Next::Ready { conn, .. } = &mut self.next
-            && conn.flush().await.is_err()
+            && conn.try_write().is_err()
         {
             self.next_failed("connection closed".into());
             if let Some(end) = self.try_next() {
