@@ -179,3 +179,34 @@ async fn proxy_tab_header() {
     p.pump(Duration::from_millis(800), |_| false).await.unwrap();
     assert_eq!(p.tab_headers.len(), 2);
 }
+
+/// `limits.max-players`: a full network refuses the next login with
+/// `messages.network-full`; an operator joins anyway.
+#[tokio::test]
+async fn full_network_lets_only_operators_in() {
+    let (backend_addr, _) = common::backend().await;
+    let boss = pumbo_identity::offline_uuid("Boss");
+    let cfg = config(
+        backend_addr,
+        &format!("commands:\n  operators: [{boss}]\nmessages:\n  network-full: \"Full up\"\n"),
+    )
+    .replace(
+        "  concurrent-per-ip: 1000\n",
+        "  concurrent-per-ip: 1000\n  max-players: 1\n",
+    );
+    let (_proxy, addr) = start_proxy(&cfg).await;
+    let first = Player::join(addr, module(777), JoinOptions::new("First"))
+        .await
+        .unwrap();
+    let err = Player::join(addr, module(777), JoinOptions::new("Second"))
+        .await
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(err.contains("Full up"), "{err}");
+    let boss = Player::join(addr, module(777), JoinOptions::new("Boss"))
+        .await
+        .unwrap();
+    boss.close().await;
+    first.close().await;
+}

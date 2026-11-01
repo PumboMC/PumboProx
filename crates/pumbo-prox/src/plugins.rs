@@ -520,6 +520,14 @@ impl Plugins {
     }
 
     /// The session of this UUID ended.
+    /// The permission plugin's set for a player who joined, loaded now even
+    /// when `permissions.load-at` waits for the gates.
+    pub async fn load_permissions_now(&self, uuid: Uuid) {
+        if let Some(id) = self.id(uuid) {
+            self.host.load_permissions_now(id).await;
+        }
+    }
+
     pub fn left(&self, uuid: Uuid) {
         let id = self.ids.lock().ok().and_then(|mut ids| ids.remove(&uuid));
         if let Some(id) = id {

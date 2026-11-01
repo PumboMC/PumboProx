@@ -986,3 +986,55 @@ async fn offline_claim_needs_a_running_login_gate() {
         proxy.stop();
     }
 }
+
+/// `pumbo.proxy.join-full` from the permission plugin lets a player into a
+/// full network, also with `permissions.load-at: after-gates` (the default),
+/// where the plugin's set loads only after the gates.
+#[tokio::test(flavor = "multi_thread")]
+async fn join_full_from_the_permission_plugin_lets_a_player_in() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("pumbo-join-full-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("perm")).unwrap();
+    std::fs::write(
+        dir.join("perm.yml"),
+        "id: perm\nversion: 0.1.0\napi: \"0.1\"\npermission-provider: true\n\
+         provides:\n  - { service: \"pumbo:permissions\", version: \"1.0\" }\n",
+    )
+    .unwrap();
+    std::fs::copy(test_plugin(), dir.join("perm.wasm")).unwrap();
+    std::fs::write(
+        dir.join("perm/config.yml"),
+        "perms:\n  - { node: pumbo.proxy.join-full, value: true, ctx: global }\n",
+    )
+    .unwrap();
+    let text = format!(
+        "listener:\n  - bind: \"127.0.0.1:0\"\nlogin:\n  online-mode: false\nforwarding:\n  mode: none\n\
+         limits:\n  connections-per-ip-per-second: 1000\n  concurrent-per-ip: 1000\n  max-players: 1\n\
+         messages:\n  network-full: \"Full up\"\n\
+         plugins:\n  dir: {:?}\npermissions:\n  provider: perm\n",
+        dir.display().to_string()
+    );
+    let (proxy, addr) = start_proxy(&text).await;
+    let plugins = Plugins::start(&text, &proxy, Vec::new())
+        .await
+        .unwrap()
+        .expect("plugin host");
+    proxy.plugins.set(plugins.clone()).unwrap();
+    let slot = plugins.host.plugin("perm").unwrap();
+    for _ in 0..600 {
+        if slot.status() == pumbo_host::Status::Running {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let join = |name: &'static str| {
+        pumbo_testclient::Player::join(addr, module(777), pumbo_testclient::JoinOptions::new(name))
+    };
+    let first = join("First").await.unwrap();
+    let second = join("Second").await;
+    assert!(second.is_ok(), "{:?}", second.err().map(|e| e.to_string()));
+    second.unwrap().close().await;
+    first.close().await;
+    proxy.stop();
+}

@@ -355,6 +355,17 @@ impl Host {
         Ok(info.profile)
     }
 
+    /// Loads the permission plugin's set for a player at once when
+    /// `permissions.load-at` waits for the gates, for a check that cannot
+    /// wait for them (`pumbo.proxy.join-full` on a full network). A failed
+    /// load leaves the player as before.
+    pub async fn load_permissions_now(&self, id: PlayerId) {
+        let inner = &self.inner;
+        if inner.cfg.permissions.load_at == crate::config::LoadAt::AfterGates {
+            let _ = inner.load_provider_permissions(id).await;
+        }
+    }
+
     /// The player is logged in to the proxy: the first `deny` wins.
     pub async fn on_login(&self, id: PlayerId) -> Result<(), Component> {
         let inner = &self.inner;

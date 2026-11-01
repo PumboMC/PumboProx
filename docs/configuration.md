@@ -45,7 +45,7 @@ What the server list shows.
 | Key | Default | Description | Applies |
 | --- | --- | --- | --- |
 | `motd` | the PumboProx banner with the version | MOTD, two lines separated by `\n` | reload |
-| `max-players` | `500` | The maximum shown in the server list | reload |
+| `max-players` | `500` | The maximum shown in the server list; only shown. `limits.max-players` sets a real limit | reload |
 | `version-name` | empty | Version text in the server list; empty shows `PumboProx <oldest>-<newest>` | reload |
 | `favicon` | `server-icon.png` | Server icon, a 64x64 PNG. Empty: no icon. When the default file is missing the proxy shows the Pumbo icon | reload |
 
@@ -161,6 +161,7 @@ Protection built into the proxy, before any plugin. The per-address limits count
 | `handshake-timeout-ms` | `5000` | Time for the first packet of a connection | reload |
 | `login-timeout-ms` | `30000` | Time for the whole login | reload |
 | `idle-timeout-ms` | `30000` | A session with no data from the client or the server for this long is closed | reload (new players) |
+| `max-players` | `0` | Players online at most; `0`: no limit. A login over it is refused with `messages.network-full`; operators and players with `pumbo.proxy.join-full` join anyway | reload |
 
 ## logging
 
@@ -212,6 +213,7 @@ The `bungeecord:main` plugin message channel, for older server plugins that ask 
 | `no-server` | `No server is available right now.` | No server could be reached | reload |
 | `no-server-for-version` | `This network has no server for Minecraft {version}. Please join with {supported}.` | No server speaks the client's version. `{version}`: the client's release, `{supported}`: the releases of the servers | reload |
 | `signed-chat-blocked` | `Your message was blocked. Please reconnect.` | Kick text for `signed-chat-cancel: kick` | reload |
+| `network-full` | `The network is full. Please try again later.` | Kick text when `limits.max-players` is reached | reload |
 
 ## virtual
 

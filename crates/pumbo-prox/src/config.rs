@@ -496,6 +496,8 @@ pub struct MessagesConfig {
     pub no_server_for_version: String,
     /// Kick text for `signed-chat-cancel: kick`.
     pub signed_chat_blocked: String,
+    /// `limits.max-players` reached.
+    pub network_full: String,
 }
 
 impl Default for MessagesConfig {
@@ -506,6 +508,7 @@ impl Default for MessagesConfig {
                 "This network has no server for Minecraft {version}. Please join with {supported}."
                     .into(),
             signed_chat_blocked: "Your message was blocked. Please reconnect.".into(),
+            network_full: "The network is full. Please try again later.".into(),
         }
     }
 }
@@ -595,6 +598,9 @@ pub struct LimitsConfig {
     pub backend_login_timeout_ms: u64,
     /// No data from a side for this long closes the session.
     pub idle_timeout_ms: u64,
+    /// Players online at most; 0 = no limit. Operators and
+    /// `pumbo.proxy.join-full` join anyway. `status.max-players` only shows.
+    pub max_players: u32,
 }
 
 impl Default for LimitsConfig {
@@ -612,6 +618,7 @@ impl Default for LimitsConfig {
             login_timeout_ms: 30_000,
             backend_login_timeout_ms: 30_000,
             idle_timeout_ms: 30_000,
+            max_players: 0,
         }
     }
 }

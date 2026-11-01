@@ -675,6 +675,36 @@ async fn login(
             .await
             .map_err(|t| Fail::Kick(Box::new(t)))?;
     }
+    // After `joined`: a permission plugin knows the player only from there.
+    let max = rt.config.limits.max_players;
+    let join_full = || {
+        crate::commands::permitted(
+            proxy,
+            rt,
+            &crate::commands::Source::Player {
+                id: profile.id,
+                server: None,
+            },
+            "pumbo.proxy.join-full",
+        )
+    };
+    let full = max > 0 && proxy.online() >= max as usize;
+    let mut refused = full && !join_full();
+    if refused && let Some(p) = plugins {
+        // With `permissions.load-at: after-gates` the plugin has no set for
+        // the player yet: load it now, only for a player a full network
+        // would refuse.
+        p.load_permissions_now(profile.id).await;
+        refused = !join_full();
+    }
+    if refused {
+        if let Some(p) = plugins {
+            p.left(profile.id);
+        }
+        return Err(Fail::Kick(Box::new(status::parse_text(
+            &rt.config.messages.network_full,
+        ))));
+    }
     let Some((guard, cmds)) = proxy.register_player(&profile, peer) else {
         return Err(kick("You are already connected to this proxy."));
     };
