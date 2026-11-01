@@ -23,9 +23,9 @@ use pumbo_nbt::Tag;
 use pumbo_protocol::frame::FrameConfig;
 use pumbo_protocol::packets::commands::{Commands, FLAG_EXECUTABLE, NODE_LITERAL, NODE_ROOT, Node};
 use pumbo_protocol::packets::common::{
-    ClientboundCustomPayload, CustomReportDetails, Disconnect, KeepAlive, ResourcePackPush,
-    ResourcePackResponse, ServerLink, ServerLinkLabel, ServerLinks, ServerboundCustomPayload,
-    Transfer,
+    ClientboundCustomPayload, CookieRequest, CookieResponse, CustomReportDetails, Disconnect,
+    KeepAlive, ResourcePackPush, ResourcePackResponse, ServerLink, ServerLinkLabel, ServerLinks,
+    ServerboundCustomPayload, Transfer,
 };
 use pumbo_protocol::packets::configuration::FinishConfiguration;
 use pumbo_protocol::packets::login::{
@@ -76,6 +76,8 @@ struct Spec {
     sound_before_login: bool,
     /// A `transfer` to this host and port instead of finishing configuration.
     config_transfer: Option<(String, i32)>,
+    /// Asks for this cookie in the login.
+    login_cookie: Option<&'static str>,
 }
 
 /// Commands from the test to the backend's latest connection.
@@ -88,6 +90,8 @@ enum Ctl {
     Transfer(String, i32),
     /// Server links and report details in play.
     Links,
+    StoreCookie(&'static str, Vec<u8>),
+    CookieRequest(&'static str),
 }
 
 #[derive(Debug, Default)]
@@ -104,6 +108,8 @@ struct Log {
     payloads: Vec<(String, Vec<u8>)>,
     pack_statuses: Vec<(Uuid, i32)>,
     missed_keep_alives: usize,
+    /// Cookie answers, in the login and later.
+    cookies: Vec<(String, Option<Vec<u8>>)>,
     config_keep_alives: usize,
     ctl: Vec<mpsc::UnboundedSender<Ctl>>,
 }
@@ -219,6 +225,10 @@ fn record(m: &dyn VersionModule, phase: Phase, id: i32, payload: &[u8], log: &Mu
             let c: ChatCommandSigned = decode(m, payload);
             l.signed.push(c.command);
         }
+        Some(PacketKind::CookieResponse) => {
+            let c: CookieResponse = decode(m, payload);
+            l.cookies.push((c.key, c.payload));
+        }
         Some(PacketKind::FinishConfiguration) if phase == Phase::Configuration => return false,
         _ => {}
     }
@@ -257,6 +267,12 @@ async fn serve(
         log.lock().unwrap().duplicates += 1;
     }
     *online_id = Some(start.uuid);
+    if let Some(key) = spec.login_cookie {
+        send(&mut c, m, Phase::Login, &CookieRequest { key: key.into() });
+        c.flush().await.map_err(e)?;
+        let (f, _) = c.read_frame().await.map_err(e)?;
+        record(m, Phase::Login, f.id, &f.payload, log);
+    }
     if let Some(t) = spec.compression {
         send(&mut c, m, Phase::Login, &LoginCompression { threshold: t });
         c.flush().await.map_err(e)?;
@@ -458,6 +474,20 @@ async fn serve(
                 }
                 Some(Ctl::Transfer(host, port)) => {
                     send(&mut c, m, p, &Transfer { host, port });
+                    c.flush().await.map_err(e)?;
+                }
+                Some(Ctl::StoreCookie(key, payload)) => {
+                    // By hand: also over the 5120-byte limit.
+                    let mut body = Vec::new();
+                    body.put_string(key, 32767).unwrap();
+                    body.put_varint(i32::try_from(payload.len()).unwrap());
+                    body.extend_from_slice(&payload);
+                    let id = m.packet_id(p, Direction::Clientbound, PacketKind::StoreCookie).unwrap();
+                    c.queue(id, &body).unwrap();
+                    c.flush().await.map_err(e)?;
+                }
+                Some(Ctl::CookieRequest(key)) => {
+                    send(&mut c, m, p, &CookieRequest { key: key.into() });
                     c.flush().await.map_err(e)?;
                 }
                 Some(Ctl::Links) => {
@@ -1200,6 +1230,64 @@ async fn links_and_report_details_set_in_play_go_with_their_server() {
         saw(&p, Phase::Configuration, PacketKind::CustomReportDetails),
         1
     );
+    p.close().await;
+    proxy.stop();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn each_server_has_its_own_cookies() {
+    let lobby = Backend::start(Spec {
+        login_cookie: Some("pumbo:seen"),
+        ..spec("lobby")
+    })
+    .await;
+    let games = Backend::start(spec("games")).await;
+    let (proxy, addr) = start_proxy(&config(&[("lobby", &lobby), ("games", &games)], "")).await;
+    let mut p = join(addr, "Baker").await;
+    let none = ("pumbo:seen".to_string(), None);
+    assert_eq!(
+        lobby.with(|l| l.cookies.clone()),
+        std::slice::from_ref(&none)
+    );
+    lobby.ctl(Ctl::StoreCookie("pumbo:seen", vec![1, 2, 3]));
+    lobby.ctl(Ctl::CookieRequest("pumbo:seen"));
+    let stored = ("pumbo:seen".to_string(), Some(vec![1, 2, 3]));
+    assert!(until(&mut p, &lobby, |l| l.cookies.len() == 2).await);
+    assert_eq!(lobby.with(|l| l.cookies[1].clone()), stored);
+    // Another server neither reads nor replaces it.
+    p.command("server games").await.unwrap();
+    next_login(&mut p).await;
+    games.ctl(Ctl::CookieRequest("pumbo:seen"));
+    games.ctl(Ctl::StoreCookie("pumbo:seen", vec![9]));
+    assert!(until(&mut p, &games, |l| l.cookies.len() == 1).await);
+    assert_eq!(games.with(|l| l.cookies.clone()), [none]);
+    // Back on the first server: its login gets its cookie.
+    p.command("server lobby").await.unwrap();
+    next_login(&mut p).await;
+    assert_eq!(lobby.with(|l| l.cookies[2].clone()), stored);
+    // A server that stores too much: dropped, the player stays.
+    lobby.ctl(Ctl::StoreCookie("pumbo:big", vec![0; 6000]));
+    lobby.ctl(Ctl::CookieRequest("pumbo:big"));
+    assert!(until(&mut p, &lobby, |l| l.cookies.len() == 4).await);
+    assert_eq!(lobby.with(|l| l.cookies[3].1.clone()), None);
+    assert!(p.disconnect.is_none());
+    for kind in [PacketKind::StoreCookie, PacketKind::CookieRequest] {
+        assert_eq!(saw(&p, Phase::Play, kind), 0, "{kind:?}");
+    }
+    p.close().await;
+    proxy.stop();
+
+    // allow-transfers: the client's own cookies, which go with a transfer.
+    let cfg = config(&[("games", &games)], "").replace(
+        &format!("protocol: {PROTOCOL} }}"),
+        &format!("protocol: {PROTOCOL}, allow-transfers: true }}"),
+    );
+    let (proxy, addr) = start_proxy(&cfg).await;
+    let mut p = join(addr, "Traveller").await;
+    games.ctl(Ctl::StoreCookie("pumbo:seen", vec![4]));
+    games.ctl(Ctl::CookieRequest("pumbo:seen"));
+    assert!(until(&mut p, &games, |l| l.cookies.len() == 2).await);
+    assert_eq!(saw(&p, Phase::Play, PacketKind::StoreCookie), 1);
     p.close().await;
     proxy.stop();
 }

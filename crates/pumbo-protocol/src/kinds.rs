@@ -205,6 +205,7 @@ pub const KNOWN_PACKETS: &[(Phase, Direction, PacketKind)] = &[
     (Pl, C, K::Disconnect),
     (Pl, C, K::Transfer),
     (Pl, C, K::StoreCookie),
+    (Pl, C, K::CookieRequest),
     (Pl, C, K::ServerLinks),
     (Pl, C, K::CustomReportDetails),
     (Pl, C, K::BundleDelimiter),
@@ -256,6 +257,7 @@ pub const KNOWN_PACKETS: &[(Phase, Direction, PacketKind)] = &[
     (Pl, S, K::ClientTickEnd),
     (Pl, S, K::ChunkBatchReceived),
     (Pl, S, K::Pong),
+    (Pl, S, K::CookieResponse),
 ];
 
 #[cfg(test)]

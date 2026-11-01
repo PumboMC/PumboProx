@@ -11,7 +11,7 @@
 //! its keep-alives and pings itself and holds the rest (§2.9, §3.3 step 3).
 //! Everything runs in one `select!` loop per session.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -28,9 +28,10 @@ use pumbo_protocol::packets::commands::{
     Parser, ParserProperties,
 };
 use pumbo_protocol::packets::common::{
-    self as pc, ClearDialog, ClientboundCustomPayload, CustomClickAction, CustomReportDetails,
-    Disconnect, KeepAlive, Ping, Pong, ResourcePackPop, ResourcePackPush, ResourcePackResponse,
-    ServerLinks, ServerboundCustomPayload, Transfer,
+    self as pc, ClearDialog, ClientboundCustomPayload, CookieRequest, CookieResponse,
+    CustomClickAction, CustomReportDetails, Disconnect, KeepAlive, Ping, Pong, ResourcePackPop,
+    ResourcePackPush, ResourcePackResponse, ServerLinks, ServerboundCustomPayload, StoreCookie,
+    Transfer,
 };
 use pumbo_protocol::packets::play::{
     BossAction, BossEvent, BundleDelimiter, Chat, ChatAck, ChatCommand, ChatCommandSigned,
@@ -82,6 +83,8 @@ const DECODED_PER_CLIENT_BYTE: f64 = 4.0;
 /// Messages and titles, action bar and boss bars waiting for a client to be
 /// in play; more are dropped.
 const MAX_DEFERRED: usize = 64;
+/// Cookies one server may store for a player; more are dropped.
+const MAX_COOKIES: usize = 64;
 
 /// How a session ended.
 /// How long the gates wait for `client_information` sent after the acknowledgement.
@@ -234,11 +237,12 @@ fn login_future(
     (module, translator): BackendVersion,
     address: String,
     player: ForwardedPlayer,
+    cookies: HashMap<String, Vec<u8>>,
 ) -> LoginFuture {
     Box::pin(async move {
         let mut conn = timeout(
             Duration::from_millis(rt.config.limits.backend_login_timeout_ms),
-            backend_login(&rt, &*module, &address, &player),
+            backend_login(&rt, &*module, &address, &player, &cookies),
         )
         .await
         .unwrap_or_else(|_| Err(BackendFail::Unavailable("login timed out".into())))?;
@@ -295,6 +299,10 @@ struct Tracked {
     report_epoch: Option<u64>,
     /// Tab header and footer set by a plugin; sent again on every join.
     proxy_tab: Option<(Box<Component>, Box<Component>)>,
+    /// Cookies each server stored, by server and key: kept by the proxy, so
+    /// one server cannot read or replace another's (servers with
+    /// `allow-transfers` use the client's own).
+    cookies: HashMap<String, HashMap<String, Vec<u8>>>,
 }
 
 enum Step {
@@ -1054,6 +1062,7 @@ impl Play<'_> {
                 version,
                 info.address.clone(),
                 self.player.clone(),
+                self.tracked.cookies.get(&name).cloned().unwrap_or_default(),
             );
             // `on-server-connect` (E5) runs before the login, in this future.
             self.next = Next::Connecting(match self.proxy.plugins.get().cloned() {
@@ -2289,6 +2298,11 @@ impl Play<'_> {
                 let _: CustomClickAction = packets::decode(&f.payload, &sb)?;
                 Step::Forward
             }
+            // The proxy answers cookie requests itself, except for servers
+            // that use the client's cookies.
+            (_, Some(PacketKind::CookieResponse)) if self.cookie_jar_owner().is_some() => {
+                Step::Drop
+            }
             (_, Some(PacketKind::ResourcePack)) => {
                 let r: ResourcePackResponse = packets::decode(&f.payload, &sb)?;
                 let epoch = self.epoch;
@@ -2664,6 +2678,8 @@ impl Play<'_> {
                 }
             }
             (_, Some(PacketKind::CustomPayload)) => self.backend_payload(phase, f)?,
+            (_, Some(PacketKind::StoreCookie)) => self.store_cookie(f),
+            (_, Some(PacketKind::CookieRequest)) => self.cookie_request(phase, f)?,
             // Nothing else before its play `login`: the client has no level
             // yet, and vanilla disconnects on a world packet. Pumpkin 0.2.0
             // can send a sound first (it adds a joining player to the world
@@ -2820,6 +2836,69 @@ impl Play<'_> {
             && self.on_server()
         {
             let _ = self.switch_to(&to, true);
+        }
+        Ok(Step::Drop)
+    }
+
+    /// The current server, unless `allow-transfers` lets it use the client's
+    /// cookies (they travel with a transfer).
+    fn cookie_jar_owner(&self) -> Option<String> {
+        let b = self.backend.as_ref()?;
+        (!self.transfers_allowed(&b.name)).then(|| b.name.clone())
+    }
+
+    /// `store_cookie` from the server: kept for this server. What does not
+    /// fit is dropped, never the player.
+    fn store_cookie(&mut self, f: &RawFrame) -> Step {
+        let Some(server) = self.cookie_jar_owner() else {
+            return Step::Forward;
+        };
+        let name = &self.player.profile.name;
+        match packets::decode::<StoreCookie>(
+            &f.payload,
+            &ctx(&*self.module, Direction::Clientbound),
+        ) {
+            Ok(c) => {
+                let jar = self.tracked.cookies.entry(server.clone()).or_default();
+                if jar.len() < MAX_COOKIES || jar.contains_key(&c.key) {
+                    jar.insert(c.key, c.payload);
+                } else {
+                    debug!(
+                        "{name}: {server} stores over {MAX_COOKIES} cookies, {} dropped",
+                        c.key
+                    );
+                }
+            }
+            Err(e) => debug!("{name}: cookie from {server} dropped: {e}"),
+        }
+        Step::Drop
+    }
+
+    /// `cookie_request` from the server: answered with what it stored.
+    fn cookie_request(&mut self, phase: Phase, f: &RawFrame) -> Result<Step, Fail> {
+        let Some(server) = self.cookie_jar_owner() else {
+            return Ok(Step::Forward);
+        };
+        let module = self.module.clone();
+        let c: CookieRequest = packets::decode(&f.payload, &ctx(&*module, Direction::Clientbound))?;
+        let payload = self
+            .tracked
+            .cookies
+            .get(&server)
+            .and_then(|jar| jar.get(&c.key))
+            .cloned();
+        if let Some(b) = self.backend.as_mut() {
+            let answer = CookieResponse {
+                key: c.key,
+                payload,
+            };
+            queue(
+                &mut b.conn,
+                &*module,
+                phase,
+                Direction::Serverbound,
+                &answer,
+            )?;
         }
         Ok(Step::Drop)
     }

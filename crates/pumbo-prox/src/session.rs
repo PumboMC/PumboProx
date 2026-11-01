@@ -6,6 +6,7 @@
 //! with the proxy and waits in configuration while the proxy logs in to the
 //! backend; the play part (relaying, switching) is in `play`.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -838,6 +839,7 @@ pub(crate) async fn backend_login(
     module: &dyn VersionModule,
     address: &str,
     player: &ForwardedPlayer,
+    cookies: &HashMap<String, Vec<u8>>,
 ) -> Result<Conn, BackendFail> {
     let (host, port) = split_host_port(address)
         .ok_or_else(|| BackendFail::Unavailable(format!("bad address {address}")))?;
@@ -920,8 +922,8 @@ pub(crate) async fn backend_login(
                     Phase::Login,
                     sb,
                     &CookieResponse {
+                        payload: cookies.get(&c.key).cloned(),
                         key: c.key,
-                        payload: None,
                     },
                 )?;
                 conn.flush().await?;

@@ -20,6 +20,7 @@ All notable changes to PumboProx, one section per release. The format follows [K
 - A plugin's bcrypt check refuses a hash with a cost above 14 at once, with a warning in the log, instead of holding a thread for hours.
 - `permissions.provider: auto` uses only PumboPerms (`pumbo-perms`); any other permission plugin must be named in `permissions.provider`. With only another one installed, or a PumboPerms that does not load, the proxy does not start and says what to set; next to PumboPerms it is ignored with a warning. Only the chosen plugin answers `pumbo:permissions` calls of other plugins, and `services.providers` cannot pick another one.
 - `/prox op` and `/prox deop` work only from the console or for an operator, and the log names who made each change. `pumbo.proxy.op`, `pumbo.proxy.bridge.key` and `pumbo.proxy.route.edit` are no longer granted by `*` or `pumbo.proxy.*`, only by an entry for exactly that node; a negated wildcard still takes them away.
+- Cookies a server stores for a player stay in the proxy for that session, one set per server: another server of the network can no longer read or replace them, and a server gets its own cookies back when the player returns. Cookies that do not fit (over 5120 bytes, or more than 64 per server) are dropped with a `debug` log line. Servers with `allow-transfers: true` still use the player's own cookies in configuration and play, which go with a transfer; a cookie such a server asks for during its login comes back empty.
 
 ### Added
 

@@ -171,6 +171,9 @@ const BOTH_PHASES: &[PacketKind] = &[
     PacketKind::CustomClickAction,
     PacketKind::ServerLinks,
     PacketKind::CustomReportDetails,
+    PacketKind::CookieRequest,
+    PacketKind::CookieResponse,
+    PacketKind::StoreCookie,
 ];
 
 #[test]
