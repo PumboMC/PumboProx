@@ -88,10 +88,21 @@ More in [Servers from the proxy](servers.md).
 
 | Command | What it does |
 | --- | --- |
+| `help` | The console commands |
 | `reload` | Same as `prox reload` |
 | `stop` or `end` | Stops the proxy and the servers it runs |
 | `version` | Same as `prox version` |
 | `pumbo` | The Pumbo plugins, their versions and state |
+
+## Command line
+
+| Command | What it does |
+| --- | --- |
+| `pumboprox [run [file]]` | Starts the proxy with `pumboprox.yml` (or `file`); a missing file is written with the defaults |
+| `pumboprox check-config [file]` | Checks the file and the plugin configs without starting the proxy; exits with 1 on an error |
+| `pumboprox describe <plugin> [--json] [file]` | A plugin's description as JSON, without starting it |
+| `pumboprox version` (`--version`, `-V`) | Versions of PumboProx and the protocols |
+| `pumboprox help` (`--help`, `-h`) | The commands |
 
 ## Plugins
 

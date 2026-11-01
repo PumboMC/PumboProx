@@ -1,7 +1,7 @@
 //! `pumboprox`: `run [config]` (default; a missing config is written with
-//! the defaults), `check-config [config]`, `version`,
-//! `describe <plugin> [--json] [config]`.
-//! Console commands while running: `reload`, `stop`, `version`, the
+//! the defaults), `check-config [config]`, `version` (`--version`),
+//! `describe <plugin> [--json] [config]`, `help` (`--help`).
+//! Console commands while running: `help`, `reload`, `stop`, `version`, the
 //! built-in proxy commands `glist`, `find`, `send`, `alert`, `pumbo` (the
 //! plugin list), plugin commands and `prox …` (the same as in the game).
 
@@ -18,18 +18,56 @@ use tracing::{error, info, warn};
 
 const DEFAULT_CONFIG: &str = "pumboprox.yml";
 
+const USAGE: &str = "\
+usage: pumboprox [command]
+  run [file]                         start the proxy (the default); a missing
+                                     file is written with the defaults
+  check-config [file]                check the file and the plugin configs
+                                     without starting the proxy
+  describe <plugin> [--json] [file]  a plugin's description as JSON
+  version, --version, -V             versions of PumboProx and the protocols
+  help, --help, -h                   this text
+The file is pumboprox.yml in the current directory unless given.";
+
+/// Console commands for `help`; `prox help` lists the proxy commands.
+const CONSOLE_HELP: &[&str] = &[
+    "help: this list",
+    "reload: read pumboprox.yml again; players stay online",
+    "stop (end): stop the proxy and the servers it runs",
+    "version: versions of PumboProx and the protocols",
+    "glist, find, send, alert: players and servers (prox help for all)",
+    "prox ...: the proxy commands, as /prox in the game",
+    "pumbo: the plugins, their versions and state",
+];
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // After a command, `--help` is no file name (`run --help` would write one).
+    if args.iter().skip(1).any(|a| a == "--help" || a == "-h") {
+        println!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
+    let describe_json = |a: &String| a == "--json" && args.first().is_some_and(|c| c == "describe");
+    if let Some(flag) = args
+        .iter()
+        .skip(1)
+        .find(|a| a.starts_with('-') && !describe_json(a))
+    {
+        eprintln!("pumboprox: unknown option \"{flag}\"; see pumboprox --help");
+        return ExitCode::from(2);
+    }
     match args.first().map(String::as_str) {
-        Some("version") => version(),
+        Some("version" | "--version" | "-V") => version(),
+        Some("help" | "--help" | "-h") => {
+            println!("{USAGE}");
+            ExitCode::SUCCESS
+        }
         Some("check-config") => check_config(args.get(1).map_or(DEFAULT_CONFIG, String::as_str)),
         Some("run") => run(args.get(1).map_or(DEFAULT_CONFIG, String::as_str)),
         Some("describe") => describe(&args),
         None => run(DEFAULT_CONFIG),
-        _ => {
-            eprintln!(
-                "usage: pumboprox [run [file]] | check-config [file] | describe <plugin> [--json] [file] | version"
-            );
+        Some(other) => {
+            eprintln!("pumboprox: unknown command \"{other}\"; see pumboprox --help");
             ExitCode::from(2)
         }
     }
@@ -321,6 +359,7 @@ async fn console(proxy: std::sync::Arc<Proxy>) {
         }
         match line.as_str() {
             "" => {}
+            "help" => CONSOLE_HELP.iter().for_each(|l| info!("{l}")),
             "reload" => match proxy.reload() {
                 Ok(restart) => {
                     info!("config reloaded");
@@ -374,9 +413,7 @@ async fn console(proxy: std::sync::Arc<Proxy>) {
                                 info!("{}", line.plain_text());
                             }
                         }
-                        None => warn!(
-                            "unknown command \"{other}\" (prox, reload, stop, version, glist, find, send, alert, pumbo, gate)"
-                        ),
+                        None => warn!("unknown command \"{other}\"; type help"),
                     },
                 }
             }
