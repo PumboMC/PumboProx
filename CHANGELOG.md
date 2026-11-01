@@ -22,11 +22,20 @@ All notable changes to PumboProx, one section per release. The format follows [K
 - `/prox op` and `/prox deop` work only from the console or for an operator, and the log names who made each change. `pumbo.proxy.op`, `pumbo.proxy.bridge.key` and `pumbo.proxy.route.edit` are no longer granted by `*` or `pumbo.proxy.*`, only by an entry for exactly that node; a negated wildcard still takes them away.
 - Cookies a server stores for a player stay in the proxy for that session, one set per server: another server of the network can no longer read or replace them, and a server gets its own cookies back when the player returns. Cookies that do not fit (over 5120 bytes, or more than 64 per server) are dropped with a `debug` log line. Servers with `allow-transfers: true` still use the player's own cookies in configuration and play, which go with a transfer; a cookie such a server asks for during its login comes back empty.
 - A kick from a plugin (for example a ban) and a gate's decision to let a player in no longer wait in the session's command queue, so a busy session cannot lose them. A kick wins over a waiting release, and the first kick's reason is the one the player sees. Other commands dropped because a session is behind are counted in `pumboprox_dropped_packets_total{kind="session_command"}`, logged once per player at `debug` and at most once a minute at `warn`.
+- A server `address` outside loopback, private networks, the 100.64.0.0/10 range (Tailscale) and IPv6 ULA now stops the start and fails `reload`. Set `servers.<name>.allow-public: true` for a server whose connection is protected some other way. Host names (for example Docker service names) are resolved at start and `reload` and must all point to private addresses; a name that does not resolve only gives a warning.
+- A `bridge.listen` on `0.0.0.0`, `[::]` or a public address now stops the start and fails `reload`, unless `bridge.allow-public: true`.
+- `listener[].proxy-protocol: true` now means `required`: a connection from an address outside `trusted-proxies` is refused before the handshake, warned about once per listener and counted in `pumboprox_connections_rejected_total{reason="proxy_untrusted"}`. The old behaviour, a header only from trusted addresses and plain connections from anyone else, is `proxy-protocol: optional`. `trusted-proxies` wider than /8 for public IPv4 or /16 for public IPv6 (such as `0.0.0.0/0`) stops the start unless `allow-any-proxy: true`.
+- NBT lists and container contents from a server that claim more entries than the packet holds are refused, instead of costing the proxy unbounded memory or CPU, also while it translates for a player on another version.
 
 ### Added
 
 - `limits.backend-login-timeout-ms` (default 30000): how long the proxy waits to connect and log in to a server. It was a fixed 10 s, which dropped players while a busy server was slow to let them in.
 - `docs/configuration.md`: every key of `pumboprox.yml` with its default, what it does and whether `reload` applies it.
+- `limits.max-players` (default `0`, off): the most players online at once. Others are kicked with `messages.network-full`; operators and players with `pumbo.proxy.join-full` still get in. `status.max-players` stays only the number shown in the server list.
+- `limits.max-in-gates` (default `500`, `0` turns it off): the most players a login gate may hold in its waiting world at once. The next one is kicked with `messages.gates-full`. The number held is the gauge `pumboprox_players_in_gates`.
+- `servers.<name>.allow-public`, `bridge.allow-public` and `listener[].allow-any-proxy` (all `false`), see Security.
+- Connections refused by `limits.connections-per-ip-per-second` or `limits.concurrent-per-ip` are logged at `debug` with the address and the limit.
+- Metric `pumboprox_backend_online{server="..."}`: 1 while the proxy counts a server as online.
 
 ### Changed
 
@@ -35,6 +44,10 @@ All notable changes to PumboProx, one section per release. The format follows [K
 - The Docker tag `latest` moves only with stable releases; pre-releases get `beta`, and their GitHub release is marked as a pre-release.
 - A release is published only from a commit whose CI passed, and its binaries and Docker image are started once with a fresh config before they go out.
 - The `/alert` help and the log hint for a server that does not ask for forwarding use neutral wording and name the setting for Pumpkin and Paper.
+- `virtual.gate-timeout-ms` and `plugins.gate-timeout-ms` default to 120000 (two minutes; they were 600000 and 300000). Values set in the file stay. The start warns when a plugin gate may take longer than `virtual.gate-timeout-ms`. A gate plugin with its own limit above two minutes (PumboAuth `auth.timeout-seconds`, PumboFilter `captcha.timeout-seconds`) now needs both keys raised; the proxy does not see that limit and does not warn.
+- A server whose logins fail three times in a row (no connection, timeout, closed before login) counts as offline: plugins see it offline, and joins and fallbacks try it last. One player tries it again after 5 s, then after a wait that doubles up to 60 s; the first successful login brings it back. Each change is logged once. A kick from the server never counts. `/server <name>` still goes to it directly.
+- Servers run by the proxy count as offline for joins and fallbacks while they are not ready.
+- SIGTERM or Ctrl+C while the proxy is still starting stops it cleanly with exit code 0, plugins and managed servers included. A second signal while it stops ends it at once with exit code 130.
 
 ### Fixed
 
@@ -52,6 +65,9 @@ All notable changes to PumboProx, one section per release. The format follows [K
 - The warning that the permission provider is down and new logins are refused no longer shows on a plugin reload, a restart after a crash or when the proxy stops; it shows when the provider stays down.
 - A malformed chunk from a server no longer ends the session of a player on an older version; the chunk is dropped instead.
 - When the metrics endpoint cannot accept a connection (for example out of file descriptors), it logs a warning and waits briefly instead of keeping a CPU core busy.
+- `reload` no longer starts fresh counters for `limits.max-pending-logins` and `limits.max-concurrent-has-joined`; logins in progress keep counting, and a smaller value takes effect as they finish.
+- The bridge to a server that stopped reading is closed after 10 s without progress instead of showing as connected forever (a slow link that keeps reading stays), and a permission set that did not fit in a full bridge queue is sent again.
+- Compiling a plugin at start, `reload` or `/prox plugins load` no longer holds up player sessions.
 
 ## [0.2.5-beta] - 2026-10-11
 
