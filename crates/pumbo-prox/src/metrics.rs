@@ -80,6 +80,7 @@ metrics! {
     auth_micros: counter "pumboprox_auth_request_microseconds_total" "";
     players_online: gauge "pumboprox_players_online" "";
     pending_logins: gauge "pumboprox_pending_logins" "";
+    players_in_gates: gauge "pumboprox_players_in_gates" "";
     /// `transfer` packets from servers without `allow-transfers` (GAP2-01).
     transfers_blocked: counter "pumboprox_transfers_total" "{result=\"blocked\"}";
     transfers_switched: counter "pumboprox_transfers_total" "{result=\"switched\"}";
@@ -108,6 +109,15 @@ impl GaugeGuard {
     pub fn new(m: Arc<Metrics>, gauge: fn(&Metrics) -> &AtomicI64) -> Self {
         gauge(&m).fetch_add(1, Ordering::Relaxed);
         Self(m, gauge)
+    }
+
+    /// Counts one more only while the gauge is below `max` (`0`: no limit).
+    /// Each caller sees its own count, so two at once never both lose the
+    /// last place.
+    pub fn below(m: Arc<Metrics>, gauge: fn(&Metrics) -> &AtomicI64, max: i64) -> Option<Self> {
+        let before = gauge(&m).fetch_add(1, Ordering::Relaxed);
+        let slot = Self(m, gauge);
+        (max <= 0 || before < max).then_some(slot)
     }
 }
 
@@ -177,6 +187,44 @@ pub async fn bind(addr: SocketAddr) -> std::io::Result<TcpListener> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Many at once for one place: exactly one gets it, every time.
+    #[test]
+    fn one_place_goes_to_exactly_one() {
+        use std::sync::atomic::AtomicBool;
+        for _ in 0..500 {
+            let m = Arc::new(Metrics::default());
+            let (go, done) = (AtomicBool::new(false), std::sync::Barrier::new(8));
+            let got = std::thread::scope(|s| {
+                let tries: Vec<_> = (0..8)
+                    .map(|_| {
+                        let (m, go, done) = (m.clone(), &go, &done);
+                        s.spawn(move || {
+                            while !go.load(Ordering::Acquire) {
+                                std::hint::spin_loop();
+                            }
+                            let slot = GaugeGuard::below(m, |m| &m.players_in_gates, 1);
+                            done.wait();
+                            slot.is_some()
+                        })
+                    })
+                    .collect();
+                go.store(true, Ordering::Release);
+                tries
+                    .into_iter()
+                    .map(|t| t.join().unwrap())
+                    .filter(|won| *won)
+                    .count()
+            });
+            assert_eq!(got, 1);
+            assert_eq!(m.players_in_gates.load(Ordering::Relaxed), 0);
+        }
+        let m = Arc::new(Metrics::default());
+        let all: Vec<_> = (0..3)
+            .map(|_| GaugeGuard::below(m.clone(), |m| &m.players_in_gates, 0))
+            .collect();
+        assert!(all.iter().all(Option::is_some), "0: no limit");
+    }
 
     #[test]
     fn renders_types_once_per_family() {

@@ -498,6 +498,8 @@ pub struct MessagesConfig {
     pub signed_chat_blocked: String,
     /// `limits.max-players` reached.
     pub network_full: String,
+    /// `limits.max-in-gates` reached.
+    pub gates_full: String,
 }
 
 impl Default for MessagesConfig {
@@ -509,6 +511,8 @@ impl Default for MessagesConfig {
                     .into(),
             signed_chat_blocked: "Your message was blocked. Please reconnect.".into(),
             network_full: "The network is full. Please try again later.".into(),
+            gates_full: "Too many players are logging in right now. Please try again in a moment."
+                .into(),
         }
     }
 }
@@ -601,6 +605,8 @@ pub struct LimitsConfig {
     /// Players online at most; 0 = no limit. Operators and
     /// `pumbo.proxy.join-full` join anyway. `status.max-players` only shows.
     pub max_players: u32,
+    /// Players a gate holds in a virtual world at once; 0 = no limit.
+    pub max_in_gates: u32,
 }
 
 impl Default for LimitsConfig {
@@ -619,6 +625,7 @@ impl Default for LimitsConfig {
             backend_login_timeout_ms: 30_000,
             idle_timeout_ms: 30_000,
             max_players: 0,
+            max_in_gates: 500,
         }
     }
 }

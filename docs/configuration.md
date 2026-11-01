@@ -162,6 +162,7 @@ Protection built into the proxy, before any plugin. The per-address limits count
 | `login-timeout-ms` | `30000` | Time for the whole login | reload |
 | `idle-timeout-ms` | `30000` | A session with no data from the client or the server for this long is closed | reload (new players) |
 | `max-players` | `0` | Players online at most; `0`: no limit. A login over it is refused with `messages.network-full`; operators and players with `pumbo.proxy.join-full` join anyway | reload |
+| `max-in-gates` | `500` | Players a gate (PumboAuth, PumboFilter) holds in its login world at once; `0`: no limit. The next player who would be held is refused with `messages.gates-full`. Players who pass the gates at once do not count | reload |
 
 ## logging
 
@@ -214,6 +215,7 @@ The `bungeecord:main` plugin message channel, for older server plugins that ask 
 | `no-server-for-version` | `This network has no server for Minecraft {version}. Please join with {supported}.` | No server speaks the client's version. `{version}`: the client's release, `{supported}`: the releases of the servers | reload |
 | `signed-chat-blocked` | `Your message was blocked. Please reconnect.` | Kick text for `signed-chat-cancel: kick` | reload |
 | `network-full` | `The network is full. Please try again later.` | Kick text when `limits.max-players` is reached | reload |
+| `gates-full` | `Too many players are logging in right now. Please try again in a moment.` | Kick text when `limits.max-in-gates` is reached | reload |
 
 ## virtual
 

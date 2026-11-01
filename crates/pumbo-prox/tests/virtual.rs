@@ -210,3 +210,37 @@ async fn full_network_lets_only_operators_in() {
     boss.close().await;
     first.close().await;
 }
+
+/// `limits.max-in-gates`: with the gates full, the next player a gate would
+/// hold in a virtual world is refused with `messages.gates-full`.
+#[tokio::test]
+async fn full_gates_refuse_the_next_player() {
+    let (backend_addr, _) = common::backend().await;
+    let cfg = config(backend_addr, "messages:\n  gates-full: \"Gates full\"\n").replace(
+        "  concurrent-per-ip: 1000\n",
+        "  concurrent-per-ip: 1000\n  max-in-gates: 1\n",
+    );
+    let (_proxy, addr) = start_proxy(&cfg).await;
+    let mut first = Player::join(addr, module(777), JoinOptions::new("Held"))
+        .await
+        .unwrap();
+    assert!(first.pump(WAIT, |p| !p.logins.is_empty()).await.unwrap());
+    let refused = match Player::join(addr, module(777), JoinOptions::new("Next")).await {
+        Ok(mut p) => {
+            p.pump(WAIT, |p| p.disconnect.is_some()).await.unwrap();
+            p.disconnect.unwrap_or_default()
+        }
+        Err(e) => e.to_string(),
+    };
+    assert!(refused.contains("Gates full"), "{refused}");
+    // Released from the gate, the first player frees the place.
+    first.command("gate release").await.unwrap();
+    assert!(first.pump(WAIT, |p| p.logins.len() == 2).await.unwrap());
+    let mut next = Player::join(addr, module(777), JoinOptions::new("Next"))
+        .await
+        .unwrap();
+    assert!(next.pump(WAIT, |p| !p.logins.is_empty()).await.unwrap());
+    assert!(next.disconnect.is_none());
+    next.close().await;
+    first.close().await;
+}

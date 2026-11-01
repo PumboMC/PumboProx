@@ -351,6 +351,8 @@ struct Play<'a> {
     /// A gate holds the player before the first server (§5.6).
     holding: bool,
     gate_deadline: Option<Instant>,
+    /// Counted in `limits.max-in-gates` while a gate holds it in a virtual world.
+    in_gate: Option<GaugeGuard>,
     /// Enter a virtual world once the client acknowledged `start_configuration`.
     enter_on_ack: Option<Enter>,
     /// The server a virtual world was entered from; release goes back there.
@@ -441,6 +443,7 @@ pub(crate) async fn run(
         vworld: None,
         holding: false,
         gate_deadline: None,
+        in_gate: None,
         enter_on_ack: None,
         return_to: None,
         pumbox: None,
@@ -1693,6 +1696,17 @@ impl Play<'_> {
 
     /// Starts a virtual world for a client in configuration (§5.2).
     fn enter_now(&mut self, e: Enter) -> Result<(), End> {
+        if self.holding && self.in_gate.is_none() {
+            let max = i64::from(self.rt.config.limits.max_in_gates);
+            let Some(slot) =
+                GaugeGuard::below(self.proxy.metrics.clone(), |m| &m.players_in_gates, max)
+            else {
+                return Err(End::Kick(Box::new(parse_text(
+                    &self.rt.config.messages.gates_full,
+                ))));
+            };
+            self.in_gate = Some(slot);
+        }
         let profile = crate::session::to_wire(&self.player.profile);
         let mut player =
             VirtualPlayer::new(self.module.clone(), profile, e.world, e.at, e.commands);
@@ -1851,6 +1865,7 @@ impl Play<'_> {
         }
         self.holding = false;
         self.gate_deadline = None;
+        self.in_gate = None;
         Metrics::inc(&self.proxy.metrics.virtual_releases);
         let mut candidates = self.candidates(SelectReason::InitialJoin, None);
         if let Some(back) = self.return_to.take() {
