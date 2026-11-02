@@ -450,7 +450,7 @@ impl Proxy {
     /// Re-reads the config file. The whole file, the host sections too, is
     /// read and checked before anything changes; any error keeps the old
     /// config. Players keep their sessions and see the new server list and
-    /// commands at once; `logging.level` and `plugins.required-gates` apply
+    /// commands at once; `logging.level`, `logging.filters` and `plugins.required-gates` apply
     /// at once too. Returns the changed settings that wait for a restart.
     pub fn reload(&self) -> Result<Vec<String>, String> {
         off_worker(|| {
@@ -479,10 +479,9 @@ impl Proxy {
         let host = pumbo_host::HostConfig::parse(&text).map_err(|e| at(&e))?;
         let old = self.runtime();
         let mut restart = restart_needed(&old.config, &config);
-        let level = config.logging.level.clone();
-        if level != old.config.logging.level {
-            crate::logging::check_level(&level).map_err(|e| at(&e))?;
-        }
+        let logging = config.logging.clone();
+        let relog = (&logging.level, &logging.filters)
+            != (&old.config.logging.level, &old.config.logging.filters);
         let runtime = self.prepare(config)?;
         if let Some(p) = self.plugins.get() {
             restart.extend(host_restart_needed(p.host.config(), &host));
@@ -494,9 +493,7 @@ impl Proxy {
         for w in loaded.unknown.iter().chain(&unresolved) {
             warn!("{w}");
         }
-        if level != old.config.logging.level
-            && let Err(e) = crate::logging::set_level(&level)
-        {
+        if relog && let Err(e) = crate::logging::set_filter(&logging) {
             warn!("{e}");
         }
         Ok(restart)

@@ -169,7 +169,8 @@ Protection built into the proxy, before any plugin. The per-address limits count
 | Key | Default | Description | Applies |
 | --- | --- | --- | --- |
 | `format` | `text` | `text` or `json` (one JSON object per line) | restart |
-| `level` | `info` | `error`, `warn`, `info`, `debug` or `trace` | restart |
+| `level` | `info` | `error`, `warn`, `info`, `debug`, `trace` or `off`; another word stops the start (and a `reload` keeps the old config). Replies to console commands show at every level | reload |
+| `filters` | empty | Levels per module over `level`, for example `pumbo_host: debug` to see the plugin host in detail | reload |
 | `log-ips` | `true` | `false`: addresses in logs become a hash with a random key per run, the same address giving the same hash until a restart | restart |
 | `metrics-bind` | empty (off) | `ip:port` for Prometheus metrics at `http://<ip:port>/metrics`; only a loopback address (`127.0.0.1:9100`) is accepted | restart |
 

@@ -727,8 +727,10 @@ pub enum LogFormat {
 #[serde(rename_all = "kebab-case", default)]
 pub struct LoggingConfig {
     pub format: LogFormat,
-    /// `error`, `warn`, `info`, `debug` or `trace`.
+    /// `error`, `warn`, `info`, `debug`, `trace` or `off`.
     pub level: String,
+    /// Levels per module (`pumbo_host: debug`), over `level`.
+    pub filters: BTreeMap<String, String>,
     /// `false`: addresses in logs become a keyed hash (random key per run).
     pub log_ips: bool,
     /// Prometheus endpoint, loopback only; empty = off.
@@ -740,6 +742,7 @@ impl Default for LoggingConfig {
         Self {
             format: LogFormat::Text,
             level: "info".into(),
+            filters: BTreeMap::new(),
             log_ips: true,
             metrics_bind: String::new(),
         }
@@ -874,6 +877,11 @@ impl Config {
                 &["limits"],
                 "limits: max-pending-logins and max-concurrent-has-joined must be > 0".into(),
             ));
+        }
+        if let Err((key, message)) = crate::logging::filter(&self.logging) {
+            let mut path = vec![Seg::from("logging")];
+            path.extend(key.iter().map(|k| Seg::from(k.as_str())));
+            return Err(ConfigError::Key { key: path, message });
         }
         Ok(())
     }

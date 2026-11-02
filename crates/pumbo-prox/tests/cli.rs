@@ -158,3 +158,23 @@ fn check_config_fails_on_an_unknown_key() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+#[test]
+fn console_replies_show_at_every_log_level() {
+    let err = console(
+        "off",
+        &small_config("login:\n  online-mode: true\nlogging:\n  level: off\n"),
+        "help\nversion\nreload\nnope\nstop\n",
+    );
+    assert!(err.contains("reload: read pumboprox.yml again"), "{err}");
+    assert!(
+        err.contains(&format!(
+            "PumboProx {}, protocols",
+            env!("CARGO_PKG_VERSION")
+        )),
+        "{err}"
+    );
+    assert!(err.contains("config reloaded"), "{err}");
+    assert!(err.contains("unknown command \"nope\"; type help"), "{err}");
+    assert!(!err.contains("INFO"), "the log is off: {err}");
+}

@@ -372,13 +372,37 @@ async fn reload_checks_the_whole_file_first() {
     let good = more
         .replace("127.0.0.1:0", "127.0.0.1:25659")
         .replace("routing:", "logging:\n  level: error\n\nrouting:");
-    std::fs::write(&file, good).unwrap();
+    std::fs::write(&file, &good).unwrap();
     assert_eq!(proxy.reload().unwrap(), ["listener"]);
     assert!(proxy.runtime().config.servers.contains_key("extra"));
     let level_now = tracing::enabled!(tracing::Level::WARN);
+    // Levels per module apply with a reload too.
+    let per_module = good.replace(
+        "level: error\n",
+        "level: error\n  filters:\n    pumbo_prox::check: debug\n",
+    );
+    std::fs::write(&file, &per_module).unwrap();
+    proxy.reload().unwrap();
+    let module_now = tracing::enabled!(target: "pumbo_prox::check", tracing::Level::DEBUG);
+    let other_now = tracing::enabled!(target: "pumbo_host::check", tracing::Level::WARN);
+    // A level that does not exist keeps the old config, with its line.
+    let bad = good.replace("level: error", "level: verbose");
+    std::fs::write(&file, &bad).unwrap();
+    let err = proxy.reload().unwrap_err();
+    let line = bad.lines().position(|l| l.contains("verbose")).unwrap() + 1;
+    assert!(
+        err.contains(&format!(
+            "pumboprox.yml line {line}: logging.level \"verbose\" is not a level"
+        )),
+        "{err}"
+    );
     let test_level = std::env::var("PUMBO_TEST_LOG").unwrap_or_else(|_| "warn".into());
     pumbo_prox::logging::set_level(&test_level).unwrap();
     assert!(!level_now, "logging.level applies with the reload");
+    assert!(
+        module_now && !other_now,
+        "logging.filters apply with the reload"
+    );
 }
 
 /// Placeholders in the MOTD come from the host's push values and caches

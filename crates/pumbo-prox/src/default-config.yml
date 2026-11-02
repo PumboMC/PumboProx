@@ -51,6 +51,12 @@ plugins:
 #   max-players: 0
 #   max-in-gates: 500
 
+# Logs: error, warn, info, debug, trace or off, and levels per module.
+# logging:
+#   level: info
+#   filters:
+#     pumbo_host: debug
+
 # Players wait in an empty world while no server is available, and join one
 # as soon as it is ready.
 pumbox:

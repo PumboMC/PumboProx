@@ -335,7 +335,8 @@ fn run(path: &str) -> ExitCode {
 }
 
 /// Commands from stdin. End of input (e.g. under a service manager) only
-/// ends the console, not the proxy.
+/// ends the console, not the proxy. Replies go to stderr next to the log,
+/// but not through it: they show at every `logging.level`, as plain text.
 async fn console(proxy: std::sync::Arc<Proxy>) {
     let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
     while let Ok(Some(line)) = lines.next_line().await {
@@ -352,28 +353,28 @@ async fn console(proxy: std::sync::Arc<Proxy>) {
                     .admin(&args, true, true)
                     .iter()
                     .for_each(|l| println!("{}", pumbo_prox::bridge::plain(l))),
-                None => warn!("the bridge is off (bridge.enabled in the proxy config)"),
+                None => eprintln!("the bridge is off (bridge.enabled in the proxy config)"),
             }
             continue;
         }
         match line.as_str() {
             "" => {}
-            "help" => CONSOLE_HELP.iter().for_each(|l| info!("{l}")),
+            "help" => CONSOLE_HELP.iter().for_each(|l| eprintln!("{l}")),
             "reload" => match proxy.reload() {
                 Ok(restart) => {
-                    info!("config reloaded");
+                    eprintln!("config reloaded");
                     if !restart.is_empty() {
-                        warn!("changed, applied after a restart: {}", restart.join(", "));
+                        eprintln!("changed, applied after a restart: {}", restart.join(", "));
                     }
                 }
-                Err(e) => warn!("reload failed, keeping the old config: {e}"),
+                Err(e) => eprintln!("reload failed, keeping the old config: {e}"),
             },
             "stop" | "end" => {
                 info!("stopping");
                 proxy.stop();
                 return;
             }
-            "version" => info!(
+            "version" => eprintln!(
                 "PumboProx {}, protocols {}",
                 env!("CARGO_PKG_VERSION"),
                 proxy
@@ -387,10 +388,10 @@ async fn console(proxy: std::sync::Arc<Proxy>) {
                 let name = other.trim_start_matches("gate ").trim();
                 match proxy.find_player(name) {
                     _ if !proxy.runtime().config.virtual_world.test_gate => {
-                        warn!("gate needs virtual.test-gate: true (tests only)");
+                        eprintln!("gate needs virtual.test-gate: true (tests only)");
                     }
                     Some(p) => pumbo_prox::world::enter_test_gate(&proxy, p.id),
-                    None => warn!("{name} is not online"),
+                    None => eprintln!("{name} is not online"),
                 }
             }
             other => {
@@ -403,16 +404,16 @@ async fn console(proxy: std::sync::Arc<Proxy>) {
                 ) {
                     Some(reply) => {
                         for line in reply.lines {
-                            info!("{}", line.plain_text());
+                            eprintln!("{}", line.plain_text());
                         }
                     }
                     None => match proxy.plugins.get().and_then(|p| p.console(other)) {
                         Some(lines) => {
                             for line in lines {
-                                info!("{}", line.plain_text());
+                                eprintln!("{}", line.plain_text());
                             }
                         }
-                        None => warn!("unknown command \"{other}\"; type help"),
+                        None => eprintln!("unknown command \"{other}\"; type help"),
                     },
                 }
             }
