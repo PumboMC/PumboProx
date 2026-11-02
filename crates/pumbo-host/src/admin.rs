@@ -167,7 +167,18 @@ impl HostInner {
             .description()
             .map(|d| d.config_schema.clone())
             .unwrap_or_default();
-        schema::validate_dir(&schema, &self.cfg.plugins.config_dir(&slot.id))
+        let dir = self.cfg.plugins.config_dir(&slot.id);
+        // Before the first start (`check-config`) the default `config.yml`
+        // is not written yet: the one built into the plugin counts.
+        let default = if dir.join("config.yml").exists() {
+            None
+        } else {
+            std::fs::read(&slot.wasm).ok().and_then(|wasm| {
+                crate::manifest::embedded(&wasm, crate::manifest::CONFIG_SECTION)
+                    .map(|c| String::from_utf8_lossy(c).into_owned())
+            })
+        };
+        schema::validate_dir(&schema, &dir, default.as_deref())
     }
 
     /// The global config of a plugin with secret fields hidden.

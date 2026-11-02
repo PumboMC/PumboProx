@@ -136,6 +136,9 @@ pub(crate) struct HostInner {
     /// The permission provider plugin (`permissions.provider`, resolved at start).
     pub perm_provider: Option<String>,
     pub provider_down_logged: Mutex<Option<Instant>>,
+    /// Built for a tool (`check-config`, `describe`): nothing is written,
+    /// no plugin directories and no default files.
+    pub offline: bool,
 }
 
 /// How often players without a set from the provider are loaded again.
@@ -248,6 +251,7 @@ impl Host {
             failed,
             perm_provider,
             provider_down_logged: Mutex::new(None),
+            offline: !spawn,
             cfg,
         });
         let _ = inner.me.set(Arc::downgrade(&inner));

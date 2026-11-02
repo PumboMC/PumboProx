@@ -43,6 +43,8 @@ pub struct BridgeConfig {
     pub listen: String,
     /// The bridge key (64 hex digits), created on the first start.
     pub key_file: String,
+    /// An environment variable with the key, used instead of `key-file`.
+    pub key_env: String,
     pub command_timeout_ms: u64,
     /// Plugins that may send commands; every plugin with `uses` may query.
     pub trusted_plugins: Vec<String>,
@@ -58,6 +60,7 @@ impl Default for BridgeConfig {
             enabled: true,
             listen: "127.0.0.1:25578".into(),
             key_file: "bridge.key".into(),
+            key_env: String::new(),
             command_timeout_ms: 5000,
             trusted_plugins: vec!["pumbo-core".into()],
             stats_ms: 5000,
@@ -284,20 +287,41 @@ pub fn load_key(path: &str) -> Result<wire::Key, String> {
     {
         use std::os::unix::fs::PermissionsExt as _;
         let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
-        if meta.permissions().mode() & 0o077 != 0 {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-                .map_err(|e| format!("{path}: {e}"))?;
-            warn!("{path}: other users could read the bridge key, its mode is now 0600");
+        let mode = meta.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            // A read-only mount or a file of another user stays as it is.
+            match std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)) {
+                Ok(()) => {
+                    warn!("{path}: other users could read the bridge key, its mode is now 0600");
+                }
+                Err(e) => warn!(
+                    "{path} is readable by other users (mode {mode:04o}) and cannot be changed ({e}); chmod 600 it or use bridge.key-env"
+                ),
+            }
         }
     }
     let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
     wire::parse_key(&text).ok_or_else(|| format!("{path}: not a bridge key (64 hex digits)"))
 }
 
+/// The bridge key from the environment variable `key-env` when it is set,
+/// else from `key-file` ([`load_key`]).
+pub fn key(cfg: &BridgeConfig) -> Result<wire::Key, String> {
+    if cfg.key_env.is_empty() {
+        return load_key(&cfg.key_file);
+    }
+    let var = &cfg.key_env;
+    let text = std::env::var(var)
+        .map_err(|_| format!("environment variable {var} (bridge.key-env) is not set"))?;
+    wire::parse_key(text.trim()).ok_or_else(|| {
+        format!("environment variable {var} (bridge.key-env): not a bridge key (64 hex digits)")
+    })
+}
+
 impl Bridge {
     /// The module, without network yet (`start` listens).
     pub fn new(proxy: &Arc<Proxy>, cfg: BridgeConfig) -> Result<Arc<Bridge>, String> {
-        let key = load_key(&cfg.key_file)?;
+        let key = key(&cfg)?;
         Ok(Arc::new_cyclic(|me| Bridge {
             proxy: Arc::downgrade(proxy),
             me: me.clone(),
@@ -308,6 +332,11 @@ impl Bridge {
             next: AtomicU64::new(1),
             wake: Notify::new(),
         }))
+    }
+
+    /// The key as 64 hex digits, for the files of new servers.
+    pub fn key_hex(&self) -> String {
+        wire::key_hex(&self.key)
     }
 
     pub fn native(self: &Arc<Self>) -> pumbo_host::Native {
@@ -1634,6 +1663,21 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert_eq!(load_key(path_str).unwrap(), key);
         assert_eq!(mode(), 0o600);
+        // Not ours to change (root's /dev/null, 0666): a warning, no error.
+        use std::os::unix::fs::MetadataExt as _;
+        let ours = std::fs::metadata(&path).unwrap().uid();
+        if ours != 0 && std::fs::metadata("/dev/null").unwrap().uid() != ours {
+            let e = load_key("/dev/null").unwrap_err();
+            assert!(e.contains("not a bridge key"), "{e}");
+        }
         std::fs::remove_file(&path).unwrap();
+        let unset = BridgeConfig {
+            key_env: "PUMBO_TEST_NO_SUCH_VARIABLE".into(),
+            ..BridgeConfig::default()
+        };
+        assert_eq!(
+            super::key(&unset).unwrap_err(),
+            "environment variable PUMBO_TEST_NO_SUCH_VARIABLE (bridge.key-env) is not set"
+        );
     }
 }

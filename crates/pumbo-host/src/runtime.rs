@@ -148,7 +148,9 @@ impl Runtime {
 
     /// A store for a new instance: WASI with `/data` (read-write) and
     /// `/config` (read-only, with the default `config.yml` and `lang/` written
-    /// at the first start), memory limit and time budget.
+    /// at the first start), memory limit and time budget. A tool's host
+    /// (`offline`) writes nothing and gets only the directories that exist,
+    /// both read-only.
     pub fn store(
         &self,
         host: &Arc<HostInner>,
@@ -157,15 +159,23 @@ impl Runtime {
         let cfg = &host.cfg.plugins;
         let data = cfg.data_dir(&slot.id);
         let conf = cfg.config_dir(&slot.id);
-        std::fs::create_dir_all(&data)
-            .map_err(|e| wasmtime::Error::msg(format!("{}: {e}", data.display())))?;
-        std::fs::create_dir_all(&conf)
-            .map_err(|e| wasmtime::Error::msg(format!("{}: {e}", conf.display())))?;
-        crate::manifest::default_files(&slot.id, &slot.wasm, &conf, &data);
+        let mut data_perms = FsPerms::ReadOnly;
+        if !host.offline {
+            std::fs::create_dir_all(&data)
+                .map_err(|e| wasmtime::Error::msg(format!("{}: {e}", data.display())))?;
+            std::fs::create_dir_all(&conf)
+                .map_err(|e| wasmtime::Error::msg(format!("{}: {e}", conf.display())))?;
+            crate::manifest::default_files(&slot.id, &slot.wasm, &conf, &data);
+            data_perms = FsPerms::ReadWrite;
+        }
         let mut wasi = WasiCtx::builder();
-        wasi.preopened_dir(&data, "/data", FsPerms::ReadWrite)?
-            .preopened_dir(&conf, "/config", FsPerms::ReadOnly)?
-            .allow_tcp(false)
+        if data.is_dir() {
+            wasi.preopened_dir(&data, "/data", data_perms)?;
+        }
+        if conf.is_dir() {
+            wasi.preopened_dir(&conf, "/config", FsPerms::ReadOnly)?;
+        }
+        wasi.allow_tcp(false)
             .allow_udp(false)
             .allow_ip_name_lookup(false);
         let memory = usize::try_from(cfg.memory_mb)

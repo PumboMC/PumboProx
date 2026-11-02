@@ -158,6 +158,10 @@ pub struct Config {
     /// `server-group` (a list), read by the plugin host (§5.8.4).
     #[serde(default, rename = "server-group")]
     pub server_groups: Vec<ModuleConfig>,
+    /// Set by `check-config`: modules create no files (a missing secret is
+    /// only reported).
+    #[serde(skip)]
+    pub check_only: bool,
     /// Other sections, e.g. `viaproxy` for the translation provider of that
     /// name; any value, so an unknown key is a warning, not a parse error.
     #[serde(flatten)]

@@ -109,6 +109,10 @@ impl ForwardingMode for VelocityModern {
     }
 }
 
+/// Set (to anything) by `check-config`: a missing secret file is reported,
+/// not created. No YAML key reads like it by accident.
+pub const NO_CREATE: &str = "$no-create";
+
 /// Factory: the secret comes from the environment variable named by
 /// `secret-env`, or from `secret-file` (default `forwarding.secret`). A
 /// missing file is created on the first start with 32 random bytes as hex and
@@ -125,6 +129,13 @@ pub fn factory(cfg: &ModuleConfig) -> Result<Arc<dyn ForwardingMode>, ModuleErro
         return Ok(Arc::new(module));
     }
     let path = opt_str(cfg, NAME, "secret-file")?.unwrap_or("forwarding.secret");
+    if !std::path::Path::new(path).exists() && cfg.contains_key(NO_CREATE) {
+        tracing::info!("{path} does not exist yet; the first start creates it");
+        // Only checked, never used: a throwaway secret.
+        let mut bytes = [0u8; 32];
+        aws_lc_rs::rand::fill(&mut bytes).map_err(|_| err("random generator failed".into()))?;
+        return Ok(Arc::new(VelocityModern::new(&bytes).map_err(err)?));
+    }
     if !std::path::Path::new(path).exists() {
         create_secret(path).map_err(err)?;
         tracing::warn!(
@@ -189,6 +200,21 @@ mod tests {
             },
             address: "203.0.113.7".parse().unwrap(),
         }
+    }
+
+    #[test]
+    fn a_check_creates_no_secret() {
+        let path = std::env::temp_dir().join(format!("pumbo-no-create-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut cfg = ModuleConfig::new();
+        cfg.insert("secret-file".into(), path.display().to_string().into());
+        cfg.insert(NO_CREATE.into(), true.into());
+        factory(&cfg).unwrap();
+        assert!(!path.exists());
+        cfg.remove(NO_CREATE);
+        factory(&cfg).unwrap();
+        assert!(path.exists());
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]

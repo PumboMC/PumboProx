@@ -73,7 +73,7 @@ How the proxy tells a server the player's real name, UUID, skin and address.
 | Key | Default | Description | Applies |
 | --- | --- | --- | --- |
 | `mode` | `modern` | `modern`: signed with a shared secret. `none`: nothing is forwarded; allowed only for servers on `127.0.0.1` (tests with vanilla servers) | reload |
-| `secret-file` | `forwarding.secret` | File with the secret (`modern`). A missing file is created with a random secret; on Linux and macOS it must not be readable by other users (mode `0600`) | reload |
+| `secret-file` | `forwarding.secret` | File with the secret (`modern`). A missing file is created with a random secret at start (`check-config` only says so); on Linux and macOS it must not be readable by other users (mode `0600`) | reload |
 | `secret-env` | not set | Name of an environment variable holding the secret; wins over `secret-file` | reload |
 
 Every server needs the same secret: see [Your own Pumpkin servers](getting-started.md#your-own-pumpkin-servers). Servers created by the proxy get it on their own.
@@ -253,7 +253,8 @@ Where the [PumboBridge](bridge.md) plugin on your Pumpkin servers connects. Unkn
 | `enabled` | `true` | Accept bridges | restart |
 | `listen` | `127.0.0.1:25578` | `ip:port` the bridges connect to: loopback, a private network or Tailscale (`100.64.x`). `0.0.0.0`, `[::]` and public addresses are refused, since bridge frames are signed, not encrypted | restart |
 | `allow-public` | `false` | Accept a `listen` address on every interface or a public one anyway | restart |
-| `key-file` | `bridge.key` | The bridge key (64 hex digits), created on the first start. `prox bridge key` in the console prints it | restart |
+| `key-file` | `bridge.key` | The bridge key (64 hex digits), created on the first start with mode `0600`. A key file other users can read is set to `0600`, or a warning names it when that is not possible (a read-only mount). `prox bridge key` in the console prints it | restart |
+| `key-env` | not set | Name of an environment variable holding the key; wins over `key-file`, and the proxy stops at start when the variable is not set | restart |
 | `command-timeout-ms` | `5000` | How long a command sent to a server waits for its answer | restart |
 | `trusted-plugins` | `[pumbo-core]` | Plugins that may send commands to the servers; any plugin that uses the bridge may read from them | restart |
 | `stats-ms` | `5000` | How often a server reports its TPS and load | restart |

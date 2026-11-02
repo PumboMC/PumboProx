@@ -48,7 +48,11 @@ pub fn build(reg: &ModuleRegistry, cfg: &Config) -> Result<Modules, ModuleError>
     for l in &cfg.listener {
         reg.listeners.get(&l.transport)?;
     }
-    let forwarding = (reg.forwarding.get(&cfg.forwarding.mode)?)(&cfg.forwarding.rest)?;
+    let mut fwd = cfg.forwarding.rest.clone();
+    if cfg.check_only {
+        fwd.insert(pumbo_forwarding::modern::NO_CREATE.into(), true.into());
+    }
+    let forwarding = (reg.forwarding.get(&cfg.forwarding.mode)?)(&fwd)?;
     let mut routing = cfg.routing.rest.clone();
     if !cfg.forced_hosts.is_empty() {
         let forced = cfg

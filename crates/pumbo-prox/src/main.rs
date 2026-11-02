@@ -169,7 +169,8 @@ fn check_plugins(path: &str) -> Result<(), String> {
 fn check_config(path: &str) -> ExitCode {
     let mut unknown = Vec::new();
     let result = load(path).and_then(|loaded| {
-        let cfg = loaded.config;
+        let mut cfg = loaded.config;
+        cfg.check_only = true;
         unknown = loaded.unknown;
         // Warnings of the checks (e.g. a backend outside private networks) go to stderr.
         pumbo_prox::logging::init(&cfg.logging);

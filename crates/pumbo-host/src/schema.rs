@@ -180,22 +180,29 @@ pub fn validate(schema: &str, v: &Value) -> Result<(), String> {
 /// file does not exist.
 pub fn read_table(path: &Path) -> Result<Option<Map<String, Value>>, String> {
     match std::fs::read_to_string(path) {
-        Ok(t) => match pumbo_core::yaml::from_str::<Value>(&t)? {
-            Value::Object(m) => Ok(Some(m)),
-            Value::Null => Ok(Some(Map::new())),
-            _ => Err("expected `key: value` lines at the top level".into()),
-        },
+        Ok(t) => parse_table(&t).map(Some),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.to_string()),
     }
 }
 
-/// Validates `config.yml` and every overlay over it (each on its own);
-/// errors name the file.
-pub fn validate_dir(schema: &str, dir: &Path) -> Result<(), String> {
-    let global = read_table(&dir.join("config.yml"))
-        .map_err(|e| format!("config.yml: {e}"))?
-        .unwrap_or_default();
+fn parse_table(text: &str) -> Result<Map<String, Value>, String> {
+    match pumbo_core::yaml::from_str::<Value>(text)? {
+        Value::Object(m) => Ok(m),
+        Value::Null => Ok(Map::new()),
+        _ => Err("expected `key: value` lines at the top level".into()),
+    }
+}
+
+/// Validates `config.yml` (`default` when there is none) and every overlay
+/// over it (each on its own); errors name the file.
+pub fn validate_dir(schema: &str, dir: &Path, default: Option<&str>) -> Result<(), String> {
+    let global = match read_table(&dir.join("config.yml")) {
+        Ok(None) => default.map(parse_table).transpose(),
+        other => other,
+    }
+    .map_err(|e| format!("config.yml: {e}"))?
+    .unwrap_or_default();
     validate(schema, &Value::Object(global.clone())).map_err(|e| format!("config.yml: {e}"))?;
     for sub in ["servers", "groups"] {
         let Ok(entries) = std::fs::read_dir(dir.join(sub)) else {
@@ -309,6 +316,24 @@ mod tests {
             assert!(err.starts_with(want) || err.contains(want), "{text}: {err}");
         }
         assert_eq!(validate("", &v("x: 1\n")), Ok(()));
+    }
+
+    /// Without `config.yml` (before the first start) the plugin's built-in
+    /// default is checked.
+    #[test]
+    fn a_missing_config_is_checked_as_its_default() {
+        let dir = std::env::temp_dir().join(format!("pumbo-schema-default-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(
+            validate_dir(SCHEMA, &dir, None)
+                .unwrap_err()
+                .contains("greeting: missing")
+        );
+        assert_eq!(validate_dir(SCHEMA, &dir, Some("greeting: hi\n")), Ok(()));
+        std::fs::write(dir.join("config.yml"), "level: 2\n").unwrap();
+        let err = validate_dir(SCHEMA, &dir, Some("greeting: hi\n")).unwrap_err();
+        assert!(err.contains("greeting: missing"), "the file wins: {err}");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

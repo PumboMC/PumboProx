@@ -178,3 +178,67 @@ fn console_replies_show_at_every_log_level() {
     assert!(err.contains("unknown command \"nope\"; type help"), "{err}");
     assert!(!err.contains("INFO"), "the log is off: {err}");
 }
+
+/// A fresh, empty directory for one test.
+fn empty_dir(tag: &str) -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("pumbo-cli-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn check_config_creates_no_secret() {
+    let dir = empty_dir("no-secret");
+    let file = dir.join("pumboprox.yml");
+    let config = small_config("").replace("mode: none", "mode: modern");
+    std::fs::write(&file, config).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_pumboprox"))
+        .args(["check-config", "pumboprox.yml"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert!(out.status.success(), "{err}");
+    assert!(
+        err.contains("forwarding.secret does not exist yet; the first start creates it"),
+        "{err}"
+    );
+    assert!(!dir.join("forwarding.secret").exists());
+}
+
+#[test]
+fn the_bridge_key_can_come_from_the_environment() {
+    use std::io::Write as _;
+    let dir = empty_dir("key-env");
+    let bridge = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let config = small_config("login:\n  online-mode: true\n").replace(
+        "bridge:\n  enabled: false\n",
+        &format!("bridge:\n  listen: \"{bridge}\"\n  key-env: PUMBO_TEST_BRIDGE_KEY\n"),
+    );
+    std::fs::write(dir.join("pumboprox.yml"), config).unwrap();
+    let key = "ab".repeat(32);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pumboprox"))
+        .current_dir(&dir)
+        .env("PUMBO_TEST_BRIDGE_KEY", &key)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"prox bridge key\nstop\n")
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(String::from_utf8_lossy(&out.stdout).contains(&key), "{err}");
+    assert!(!dir.join("bridge.key").exists(), "no key file is written");
+}

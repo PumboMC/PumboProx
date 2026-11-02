@@ -1018,6 +1018,24 @@ async fn descriptions_and_umbrella() {
     assert_eq!(check, Ok(()));
 }
 
+/// `pumboprox check-config` writes nothing: no plugin directories, no
+/// default files; the built-in default config is what it checks.
+#[tokio::test(flavor = "multi_thread")]
+async fn checking_plugins_writes_nothing() {
+    let env = Env::new("check-only");
+    env.plugin("pumbo-example", "example", "");
+    let results = pumbo_host::check_plugins(env.host_config(""))
+        .await
+        .unwrap();
+    assert_eq!(results, [("pumbo-example".to_string(), Ok(()))]);
+    let mut left: Vec<_> = std::fs::read_dir(env.plugins())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    left.sort();
+    assert_eq!(left, ["pumbo-example.wasm", "pumbo-example.yml"]);
+}
+
 /// A plugin enabled on one server only (plan §11, E5): players elsewhere do
 /// not see its commands or events; events without a server reach it.
 #[tokio::test(flavor = "multi_thread")]

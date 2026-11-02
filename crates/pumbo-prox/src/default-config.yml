@@ -43,6 +43,7 @@ plugins:
 #   enabled: true
 #   listen: "127.0.0.1:25578"
 #   key-file: bridge.key
+#   key-env: PUMBO_BRIDGE_KEY   # the key from this variable instead
 #   allow-public: false   # true accepts 0.0.0.0 or a public address
 
 # Players online at most (0: no limit; operators join anyway) and players
