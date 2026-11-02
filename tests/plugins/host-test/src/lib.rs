@@ -298,7 +298,13 @@ impl pumbo_sdk::Plugin for TestPlugin {
         publisher: String,
         payload: Vec<u8>,
     ) {
-        let to = self.config.get().report;
+        let (to, sleep_ms) = {
+            let config = self.config.get();
+            (config.report, config.bus_sleep_ms)
+        };
+        if sleep_ms > 0 {
+            pumbo_sdk::scheduler::sleep(sleep_ms).await;
+        }
         pumbo_sdk::players::send_message(
             to,
             plain(format!("bus {topic} {} from {publisher}", num(&payload))),

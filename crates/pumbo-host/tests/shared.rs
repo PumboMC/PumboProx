@@ -798,7 +798,7 @@ async fn bus_events() {
     env.config_file(
         "slow",
         "config.yml",
-        "prefix: w\nreport: 2\nbus_sleep_ms: 50\n",
+        "prefix: w\nreport: 2\nbus_sleep_ms: 200\n",
     );
     let mut cfg = env.host_config("");
     cfg.services.bus_queue = 200;
@@ -827,7 +827,7 @@ async fn bus_events() {
         .map(|i| format!("bus test:tick {i} from pub"))
         .collect();
     assert_eq!(got, want);
-    // 400 more: the slow subscriber (50 ms per event, queue 200) drops some.
+    // 400 more: the slow subscriber (200 ms per event, queue 200) drops some.
     ask(&host, &bridge, 1, "/pub test:tick@1.0 400", "pub").await;
     tokio::time::sleep(Duration::from_millis(500)).await;
     let dropped: u64 = host
