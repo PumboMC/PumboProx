@@ -8,6 +8,7 @@ pub mod commands;
 pub mod config;
 pub mod conn;
 pub mod health;
+mod keys;
 pub mod limits;
 pub mod logging;
 pub mod metrics;

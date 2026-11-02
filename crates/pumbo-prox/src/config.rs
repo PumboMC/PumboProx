@@ -8,6 +8,7 @@ use std::net::{IpAddr, SocketAddr};
 use pumbo_core::registry::ModuleConfig;
 use serde::Deserialize;
 
+pub use crate::keys::Seg;
 use crate::net::Cidr;
 
 /// The config a first start writes (`pumboprox` without a config file).
@@ -20,6 +21,88 @@ pub enum ConfigError {
     Yaml(String),
     #[error("{0}")]
     Invalid(String),
+    /// A bad value of `key`; [`Config::parse`] gives it the key's line.
+    #[error("{message}")]
+    Key { key: Vec<Seg>, message: String },
+    #[error("line {line}: {message}")]
+    At { line: usize, message: String },
+}
+
+impl ConfigError {
+    fn key(key: &[&str], message: String) -> Self {
+        Self::Key {
+            key: key.iter().map(|k| Seg::from(*k)).collect(),
+            message,
+        }
+    }
+
+    /// `pumboprox.yml line 14: ...` or `pumboprox.yml: ...`.
+    pub fn in_file(&self, file: &str) -> String {
+        match self {
+            Self::At { line, message } => format!("{file} line {line}: {message}"),
+            other => format!("{file}: {other}"),
+        }
+    }
+}
+
+/// Messages about keys, each with the key's line when it was found.
+pub type Notes = Vec<(Option<usize>, String)>;
+
+/// The config file as the start, `reload` and `check-config` read it: the
+/// text (the plugin host reads its sections from it too), the typed config
+/// and what the owner should hear about the file.
+#[derive(Debug)]
+pub struct Loaded {
+    pub text: String,
+    pub config: Config,
+    /// Keys nothing reads: a warning at start and reload, an error in
+    /// `check-config`. Each starts with the file and line.
+    pub unknown: Vec<String>,
+}
+
+/// Reads and checks the config file; every reader of the file goes through
+/// here, so the proxy and the plugin host see the same text.
+pub fn load(path: &std::path::Path) -> Result<Loaded, String> {
+    let text = read(path)?;
+    let file = file_label(path);
+    let (config, unknown) = Config::parse_checked(&text).map_err(|e| e.in_file(&file))?;
+    let unknown = unknown
+        .iter()
+        .map(|(line, m)| match line {
+            Some(n) => format!("{file} line {n}: {m}"),
+            None => format!("{file}: {m}"),
+        })
+        .collect();
+    Ok(Loaded {
+        text,
+        config,
+        unknown,
+    })
+}
+
+/// The name of the config file in messages.
+pub fn file_label(path: &std::path::Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    )
+}
+
+/// The config file's text; a missing one next to a `.toml` of the same name
+/// (the format before YAML) says so instead of only "not found".
+pub fn read(path: &std::path::Path) -> Result<String, String> {
+    std::fs::read_to_string(path).map_err(|e| {
+        let old = path.with_extension("toml");
+        if e.kind() == std::io::ErrorKind::NotFound && old.is_file() {
+            format!(
+                "{} not found; found {}, this version reads YAML - convert it to YAML with the same keys (see https://github.com/PumboMC/PumboProx)",
+                path.display(),
+                old.display()
+            )
+        } else {
+            format!("{}: {e}", path.display())
+        }
+    })
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -75,9 +158,10 @@ pub struct Config {
     /// `server-group` (a list), read by the plugin host (§5.8.4).
     #[serde(default, rename = "server-group")]
     pub server_groups: Vec<ModuleConfig>,
-    /// Other sections, e.g. `viaproxy` for the translation provider of that name.
+    /// Other sections, e.g. `viaproxy` for the translation provider of that
+    /// name; any value, so an unknown key is a warning, not a parse error.
     #[serde(flatten)]
-    pub sections: BTreeMap<String, ModuleConfig>,
+    pub sections: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -666,31 +750,58 @@ impl Config {
     /// Parses and checks everything that does not need the modules (§3.4:
     /// the proxy refuses to start on an unsafe setup).
     pub fn parse(text: &str) -> Result<Self, ConfigError> {
+        Self::parse_checked(text).map(|(cfg, _)| cfg)
+    }
+
+    /// [`Config::parse`] plus the keys nothing reads, with their lines.
+    pub fn parse_checked(text: &str) -> Result<(Self, Notes), ConfigError> {
         let cfg: Config = pumbo_core::yaml::from_str(text).map_err(ConfigError::Yaml)?;
-        cfg.validate()?;
-        Ok(cfg)
+        cfg.validate().map_err(|e| match e {
+            ConfigError::Key { key, message } => match crate::keys::line_of(text, &key) {
+                Some(line) => ConfigError::At { line, message },
+                None => ConfigError::Invalid(message),
+            },
+            other => other,
+        })?;
+        let value: serde_json::Value =
+            pumbo_core::yaml::from_str(text).map_err(ConfigError::Yaml)?;
+        let mut unknown: Notes = crate::keys::unknown(&value, &cfg)
+            .iter()
+            .map(|u| (crate::keys::line_of(text, &u.path), u.message()))
+            .collect();
+        unknown.sort_by_key(|(line, _)| line.unwrap_or(usize::MAX));
+        Ok((cfg, unknown))
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
         let bad = |m: String| Err(ConfigError::Invalid(m));
-        for l in &self.listener {
-            let cidrs = self.trusted(l)?;
+        for (n, l) in self.listener.iter().enumerate() {
+            let at = |key: &str, message: String| ConfigError::Key {
+                key: vec!["listener".into(), Seg::Index(n), key.into()],
+                message,
+            };
+            let cidrs = self
+                .trusted(l)
+                .map_err(|e| at("trusted-proxies", e.to_string()))?;
             if !l.proxy_protocol.on() {
                 continue;
             }
             if cidrs.is_empty() {
-                return bad(format!(
-                    "listener {}: proxy-protocol needs trusted-proxies",
-                    l.bind
+                return Err(at(
+                    "proxy-protocol",
+                    format!("listener {}: proxy-protocol needs trusted-proxies", l.bind),
                 ));
             }
             if let Some(i) = cidrs.iter().position(|c| c.too_wide())
                 && !l.allow_any_proxy
             {
-                return bad(format!(
-                    "listener {}: trusted-proxies {} lets anyone send a PROXY header with any address (IP bans and per-IP limits stop working); list your proxy's ranges or set allow-any-proxy: true",
-                    l.bind,
-                    l.trusted_proxies.get(i).map_or("", String::as_str)
+                return Err(at(
+                    "trusted-proxies",
+                    format!(
+                        "listener {}: trusted-proxies {} lets anyone send a PROXY header with any address (IP bans and per-IP limits stop working); list your proxy's ranges or set allow-any-proxy: true",
+                        l.bind,
+                        l.trusted_proxies.get(i).map_or("", String::as_str)
+                    ),
                 ));
             }
         }
@@ -707,20 +818,22 @@ impl Config {
         }
         let mut lower: BTreeMap<String, &str> = BTreeMap::new();
         for (name, s) in &self.servers {
+            let at = |m: String| ConfigError::key(&["servers", name, "address"], m);
             let Some((host, _)) = split_host_port(&s.address) else {
-                return bad(format!(
+                return Err(at(format!(
                     "server {name}: address {} is not host:port",
                     s.address
-                ));
+                )));
             };
             // Names are resolved by `check_backend_names`, at start and reload.
             if let Ok(ip) = host.parse::<IpAddr>() {
-                check_private(name, s, &[ip]).map_err(ConfigError::Invalid)?;
+                check_private(name, s, &[ip]).map_err(at)?;
             }
             // Permission contexts name servers in lower case.
             if let Some(other) = lower.insert(name.to_ascii_lowercase(), name) {
-                return bad(format!(
-                    "servers {other} and {name} differ only in letter case; rename one"
+                return Err(ConfigError::key(
+                    &["servers", name],
+                    format!("servers {other} and {name} differ only in letter case; rename one"),
                 ));
             }
         }
@@ -730,25 +843,37 @@ impl Config {
         }
         for id in &self.commands.operators {
             if uuid::Uuid::parse_str(id).is_err() {
-                return bad(format!("commands.operators: {id} is not a UUID"));
+                return Err(ConfigError::key(
+                    &["commands", "operators"],
+                    format!("commands.operators: {id} is not a UUID"),
+                ));
             }
         }
         for sub in &self.bungeecord_channel.subchannels {
             if !BUNGEECORD_SUBCHANNELS.contains(&sub.as_str()) {
-                return bad(format!(
-                    "bungeecord-channel: unknown subchannel {sub} (known: {})",
-                    BUNGEECORD_SUBCHANNELS.join(", ")
+                return Err(ConfigError::key(
+                    &["bungeecord-channel", "subchannels"],
+                    format!(
+                        "bungeecord-channel: unknown subchannel {sub} (known: {})",
+                        BUNGEECORD_SUBCHANNELS.join(", ")
+                    ),
                 ));
             }
         }
-        self.bridge.validate().map_err(ConfigError::Invalid)?;
-        self.managed_servers
+        self.bridge
             .validate()
-            .map_err(|e| ConfigError::Invalid(format!("managed-servers: {e}")))?;
+            .map_err(|e| ConfigError::key(&["bridge", "listen"], e))?;
+        self.managed_servers.validate().map_err(|e| {
+            ConfigError::key(
+                &["managed-servers", "ports"],
+                format!("managed-servers: {e}"),
+            )
+        })?;
         if self.limits.max_pending_logins == 0 || self.limits.max_concurrent_has_joined == 0 {
-            return bad(
+            return Err(ConfigError::key(
+                &["limits"],
                 "limits: max-pending-logins and max-concurrent-has-joined must be > 0".into(),
-            );
+            ));
         }
         Ok(())
     }
@@ -782,15 +907,20 @@ impl Config {
 
     /// `routing.try` and `forced-hosts` name only servers of `servers`.
     pub fn check_server_names(&self) -> Result<(), ConfigError> {
-        let bad = |m: String| Err(ConfigError::Invalid(m));
         for n in self.try_order() {
             if !self.servers.contains_key(&n) {
-                return bad(format!("routing.try names unknown server {n}"));
+                return Err(ConfigError::key(
+                    &["routing", "try"],
+                    format!("routing.try names unknown server {n}"),
+                ));
             }
         }
         for (host, order) in &self.forced_hosts {
             if let Some(n) = order.iter().find(|n| !self.servers.contains_key(*n)) {
-                return bad(format!("forced-hosts.\"{host}\" names unknown server {n}"));
+                return Err(ConfigError::key(
+                    &["forced-hosts", host],
+                    format!("forced-hosts.\"{host}\" names unknown server {n}"),
+                ));
             }
         }
         Ok(())

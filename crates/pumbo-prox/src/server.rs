@@ -472,9 +472,9 @@ impl Proxy {
             .config_path
             .as_ref()
             .ok_or("no config file to reload")?;
-        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let loaded = crate::config::load(path)?;
+        let (text, config) = (loaded.text, loaded.config);
         let at = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
-        let config = Config::parse(&text).map_err(|e| at(&e))?;
         let unresolved = config.check_backend_names().map_err(|e| at(&e))?;
         let host = pumbo_host::HostConfig::parse(&text).map_err(|e| at(&e))?;
         let old = self.runtime();
@@ -491,7 +491,7 @@ impl Proxy {
             p.host.set_required_gates(host.plugins.required_gates);
         }
         self.commit(runtime);
-        for w in unresolved {
+        for w in loaded.unknown.iter().chain(&unresolved) {
             warn!("{w}");
         }
         if level != old.config.logging.level

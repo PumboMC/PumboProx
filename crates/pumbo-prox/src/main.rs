@@ -10,7 +10,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use pumbo_core::listener::Listener;
-use pumbo_prox::config::Config;
+use pumbo_prox::config::Loaded;
 use pumbo_prox::modules;
 use pumbo_prox::server::{ListenerSettings, Proxy, Runtime};
 use tokio::io::AsyncBufReadExt;
@@ -91,25 +91,12 @@ fn version() -> ExitCode {
     }
 }
 
-fn load(path: &str) -> Result<Config, String> {
-    let text = read(path)?;
-    Config::parse(&text).map_err(|e| format!("{path}: {e}"))
+fn load(path: &str) -> Result<Loaded, String> {
+    pumbo_prox::config::load(std::path::Path::new(path))
 }
 
-/// The config file; a missing one next to a `.toml` of the same name (the
-/// format before YAML) says so instead of only "not found".
 fn read(path: &str) -> Result<String, String> {
-    std::fs::read_to_string(path).map_err(|e| {
-        let old = std::path::Path::new(path).with_extension("toml");
-        if e.kind() == std::io::ErrorKind::NotFound && old.is_file() {
-            format!(
-                "{path} not found; found {}, this version reads YAML - convert it to YAML with the same keys (see https://github.com/PumboMC/PumboProx)",
-                old.display()
-            )
-        } else {
-            format!("{path}: {e}")
-        }
-    })
+    pumbo_prox::config::read(std::path::Path::new(path))
 }
 
 fn block_on<T>(f: impl std::future::Future<Output = T>) -> Result<T, String> {
@@ -180,7 +167,10 @@ fn check_plugins(path: &str) -> Result<(), String> {
 }
 
 fn check_config(path: &str) -> ExitCode {
-    let result = load(path).and_then(|cfg| {
+    let mut unknown = Vec::new();
+    let result = load(path).and_then(|loaded| {
+        let cfg = loaded.config;
+        unknown = loaded.unknown;
         // Warnings of the checks (e.g. a backend outside private networks) go to stderr.
         pumbo_prox::logging::init(&cfg.logging);
         for w in cfg
@@ -212,13 +202,17 @@ fn check_config(path: &str) -> ExitCode {
                 "servers: {}",
                 cfg.servers.keys().cloned().collect::<Vec<_>>().join(", ")
             );
-            match check_plugins(path) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(e) => {
-                    eprintln!("config error: {e}");
-                    ExitCode::FAILURE
-                }
+            let mut code = ExitCode::SUCCESS;
+            // A key nothing reads is only a warning at start; here it fails.
+            for u in &unknown {
+                eprintln!("config error: {u}");
+                code = ExitCode::FAILURE;
             }
+            if let Err(e) = check_plugins(path) {
+                eprintln!("config error: {e}");
+                code = ExitCode::FAILURE;
+            }
+            code
         }
         Err(e) => {
             eprintln!("config error: {e}");
@@ -248,7 +242,11 @@ fn run(path: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let cfg = match load(path) {
+    let Loaded {
+        text,
+        config: cfg,
+        unknown,
+    } = match load(path) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("config error: {e}");
@@ -256,6 +254,7 @@ fn run(path: &str) -> ExitCode {
         }
     };
     pumbo_prox::logging::init(&cfg.logging);
+    unknown.iter().for_each(|u| warn!("{u}"));
     match cfg.check_backend_names() {
         Ok(warnings) => warnings.iter().for_each(|w| warn!("{w}")),
         Err(e) => {
@@ -287,7 +286,7 @@ fn run(path: &str) -> ExitCode {
             }
         };
         let listeners = tokio::select! {
-            r = start(&proxy, path) => match r {
+            r = start(&proxy, &text) => match r {
                 Some(l) => l,
                 None => return ExitCode::FAILURE,
             },
@@ -425,7 +424,7 @@ async fn console(proxy: std::sync::Arc<Proxy>) {
 /// (logged).
 async fn start(
     proxy: &std::sync::Arc<Proxy>,
-    path: &str,
+    text: &str,
 ) -> Option<Vec<(Box<dyn Listener>, std::sync::Arc<ListenerSettings>)>> {
     // PumboBridge (before the plugin host: it provides pumbo:bridge).
     let bridge_cfg = proxy.runtime().config.bridge.clone();
@@ -443,8 +442,7 @@ async fn start(
         }
     }
     // Plugin host (E5), from the same file; a missing plugin directory is created.
-    let text = std::fs::read_to_string(path).unwrap_or_default();
-    let started = match pumbo_prox::plugins::Plugins::launch(&text, proxy, natives).await {
+    let started = match pumbo_prox::plugins::Plugins::launch(text, proxy, natives).await {
         Ok(Some(p)) => {
             let _ = proxy.plugins.set(p.clone());
             p.wait_started().await

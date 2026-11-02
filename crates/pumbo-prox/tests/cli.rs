@@ -133,3 +133,28 @@ fn the_console_has_help_and_a_short_hint() {
     // The test-only `gate` is not offered.
     assert!(!err.contains("gate <"), "{err}");
 }
+
+#[test]
+fn check_config_fails_on_an_unknown_key() {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("pumbo-cli-check-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("pumboprox.yml");
+    std::fs::write(&file, small_config("limits:\n  max-player: 10\n")).unwrap();
+    let out = pumboprox(&["check-config", file.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        err.contains(
+            "config error: pumboprox.yml line 10: unknown key limits.max-player (did you mean max-players?); it is ignored"
+        ),
+        "{err}"
+    );
+    std::fs::write(&file, small_config("")).unwrap();
+    let out = pumboprox(&["check-config", file.to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

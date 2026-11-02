@@ -302,3 +302,62 @@ fn gate_timeouts_default_and_warn() {
         "{w:?}"
     );
 }
+
+#[test]
+fn unknown_keys_are_named_with_their_line() {
+    let notes = |text: &str| Config::parse_checked(text).unwrap().1;
+    assert_eq!(notes(pumbo_prox::config::DEFAULT_FILE), []);
+    assert_eq!(notes(SAMPLE), []);
+    let typo = format!("{SAMPLE}limits:\n  max-player: 10\n");
+    let line = typo.lines().count();
+    assert_eq!(
+        notes(&typo),
+        [(
+            Some(line),
+            "unknown key limits.max-player (did you mean max-players?); it is ignored".into()
+        )]
+    );
+    let top = notes(&format!(
+        "{SAMPLE}limts:\n  max-players: 10\nconfig-flag: 2\n"
+    ));
+    assert_eq!(top.len(), 2, "{top:?}");
+    assert!(top[0].1.contains("limts (did you mean limits?)"), "{top:?}");
+    assert!(top[1].1.starts_with("unknown key config-flag;"), "{top:?}");
+    // Keys of other readers, and maps whose keys the owner names, are known.
+    let fine = format!(
+        "{SAMPLE}plugins:\n  dir: plugins\n  memory-mb: 64\n  pumbo-perms:\n    servers: [lobby]\n\
+         style:\n  gold: \"<gold>\"\nforced-hosts:\n  play.example.org: [lobby]\n\
+         permissions:\n  file: permissions.yml\nserver-group:\n  - name: all\n    servers: [lobby]\n\
+         managed-servers:\n  templates:\n    small:\n      version: latest\n"
+    );
+    assert_eq!(notes(&fine), []);
+    let nested = SAMPLE
+        .replace("mode: none", "mode: modern\n  secret-fil: x")
+        .replace("protocol: 777 }", "protocol: 777, alow-public: true }")
+        .replace(
+            "  - bind: \"127.0.0.1:0\"",
+            "  - bind: \"127.0.0.1:0\"\n    proxy-protocl: true",
+        );
+    let found: Vec<String> = notes(&nested).into_iter().map(|(_, m)| m).collect();
+    assert_eq!(
+        found,
+        [
+            "unknown key listener[0].proxy-protocl (did you mean proxy-protocol?); it is ignored",
+            "unknown key forwarding.secret-fil (did you mean secret-file?); it is ignored",
+            "unknown key servers.lobby.alow-public (did you mean allow-public?); it is ignored",
+        ]
+    );
+}
+
+#[test]
+fn bad_values_name_their_line() {
+    let text = format!("{SAMPLE}commands:\n  operators: [Notch]\n");
+    let err = Config::parse(&text).unwrap_err();
+    assert_eq!(
+        err.in_file("pumboprox.yml"),
+        format!(
+            "pumboprox.yml line {}: commands.operators: Notch is not a UUID",
+            text.lines().count()
+        )
+    );
+}

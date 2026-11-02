@@ -526,7 +526,7 @@ pub fn flow_list(items: &[String]) -> String {
     )
 }
 
-fn indent_of(l: &str) -> usize {
+pub(crate) fn indent_of(l: &str) -> usize {
     l.len() - l.trim_start().len()
 }
 
@@ -537,7 +537,7 @@ fn blank_or_comment(l: &str) -> bool {
 
 /// `key: rest` of a mapping line: the key without quotes, the key as
 /// written, and what follows the colon.
-fn split_key(line: &str) -> Option<(String, &str, &str)> {
+pub(crate) fn split_key(line: &str) -> Option<(String, &str, &str)> {
     let t = line.trim_start();
     let (key, written, rest) = match t.chars().next()? {
         q @ ('"' | '\'') => {

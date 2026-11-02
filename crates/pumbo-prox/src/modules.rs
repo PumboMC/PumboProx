@@ -64,7 +64,16 @@ pub fn build(reg: &ModuleRegistry, cfg: &Config) -> Result<Modules, ModuleError>
         .chain
         .iter()
         .map(|name| {
-            let section = cfg.sections.get(name).cloned().unwrap_or_default();
+            let section = match cfg.sections.get(name) {
+                None => ModuleConfig::new(),
+                Some(serde_json::Value::Object(m)) => m.clone(),
+                Some(_) => {
+                    return Err(ModuleError::Config {
+                        name: name.clone(),
+                        message: format!("{name} must be a mapping"),
+                    });
+                }
+            };
             (reg.translators.get(name)?)(&section)
         })
         .collect::<Result<Vec<_>, _>>()?;
