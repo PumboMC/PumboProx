@@ -63,6 +63,7 @@ metrics! {
     dropped_payloads: counter "pumboprox_dropped_packets_total" "{kind=\"custom_payload\"}";
     /// Commands for a session whose queue was full (messages, titles, switches).
     dropped_commands: counter "pumboprox_dropped_packets_total" "{kind=\"session_command\"}";
+    dropped_inputs: counter "pumboprox_dropped_packets_total" "{kind=\"virtual_input\"}";
     bytes_from_clients: counter "pumboprox_bytes_total" "{from=\"client\"}";
     bytes_from_backends: counter "pumboprox_bytes_total" "{from=\"backend\"}";
     backend_connects: counter "pumboprox_backend_connects_total" "{result=\"ok\"}";
@@ -75,7 +76,6 @@ metrics! {
     chat_cancelled: counter "pumboprox_chat_cancelled_total" "";
     virtual_entries: counter "pumboprox_virtual_entries_total" "";
     virtual_releases: counter "pumboprox_virtual_releases_total" "";
-    dropped_inputs: counter "pumboprox_dropped_packets_total" "{kind=\"virtual_input\"}";
     /// Pumpkin's `trail` particle without options, repaired (D-COMPAT-1).
     fixed_trails: counter "pumboprox_fixed_packets_total" "{kind=\"trail_particle\"}";
     auth_requests: counter "pumboprox_auth_requests_total" "";
@@ -228,18 +228,26 @@ mod tests {
         assert!(all.iter().all(Option::is_some), "0: no limit");
     }
 
+    /// A family's samples follow its one `# TYPE` line: Prometheus rejects a
+    /// scrape that repeats it.
     #[test]
     fn renders_types_once_per_family() {
         let m = Metrics::default();
         Metrics::inc(&m.rejected_ip_rate);
         let text = m.render();
         assert!(text.contains("pumboprox_connections_rejected_total{reason=\"ip_rate\"} 1\n"));
-        assert_eq!(
-            text.matches("# TYPE pumboprox_connections_rejected_total counter")
-                .count(),
-            1
-        );
         assert!(text.contains("# TYPE pumboprox_players_online gauge"));
+        let mut seen = std::collections::HashSet::new();
+        let mut current = "";
+        for line in text.lines() {
+            if let Some(t) = line.strip_prefix("# TYPE ") {
+                current = t.split(' ').next().unwrap_or_default();
+                assert!(seen.insert(current), "{current} typed twice:\n{text}");
+            } else {
+                let name = line.split(['{', ' ']).next().unwrap_or_default();
+                assert_eq!(name, current, "{line} outside its family");
+            }
+        }
     }
 
     #[tokio::test]
