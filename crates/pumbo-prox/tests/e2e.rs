@@ -1157,17 +1157,29 @@ async fn reload_and_metrics_endpoint() {
         "second"
     );
 
-    let mut s = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
-    s.write_all(b"GET /metrics HTTP/1.1\r\nHost: x\r\n\r\n")
-        .await
-        .unwrap();
-    let mut reply = String::new();
-    s.read_to_string(&mut reply).await.unwrap();
+    let get = |path: &'static str| async move {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        s.write_all(format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        let mut reply = String::new();
+        s.read_to_string(&mut reply).await.unwrap();
+        reply
+    };
+    let reply = get("/metrics").await;
     assert!(reply.starts_with("HTTP/1.1 200 OK"), "{reply}");
     assert!(
         reply.contains("pumboprox_status_total{kind=\"modern\"} 5"),
         "{reply}"
     );
+    let ready = get("/ready").await;
+    assert!(ready.starts_with("HTTP/1.1 200 OK"), "{ready}");
+    // Stopping: not ready at once, while the process still lives.
+    proxy.stop();
+    let ready = get("/ready").await;
+    assert!(ready.starts_with("HTTP/1.1 503"), "{ready}");
+    let health = get("/health").await;
+    assert!(health.starts_with("HTTP/1.1 200 OK"), "{health}");
     std::fs::remove_file(&path).unwrap();
     std::fs::remove_file(&icon).unwrap();
 }

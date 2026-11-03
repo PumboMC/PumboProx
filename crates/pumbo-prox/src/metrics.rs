@@ -129,22 +129,27 @@ impl Drop for GaugeGuard {
     }
 }
 
-/// Serves `GET /metrics` over plain HTTP/1.1 on `addr` (loopback, checked by
-/// the config). One request per connection.
-/// `extra`: more series appended to the proxy's (plugin metrics, E5).
-pub async fn serve(
-    listener: TcpListener,
-    metrics: Arc<Metrics>,
-    extra: Arc<dyn Fn() -> String + Send + Sync>,
-) {
-    serve_from(|| listener.accept(), metrics, extra).await;
+/// What the HTTP endpoint answers with.
+#[derive(Clone)]
+pub struct Endpoint {
+    pub metrics: Arc<Metrics>,
+    /// More series appended to the proxy's (backends, plugin metrics).
+    pub extra: Arc<dyn Fn() -> String + Send + Sync>,
+    /// `/ready`: the proxy takes players.
+    pub ready: Arc<dyn Fn() -> bool + Send + Sync>,
 }
 
-async fn serve_from<F, A>(
-    mut accept: F,
-    metrics: Arc<Metrics>,
-    extra: Arc<dyn Fn() -> String + Send + Sync>,
-) where
+/// A request head larger than this is not answered.
+const MAX_HEAD: usize = 8192;
+
+/// Serves `GET /metrics` (also `GET /`), `GET /health` and `GET /ready` over
+/// plain HTTP/1.1, one request per connection.
+pub async fn serve(listener: TcpListener, endpoint: Endpoint) {
+    serve_from(|| listener.accept(), endpoint).await;
+}
+
+async fn serve_from<F, A>(mut accept: F, endpoint: Endpoint)
+where
     F: FnMut() -> A,
     A: Future<Output = std::io::Result<(TcpStream, SocketAddr)>>,
 {
@@ -158,19 +163,11 @@ async fn serve_from<F, A>(
                 continue;
             }
         };
-        let metrics = metrics.clone();
-        let extra = extra.clone();
+        let endpoint = endpoint.clone();
         tokio::spawn(async move {
-            let mut head = [0u8; 1024];
-            let read = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut head)).await;
-            let Ok(Ok(n)) = read else { return };
-            let request = head.get(..n).unwrap_or_default();
-            let (status, body) =
-                if request.starts_with(b"GET /metrics ") || request.starts_with(b"GET / ") {
-                    ("200 OK", metrics.render() + &extra())
-                } else {
-                    ("404 Not Found", String::new())
-                };
+            let read = tokio::time::timeout(Duration::from_secs(2), read_head(&mut stream)).await;
+            let Ok(Some(head)) = read else { return };
+            let (status, body) = answer(&head, &endpoint);
             let reply = format!(
                 "HTTP/1.1 {status}\r\nContent-Type: text/plain; version=0.0.4\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
@@ -178,6 +175,37 @@ async fn serve_from<F, A>(
             let _ = stream.write_all(reply.as_bytes()).await;
             let _ = stream.shutdown().await;
         });
+    }
+}
+
+/// The request up to its empty line; `None` when the peer closes first or
+/// sends more than [`MAX_HEAD`].
+async fn read_head(stream: &mut TcpStream) -> Option<Vec<u8>> {
+    let mut head = Vec::new();
+    let mut buf = [0u8; 1024];
+    loop {
+        let n = stream.read(&mut buf).await.ok().filter(|n| *n > 0)?;
+        head.extend_from_slice(buf.get(..n)?);
+        if head.windows(4).any(|w| w == b"\r\n\r\n") {
+            return Some(head);
+        }
+        if head.len() > MAX_HEAD {
+            return None;
+        }
+    }
+}
+
+fn answer(head: &[u8], e: &Endpoint) -> (&'static str, String) {
+    let line = head.split(|b| *b == b'\r').next().unwrap_or_default();
+    let mut parts = line.split(|b| *b == b' ');
+    let (method, target) = (parts.next(), parts.next().unwrap_or_default());
+    let path = target.split(|b| *b == b'?').next().unwrap_or_default();
+    match (method, path) {
+        (Some(b"GET"), b"/health") => ("200 OK", "ok\n".into()),
+        (Some(b"GET"), b"/ready") if (e.ready)() => ("200 OK", "ready\n".into()),
+        (Some(b"GET"), b"/ready") => ("503 Service Unavailable", "not ready\n".into()),
+        (Some(b"GET"), b"/metrics" | b"/") => ("200 OK", e.metrics.render() + &(e.extra)()),
+        _ => ("404 Not Found", String::new()),
     }
 }
 
@@ -250,6 +278,63 @@ mod tests {
         }
     }
 
+    fn endpoint(ready: impl Fn() -> bool + Send + Sync + 'static) -> Endpoint {
+        Endpoint {
+            metrics: Arc::default(),
+            extra: Arc::new(|| "extra 1\n".into()),
+            ready: Arc::new(ready),
+        }
+    }
+
+    /// The reply to `request`, written in pieces.
+    async fn get(endpoint: Endpoint, request: &[&str]) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(serve(listener, endpoint));
+        let mut s = TcpStream::connect(addr).await.unwrap();
+        for part in request {
+            s.write_all(part.as_bytes()).await.unwrap();
+            s.flush().await.unwrap();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let mut reply = String::new();
+        s.read_to_string(&mut reply).await.unwrap();
+        server.abort();
+        reply
+    }
+
+    #[tokio::test]
+    async fn health_ready_and_metrics() {
+        let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = ready.clone();
+        let e = endpoint(move || flag.load(Ordering::Relaxed));
+        let health = get(e.clone(), &["GET /health HTTP/1.1\r\n\r\n"]).await;
+        assert!(
+            health.starts_with("HTTP/1.1 200 OK") && health.ends_with("ok\n"),
+            "{health}"
+        );
+        let not_ready = get(e.clone(), &["GET /ready HTTP/1.1\r\n\r\n"]).await;
+        assert!(not_ready.starts_with("HTTP/1.1 503"), "{not_ready}");
+        ready.store(true, Ordering::Relaxed);
+        let is_ready = get(e.clone(), &["GET /ready HTTP/1.1\r\n\r\n"]).await;
+        assert!(is_ready.starts_with("HTTP/1.1 200 OK"), "{is_ready}");
+        // A head that arrives in pieces is read to its end.
+        let metrics = get(
+            e.clone(),
+            &["GET /metrics?x=1 HTTP/1.1\r\n", "Host: x\r\n", "\r\n"],
+        )
+        .await;
+        assert!(metrics.starts_with("HTTP/1.1 200 OK"), "{metrics}");
+        assert!(
+            metrics.contains("\npumboprox_players_online 0\n") && metrics.ends_with("\nextra 1\n"),
+            "{metrics}"
+        );
+        let other = get(e.clone(), &["GET /metricsx HTTP/1.1\r\n\r\n"]).await;
+        assert!(other.starts_with("HTTP/1.1 404"), "{other}");
+        let post = get(e, &["POST /metrics HTTP/1.1\r\n\r\n"]).await;
+        assert!(post.starts_with("HTTP/1.1 404"), "{post}");
+    }
+
     #[tokio::test]
     async fn failing_accept_backs_off() {
         let tries = Arc::new(AtomicU64::new(0));
@@ -262,7 +347,7 @@ mod tests {
                 Err(std::io::Error::other("out of file descriptors"))
             }
         };
-        let serve = serve_from(accept, Arc::default(), Arc::new(String::new));
+        let serve = serve_from(accept, endpoint(|| true));
         let _ = tokio::time::timeout(Duration::from_millis(300), serve).await;
         let tries = tries.load(Ordering::Relaxed);
         assert!(tries <= 10, "{tries} accepts in 300 ms");

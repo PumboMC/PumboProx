@@ -339,6 +339,9 @@ pub struct Proxy {
     pub premium: crate::limits::PremiumCache,
     ip_display: IpDisplay,
     shutdown: watch::Sender<bool>,
+    /// [`Proxy::serve`] accepts players.
+    serving: AtomicBool,
+    metrics_started: AtomicBool,
     active: AtomicUsize,
     config_path: Option<PathBuf>,
     /// One config change at a time: reload, refresh and edits of the file.
@@ -427,6 +430,8 @@ impl Proxy {
             premium: crate::limits::PremiumCache::default(),
             ip_display,
             shutdown: watch::channel(false).0,
+            serving: AtomicBool::new(false),
+            metrics_started: AtomicBool::new(false),
             active: AtomicUsize::new(0),
             config_path,
             config_lock: Mutex::new(()),
@@ -864,31 +869,58 @@ impl Proxy {
         out
     }
 
+    /// `/ready`: the listeners take players, every required gate and plugin
+    /// is loaded, and the proxy is not stopping. Backends do not count: the
+    /// Pumbox holds players while they restart.
+    pub fn ready(&self) -> bool {
+        self.serving.load(Ordering::Relaxed)
+            && !*self.shutdown.borrow()
+            && self
+                .plugins
+                .get()
+                .is_none_or(|p| p.host.login_open().is_ok())
+    }
+
+    /// The metrics, `/health` and `/ready` endpoint at `logging.metrics-bind`
+    /// (once; [`Proxy::serve`] starts it when the start did not).
+    pub async fn start_metrics(self: &Arc<Self>) {
+        let bind = self.runtime().config.logging.metrics_bind.clone();
+        let Ok(addr) = bind.parse::<SocketAddr>() else {
+            return;
+        };
+        if self.metrics_started.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let listener = match crate::metrics::bind(addr).await {
+            Ok(l) => l,
+            Err(e) => return error!("metrics on {addr}: {e}"),
+        };
+        info!("metrics on http://{addr}/metrics");
+        let (extra, ready) = (Arc::downgrade(self), Arc::downgrade(self));
+        let endpoint = crate::metrics::Endpoint {
+            metrics: self.metrics.clone(),
+            extra: Arc::new(move || {
+                let Some(p) = extra.upgrade() else {
+                    return String::new();
+                };
+                let mut out = p.render_health();
+                if let Some(plugins) = p.plugins.get() {
+                    out.push_str(&plugins.host.render_metrics());
+                }
+                out
+            }),
+            ready: Arc::new(move || ready.upgrade().is_some_and(|p| p.ready())),
+        };
+        tokio::spawn(crate::metrics::serve(listener, endpoint));
+    }
+
     /// Accepts connections on all listeners until [`Proxy::stop`], then waits
     /// up to five seconds for sessions to end.
     pub async fn serve(
         self: Arc<Self>,
         listeners: Vec<(Box<dyn Listener>, Arc<ListenerSettings>)>,
     ) {
-        let metrics_bind = self.runtime().config.logging.metrics_bind.clone();
-        if let Ok(addr) = metrics_bind.parse::<SocketAddr>() {
-            match crate::metrics::bind(addr).await {
-                Ok(l) => {
-                    info!("metrics on http://{addr}/metrics");
-                    let plugins = self.plugins.get().cloned();
-                    let me = Arc::downgrade(&self);
-                    let extra: Arc<dyn Fn() -> String + Send + Sync> = Arc::new(move || {
-                        let mut out = me.upgrade().map(|p| p.render_health()).unwrap_or_default();
-                        if let Some(p) = &plugins {
-                            out.push_str(&p.host.render_metrics());
-                        }
-                        out
-                    });
-                    tokio::spawn(crate::metrics::serve(l, self.metrics.clone(), extra));
-                }
-                Err(e) => error!("metrics on {addr}: {e}"),
-            }
-        }
+        self.start_metrics().await;
         let sweeper = {
             let ips = self.ips.clone();
             tokio::spawn(async move {
@@ -905,6 +937,7 @@ impl Proxy {
                 proxy.accept_loop(listener, settings).await
             }));
         }
+        self.serving.store(true, Ordering::Relaxed);
         for t in tasks {
             let _ = t.await;
         }

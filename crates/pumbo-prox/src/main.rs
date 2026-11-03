@@ -451,6 +451,8 @@ fn run(path: &str) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
+        // Before the start, which can take minutes (a server download): `/health` answers meanwhile.
+        proxy.start_metrics().await;
         let listeners = tokio::select! {
             r = start(&proxy, &text) => match r {
                 Some(l) => l,
