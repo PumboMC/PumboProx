@@ -6,7 +6,7 @@
 
 Everything the proxy reads from `pumboprox.yml`. The file written on the first start holds only a few sections (see [Get started](getting-started.md#the-config)); every key below has a default and can be left out.
 
-- `pumboprox` reads `pumboprox.yml` in the directory it starts in; `pumboprox run <file>` reads another file. Relative paths in the file (secrets, `plugins/`, `servers/`, the server icon) are relative to that directory too.
+- `pumboprox` reads `pumboprox.yml` in the directory it starts in; `pumboprox run <file>` reads another file. Relative paths in the file (secrets, `plugins/`, `servers/`, `permissions.yml`, the server icon) are read next to the config file, wherever the proxy starts. When one of them exists only in the directory the proxy starts in, or next to the config only as an empty folder (an install that worked that way before, such as `plugins/`), the proxy reads all of them from there and says so in a warning; move them next to the config.
 - `pumboprox check-config [file]` checks the file and the configs of the plugins without starting the proxy, and exits with 1 on an error. A key that nothing reads (a typo such as `max-player`) keeps the default: the start and `reload` warn about it with its line and the closest known key, and `check-config` counts it as an error.
 - `reload` in the console (or `/prox reload`) reads the file again. Players stay online. The **Applies** column says what a change needs:
   - **reload**: a `reload` is enough. Settings of a login (limits, `login`, forwarding, authentication, translation) apply to connections made after the reload.

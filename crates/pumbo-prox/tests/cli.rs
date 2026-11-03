@@ -294,3 +294,70 @@ fn migrate_config_renames_old_keys_and_keeps_a_copy() {
     );
     assert!(!dir.join("pumboprox.yml.bak.2").exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn relative_paths_are_read_next_to_the_config() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = empty_dir("paths");
+    let (conf, elsewhere) = (dir.join("conf"), dir.join("elsewhere"));
+    std::fs::create_dir_all(&conf).unwrap();
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let file = conf.join("pumboprox.yml");
+    std::fs::write(
+        &file,
+        small_config("").replace("mode: none", "mode: modern"),
+    )
+    .unwrap();
+    let secret = |at: &std::path::Path| {
+        let s = at.join("forwarding.secret");
+        std::fs::write(&s, "a".repeat(64)).unwrap();
+        std::fs::set_permissions(&s, std::fs::Permissions::from_mode(0o600)).unwrap();
+    };
+    let check = || {
+        let out = Command::new(env!("CARGO_BIN_EXE_pumboprox"))
+            .args(["check-config", file.to_str().unwrap()])
+            .current_dir(&elsewhere)
+            .output()
+            .unwrap();
+        let err = String::from_utf8(out.stderr).unwrap();
+        assert!(out.status.success(), "{err}");
+        err
+    };
+    // Only next to the config: found there, from any working directory.
+    secret(&conf);
+    let err = check();
+    assert!(!err.contains("does not exist yet"), "{err}");
+    assert!(!err.contains("working directory"), "{err}");
+    // Only in the working directory (an older install): it stays, with a warning.
+    std::fs::remove_file(conf.join("forwarding.secret")).unwrap();
+    secret(&elsewhere);
+    let err = check();
+    assert!(
+        err.contains(&format!(
+            "relative paths are read from the working directory {} because forwarding.secret is there and missing or empty next to {}; move them next to the config",
+            elsewhere.canonicalize().unwrap().display(),
+            file.display()
+        )),
+        "{err}"
+    );
+    assert!(!err.contains("does not exist yet"), "{err}");
+    // Plugins in the working directory and an empty plugins/ next to the
+    // config (as 0.2.5-beta left it): they stay where they are.
+    std::fs::rename(
+        elsewhere.join("forwarding.secret"),
+        conf.join("forwarding.secret"),
+    )
+    .unwrap();
+    std::fs::create_dir_all(conf.join("plugins")).unwrap();
+    std::fs::create_dir_all(elsewhere.join("plugins")).unwrap();
+    std::fs::write(elsewhere.join("plugins/notes.txt"), "").unwrap();
+    let err = check();
+    assert!(err.contains("because plugins/ is there"), "{err}");
+    std::fs::remove_dir_all(elsewhere.join("plugins")).unwrap();
+    std::fs::rename(
+        conf.join("forwarding.secret"),
+        elsewhere.join("forwarding.secret"),
+    )
+    .unwrap();
+}

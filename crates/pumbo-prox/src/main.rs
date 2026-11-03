@@ -5,12 +5,12 @@
 //! built-in proxy commands `glist`, `find`, `send`, `alert`, `pumbo` (the
 //! plugin list), plugin commands and `prox …` (the same as in the game).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
 use pumbo_core::listener::Listener;
-use pumbo_prox::config::Loaded;
+use pumbo_prox::config::{Config, Loaded};
 use pumbo_prox::modules;
 use pumbo_prox::server::{ListenerSettings, Proxy, Runtime};
 use tokio::io::AsyncBufReadExt;
@@ -126,7 +126,12 @@ fn describe(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     };
     let result = read(path)
-        .and_then(|text| pumbo_host::HostConfig::parse(&text).map_err(|e| format!("{path}: {e}")))
+        .and_then(|text| {
+            if let (_, Some(w)) = settle(path, None, &text) {
+                eprintln!("{w}");
+            }
+            pumbo_host::HostConfig::parse(&text).map_err(|e| format!("{path}: {e}"))
+        })
         .and_then(|cfg| block_on(pumbo_host::describe_offline(cfg, id)).and_then(|r| r));
     match result {
         Ok((json, check)) => {
@@ -173,13 +178,19 @@ fn check_plugins(path: &str) -> Result<(), String> {
 
 fn check_config(path: &str) -> ExitCode {
     let mut unknown = Vec::new();
+    let mut file = path.to_string();
     let result = load(path).and_then(|loaded| {
         let mut cfg = loaded.config;
         cfg.check_only = true;
         unknown = loaded.unknown;
         // Warnings of the checks (e.g. a backend outside private networks) go to stderr.
         pumbo_prox::logging::init(&cfg.logging);
-        loaded.warnings.iter().for_each(|w| warn!("{w}"));
+        let (absolute, moved) = settle(path, Some(&cfg), &loaded.text);
+        file = absolute;
+        moved
+            .iter()
+            .chain(&loaded.warnings)
+            .for_each(|w| warn!("{w}"));
         for w in cfg
             .check_backend_names()
             .map_err(|e| format!("{path}: {e}"))?
@@ -215,7 +226,7 @@ fn check_config(path: &str) -> ExitCode {
                 eprintln!("config error: {u}");
                 code = ExitCode::FAILURE;
             }
-            if let Err(e) = check_plugins(path) {
+            if let Err(e) = check_plugins(&file) {
                 eprintln!("config error: {e}");
                 code = ExitCode::FAILURE;
             }
@@ -264,6 +275,112 @@ fn migrate_config(path: &str) -> ExitCode {
     }
 }
 
+/// The relative paths of the file that are in use, by the name a warning
+/// shows (a directory ends in `/`).
+fn relative_paths(
+    cfg: Option<&Config>,
+    host: Option<&pumbo_host::HostConfig>,
+) -> Vec<(String, PathBuf)> {
+    let mut out: Vec<(String, PathBuf)> = Vec::new();
+    let mut file = |p: &str| out.push((p.to_string(), PathBuf::from(p)));
+    if let Some(cfg) = cfg {
+        let fwd = &cfg.forwarding;
+        if fwd.mode == "modern" && !fwd.rest.contains_key("secret-env") {
+            file(
+                fwd.rest
+                    .get("secret-file")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("forwarding.secret"),
+            );
+        }
+        if cfg.bridge.enabled && cfg.bridge.key_env.is_empty() {
+            file(&cfg.bridge.key_file);
+        }
+        if !cfg.status.favicon.is_empty() {
+            file(&cfg.status.favicon);
+        }
+        if cfg.managed_servers.enabled {
+            let m = &cfg.managed_servers;
+            for d in [&m.dir, &m.versions_dir] {
+                out.push((format!("{}/", d.display()), d.clone()));
+            }
+        }
+    }
+    if let Some(host) = host {
+        // Plugin data lives under the plugin directory.
+        let dir = &host.plugins.dir;
+        out.push((format!("{}/", dir.display()), dir.clone()));
+        let perms = &host.permissions.file;
+        out.push((perms.display().to_string(), perms.clone()));
+    }
+    out.retain(|(_, p)| p.is_relative() && !p.as_os_str().is_empty());
+    out
+}
+
+/// The relative paths found only under `cwd`, not next to the config in
+/// `config_dir`: an install that ran from another directory. An empty
+/// directory counts as missing: 0.2.5-beta made an empty `plugins/` next to
+/// the config while it loaded the plugins from the working directory.
+fn only_in_cwd(paths: &[(String, PathBuf)], config_dir: &Path, cwd: &Path) -> Vec<String> {
+    let used = |p: PathBuf| match p.read_dir() {
+        Ok(mut entries) => entries.next().is_some(),
+        Err(_) => p.exists(),
+    };
+    paths
+        .iter()
+        .filter(|(_, p)| used(cwd.join(p)) && !used(config_dir.join(p)))
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+/// Relative paths of the file are read next to the config: the process
+/// moves there, once, before anything opens them. When a path the file
+/// uses exists only in the working directory, the process stays there with
+/// a warning, so a secret is never created anew next to the config while
+/// the plugins still come from the old place. Returns the config path as
+/// an absolute path (`reload` opens it again) and the warning.
+fn settle(path: &str, cfg: Option<&Config>, text: &str) -> (String, Option<String>) {
+    let Ok(absolute) = std::path::absolute(path) else {
+        return (path.to_string(), None);
+    };
+    let file = absolute.display().to_string();
+    let (Some(dir), Ok(cwd)) = (absolute.parent(), std::env::current_dir()) else {
+        return (file, None);
+    };
+    if same_dir(dir, &cwd) {
+        return (file, None);
+    }
+    let host = pumbo_host::HostConfig::parse(text).ok();
+    let stay = only_in_cwd(&relative_paths(cfg, host.as_ref()), dir, &cwd);
+    if !stay.is_empty() {
+        let w = format!(
+            "relative paths are read from the working directory {} because {} {} there and missing or empty next to {file}; move them next to the config",
+            cwd.display(),
+            stay.join(", "),
+            if stay.len() == 1 { "is" } else { "are" }
+        );
+        return (file, Some(w));
+    }
+    match std::env::set_current_dir(dir) {
+        Ok(()) => (file, None),
+        Err(e) => {
+            let w = format!(
+                "relative paths are read from the working directory {}: cannot change to {} ({e})",
+                cwd.display(),
+                dir.display()
+            );
+            (file, Some(w))
+        }
+    }
+}
+
+fn same_dir(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
 /// First start: the default config and an empty `plugins/` next to it.
 /// A `.toml` of the same name is left to [`read`]'s message.
 fn create_default(path: &str) -> Result<bool, String> {
@@ -298,7 +415,12 @@ fn run(path: &str) -> ExitCode {
         }
     };
     pumbo_prox::logging::init(&cfg.logging);
-    unknown.iter().chain(&warnings).for_each(|u| warn!("{u}"));
+    let (file, moved) = settle(path, Some(&cfg), &text);
+    unknown
+        .iter()
+        .chain(&warnings)
+        .chain(&moved)
+        .for_each(|u| warn!("{u}"));
     match cfg.check_backend_names() {
         Ok(warnings) => warnings.iter().for_each(|w| warn!("{w}")),
         Err(e) => {
@@ -322,7 +444,7 @@ fn run(path: &str) -> ExitCode {
     let code = rt.block_on(async {
         // First, so a signal during the start stops what already runs.
         let mut signals = Signals::new();
-        let proxy = match Proxy::new(cfg, Some(PathBuf::from(path))) {
+        let proxy = match Proxy::new(cfg, Some(PathBuf::from(&file))) {
             Ok(p) => p,
             Err(e) => {
                 error!("cannot start: {e}");
