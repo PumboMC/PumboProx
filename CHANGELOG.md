@@ -36,6 +36,11 @@ All notable changes to PumboProx, one section per release. The format follows [K
 - `servers.<name>.allow-public`, `bridge.allow-public` and `listener[].allow-any-proxy` (all `false`), see Security.
 - Connections refused by `limits.connections-per-ip-per-second` or `limits.concurrent-per-ip` are logged at `debug` with the address and the limit.
 - Metric `pumboprox_backend_online{server="..."}`: 1 while the proxy counts a server as online.
+- `pumboprox --help` (`-h`, `help`) and `pumboprox --version` (`-V`) exit with 0, and the console has `help`. An unknown command on the command line exits with 2.
+- A key in `pumboprox.yml` that nothing reads (a typo such as `limits.max-player`) is a warning at start and on `reload`, with its line and the closest known key; `pumboprox check-config` counts it as an error and exits with 1. Errors about a bad value name the line of their key.
+- `logging.filters`: log levels per module, for example `pumbo_host: debug`; they apply with `reload` like `logging.level`.
+- `bridge.key-env`: the bridge key from an environment variable instead of `bridge.key`. Servers created by the proxy get the key the bridge runs with.
+- `config-version` and `pumboprox migrate-config [file]`, which renames old keys in the file: comments and layout stay, the file keeps its mode and owner, and the old file is kept as `pumboprox.yml.bak` (`.bak.1` and up when that exists). Older releases do not start with a file that has `config-version: 2` (0.2.5-beta stops with "invalid type: integer `2`, expected a map"): to go back to an older PumboProx, restore `pumboprox.yml.bak`. A new install's file has no `config-version`.
 
 ### Changed
 
@@ -48,6 +53,10 @@ All notable changes to PumboProx, one section per release. The format follows [K
 - A server whose logins fail three times in a row (no connection, timeout, closed before login) counts as offline: plugins see it offline, and joins and fallbacks try it last. One player tries it again after 5 s, then after a wait that doubles up to 60 s; the first successful login brings it back. Each change is logged once. A kick from the server never counts. `/server <name>` still goes to it directly.
 - Servers run by the proxy count as offline for joins and fallbacks while they are not ready.
 - SIGTERM or Ctrl+C while the proxy is still starting stops it cleanly with exit code 0, plugins and managed servers included. A second signal while it stops ends it at once with exit code 130.
+- `bungeecord-channel` is now `messaging-channel`. The old key still works, with a warning that names its line; when both are set, `messaging-channel` wins. `pumboprox migrate-config` renames it.
+- Relative paths in `pumboprox.yml` (secrets, `plugins/`, `servers/`, `versions/`, `permissions.yml`, the server icon) are read next to the config file, wherever the proxy starts. When one of them exists only in the directory the proxy starts in, or next to the config only as an empty folder (the `plugins/` that 0.2.5-beta created there), the proxy keeps reading all of them from there and warns. Docker, which starts in `/data`, is not affected.
+- A `logging.level` that is not a level stops the start (and `reload` keeps the old config) instead of running at `info`; `warning` is read as `warn`, and `info,pumbo_host=debug` still works. Replies to console commands go to stderr directly instead of through the log, so they show at every level and are plain text with `format: json`.
+- The file written on the first start shows the bridge, status, limits and logging settings with their defaults as comments, and has the `bridge` section written out.
 
 ### Fixed
 
@@ -69,6 +78,8 @@ All notable changes to PumboProx, one section per release. The format follows [K
 - `reload` no longer starts fresh counters for `limits.max-pending-logins` and `limits.max-concurrent-has-joined`; logins in progress keep counting, and a smaller value takes effect as they finish.
 - The bridge to a server that stopped reading is closed after 10 s without progress instead of showing as connected forever (a slow link that keeps reading stays), and a permission set that did not fit in a full bridge queue is sent again.
 - Compiling a plugin at start, `reload` or `/prox plugins load` no longer holds up player sessions.
+- `pumboprox check-config` no longer creates `forwarding.secret`, plugin folders or default plugin files; a missing secret is reported as created on the first start. A `bridge.key` that other users can read and whose mode cannot be changed (a read-only mount, another owner) is a warning instead of stopping the start.
+- An unknown top-level key with a plain value (such as `limit: 5`) no longer fails the load with a wrong line number; it is reported as an unknown key.
 
 ## [0.2.5-beta] - 2026-10-11
 

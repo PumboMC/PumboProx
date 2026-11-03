@@ -100,6 +100,7 @@ More in [Servers from the proxy](servers.md).
 | --- | --- |
 | `pumboprox [run [file]]` | Starts the proxy with `pumboprox.yml` (or `file`); a missing file is written with the defaults |
 | `pumboprox check-config [file]` | Checks the file and the plugin configs without starting the proxy; exits with 1 on an error |
+| `pumboprox migrate-config [file]` | Renames old keys in the file to the current names (`config-version`); keeps comments, mode and owner, and leaves the old file as `pumboprox.yml.bak` |
 | `pumboprox describe <plugin> [--json] [file]` | A plugin's description as JSON, without starting it |
 | `pumboprox version` (`--version`, `-V`) | Versions of PumboProx and the protocols |
 | `pumboprox help` (`--help`, `-h`) | The commands |
