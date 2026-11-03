@@ -180,7 +180,9 @@ Protection built into the proxy, before any plugin. The per-address limits count
 | `level` | `info` | `error`, `warn`, `info`, `debug`, `trace` or `off`; another word stops the start (and a `reload` keeps the old config). Replies to console commands show at every level | reload |
 | `filters` | empty | Levels per module over `level`, for example `pumbo_host: debug` to see the plugin host in detail | reload |
 | `log-ips` | `true` | `false`: addresses in logs become a hash with a random key per run, the same address giving the same hash until a restart | restart |
-| `metrics-bind` | empty (off) | `ip:port` for Prometheus metrics at `http://<ip:port>/metrics`; only a loopback address (`127.0.0.1:9100`) is accepted | restart |
+| `metrics-bind` | empty (off) | `ip:port` for Prometheus metrics at `http://<ip:port>/metrics`, with `/health` and `/ready` next to them. A loopback address (`127.0.0.1:9100`) unless `metrics-allow-remote` is on | restart |
+| `metrics-allow-remote` | `false` | `true`: `metrics-bind` may be an address other hosts reach (`0.0.0.0:9100` in a container). Anyone who reaches the port reads player counts and server names, so set `metrics-token-file` too | restart |
+| `metrics-token-file` | empty (none) | File with a token; `/metrics` then answers only requests with `Authorization: Bearer <token>`. Keep it readable only by the proxy's user (mode `0600`); a file others can read, such as a mounted secret, gives a warning. Surrounding whitespace is ignored. A file that cannot be read fails `check-config`, and at start `/metrics` answers `503` with an error in the log. `/health` and `/ready` never need it | restart |
 
 ## switching
 

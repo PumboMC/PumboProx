@@ -145,13 +145,16 @@ bridge:
 
 # Logs: error, warn, info, debug, trace or off, and levels per module. With
 # log-ips false addresses show as a hash; metrics-bind serves Prometheus
-# metrics on a loopback address.
+# metrics and the /health and /ready checks. An address other hosts reach
+# needs metrics-allow-remote and should get a token file.
 # logging:
 #   level: info
 #   filters:
 #     pumbo_host: debug
 #   log-ips: true
 #   metrics-bind: "127.0.0.1:9100"
+#   metrics-allow-remote: false   # true: 0.0.0.0:9100 in a container
+#   metrics-token-file: ""        # /metrics asks for this token; mode 0600
 
 # Players wait in an empty world while no server is available, and join one
 # as soon as it is ready.

@@ -209,6 +209,36 @@ fn check_config_creates_no_secret() {
 }
 
 #[test]
+fn check_config_reads_the_metrics_token() {
+    let dir = empty_dir("metrics-token");
+    let config = small_config(
+        "logging:\n  metrics-bind: \"127.0.0.1:0\"\n  metrics-token-file: metrics.token\n",
+    );
+    std::fs::write(dir.join("pumboprox.yml"), config).unwrap();
+    let check = || {
+        Command::new(env!("CARGO_BIN_EXE_pumboprox"))
+            .args(["check-config", "pumboprox.yml"])
+            .current_dir(&dir)
+            .output()
+            .unwrap()
+    };
+    let out = check();
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert!(!out.status.success(), "{err}");
+    assert!(
+        err.contains("config error: logging.metrics-token-file metrics.token: "),
+        "{err}"
+    );
+    std::fs::write(dir.join("metrics.token"), "t\n").unwrap();
+    let out = check();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
 fn the_bridge_key_can_come_from_the_environment() {
     use std::io::Write as _;
     let dir = empty_dir("key-env");

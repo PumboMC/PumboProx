@@ -759,8 +759,13 @@ pub struct LoggingConfig {
     pub filters: BTreeMap<String, String>,
     /// `false`: addresses in logs become a keyed hash (random key per run).
     pub log_ips: bool,
-    /// Prometheus endpoint, loopback only; empty = off.
+    /// Prometheus endpoint with `/health` and `/ready`; empty = off.
     pub metrics_bind: String,
+    /// `metrics-bind` may be an address other hosts reach.
+    pub metrics_allow_remote: bool,
+    /// File with the token `/metrics` wants as `Authorization: Bearer`;
+    /// empty = none.
+    pub metrics_token_file: String,
 }
 
 impl Default for LoggingConfig {
@@ -771,6 +776,8 @@ impl Default for LoggingConfig {
             filters: BTreeMap::new(),
             log_ips: true,
             metrics_bind: String::new(),
+            metrics_allow_remote: false,
+            metrics_token_file: String::new(),
         }
     }
 }
@@ -838,10 +845,15 @@ impl Config {
         }
         if !self.logging.metrics_bind.is_empty() {
             match self.logging.metrics_bind.parse::<SocketAddr>() {
-                Ok(a) if a.ip().is_loopback() => {}
-                _ => {
+                Ok(a) if a.ip().is_loopback() || self.logging.metrics_allow_remote => {}
+                Ok(a) => {
                     return bad(format!(
-                        "metrics-bind {} must be a loopback address with a port",
+                        "logging.metrics-bind {a} is not a loopback address: anyone who reaches the port reads player counts and server names. Set logging.metrics-allow-remote: true (and logging.metrics-token-file)"
+                    ));
+                }
+                Err(_) => {
+                    return bad(format!(
+                        "logging.metrics-bind {} must be an address with a port",
                         self.logging.metrics_bind
                     ));
                 }

@@ -134,6 +134,14 @@ fn restart_needed(old: &Config, new: &Config) -> Vec<String> {
         ("logging.format", o.format != n.format),
         ("logging.log-ips", o.log_ips != n.log_ips),
         ("logging.metrics-bind", o.metrics_bind != n.metrics_bind),
+        (
+            "logging.metrics-allow-remote",
+            o.metrics_allow_remote != n.metrics_allow_remote,
+        ),
+        (
+            "logging.metrics-token-file",
+            o.metrics_token_file != n.metrics_token_file,
+        ),
         ("bridge", differs(&old.bridge, &new.bridge)),
         (
             "managed-servers",
@@ -884,18 +892,26 @@ impl Proxy {
     /// The metrics, `/health` and `/ready` endpoint at `logging.metrics-bind`
     /// (once; [`Proxy::serve`] starts it when the start did not).
     pub async fn start_metrics(self: &Arc<Self>) {
-        let bind = self.runtime().config.logging.metrics_bind.clone();
-        let Ok(addr) = bind.parse::<SocketAddr>() else {
+        let logging = self.runtime().config.logging.clone();
+        let Ok(addr) = logging.metrics_bind.parse::<SocketAddr>() else {
             return;
         };
         if self.metrics_started.swap(true, Ordering::Relaxed) {
             return;
+        }
+        // Never served without the token it was given; `/health` and `/ready` still are.
+        let token = crate::metrics::read_token(&logging.metrics_token_file);
+        if let Err(e) = &token {
+            error!("logging.metrics-token-file {e}: /metrics answers 503 until a restart");
         }
         let listener = match crate::metrics::bind(addr).await {
             Ok(l) => l,
             Err(e) => return error!("metrics on {addr}: {e}"),
         };
         info!("metrics on http://{addr}/metrics");
+        if matches!(token, Ok(None)) && !addr.ip().is_loopback() {
+            warn!("metrics on {addr} without a token");
+        }
         let (extra, ready) = (Arc::downgrade(self), Arc::downgrade(self));
         let endpoint = crate::metrics::Endpoint {
             metrics: self.metrics.clone(),
@@ -910,6 +926,7 @@ impl Proxy {
                 out
             }),
             ready: Arc::new(move || ready.upgrade().is_some_and(|p| p.ready())),
+            token,
         };
         tokio::spawn(crate::metrics::serve(listener, endpoint));
     }

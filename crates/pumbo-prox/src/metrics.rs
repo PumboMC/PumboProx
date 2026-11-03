@@ -137,10 +137,45 @@ pub struct Endpoint {
     pub extra: Arc<dyn Fn() -> String + Send + Sync>,
     /// `/ready`: the proxy takes players.
     pub ready: Arc<dyn Fn() -> bool + Send + Sync>,
+    /// `Authorization: Bearer <token>` that `/metrics` wants; `/health` and
+    /// `/ready` carry no data and answer without it. An error (a token file
+    /// that cannot be read): `/metrics` answers 503, the others still work.
+    pub token: Result<Option<Arc<[u8]>>, String>,
+}
+
+/// The token in `path` (empty: none). A file other users can read is a
+/// warning: a mounted container secret often is, and is left as it is.
+pub fn read_token(path: &str) -> Result<Option<Arc<[u8]>>, String> {
+    if path.is_empty() {
+        return Ok(None);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
+        let mode = meta.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            tracing::warn!(
+                "{path}: the metrics token is readable by other users (mode {mode:04o}); chmod 600 it"
+            );
+        }
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    match text.trim() {
+        "" => Err(format!("{path}: the file is empty")),
+        t => Ok(Some(Arc::from(t.as_bytes()))),
+    }
 }
 
 /// A request head larger than this is not answered.
 const MAX_HEAD: usize = 8192;
+
+/// Connections answered at once; more are closed at once, so the endpoint
+/// cannot use up the file descriptors the players need.
+const MAX_CONNECTIONS: usize = 64;
+
+/// Time for a whole request: reading it and writing the reply.
+const REQUEST_TIME: Duration = Duration::from_secs(5);
 
 /// Serves `GET /metrics` (also `GET /`), `GET /health` and `GET /ready` over
 /// plain HTTP/1.1, one request per connection.
@@ -153,6 +188,7 @@ where
     F: FnMut() -> A,
     A: Future<Output = std::io::Result<(TcpStream, SocketAddr)>>,
 {
+    let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
     loop {
         let mut stream = match accept().await {
             Ok((s, _)) => s,
@@ -163,17 +199,29 @@ where
                 continue;
             }
         };
+        let Ok(slot) = slots.clone().try_acquire_owned() else {
+            continue;
+        };
         let endpoint = endpoint.clone();
         tokio::spawn(async move {
-            let read = tokio::time::timeout(Duration::from_secs(2), read_head(&mut stream)).await;
-            let Ok(Some(head)) = read else { return };
-            let (status, body) = answer(&head, &endpoint);
-            let reply = format!(
-                "HTTP/1.1 {status}\r\nContent-Type: text/plain; version=0.0.4\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            let _ = stream.write_all(reply.as_bytes()).await;
-            let _ = stream.shutdown().await;
+            let _slot = slot;
+            let _ = tokio::time::timeout(REQUEST_TIME, async {
+                let Some(head) = read_head(&mut stream).await else {
+                    return;
+                };
+                let (status, body) = answer(&head, &endpoint);
+                let challenge = match status {
+                    UNAUTHORIZED => "WWW-Authenticate: Bearer\r\n",
+                    _ => "",
+                };
+                let reply = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: text/plain; version=0.0.4\r\nContent-Length: {}\r\n{challenge}Connection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(reply.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            })
+            .await;
         });
     }
 }
@@ -204,9 +252,39 @@ fn answer(head: &[u8], e: &Endpoint) -> (&'static str, String) {
         (Some(b"GET"), b"/health") => ("200 OK", "ok\n".into()),
         (Some(b"GET"), b"/ready") if (e.ready)() => ("200 OK", "ready\n".into()),
         (Some(b"GET"), b"/ready") => ("503 Service Unavailable", "not ready\n".into()),
+        (Some(b"GET"), b"/metrics" | b"/") if e.token.is_err() => (
+            "503 Service Unavailable",
+            "the metrics token file cannot be read, see the log\n".into(),
+        ),
+        (Some(b"GET"), b"/metrics" | b"/")
+            if !authorized(head, e.token.as_ref().ok().and_then(Option::as_deref)) =>
+        {
+            (UNAUTHORIZED, String::new())
+        }
         (Some(b"GET"), b"/metrics" | b"/") => ("200 OK", e.metrics.render() + &(e.extra)()),
         _ => ("404 Not Found", String::new()),
     }
+}
+
+const UNAUTHORIZED: &str = "401 Unauthorized";
+
+/// `Authorization: Bearer <token>` among the headers, compared in constant
+/// time; anything goes without a token.
+fn authorized(head: &[u8], token: Option<&[u8]>) -> bool {
+    let Some(token) = token else {
+        return true;
+    };
+    head.split(|b| *b == b'\n').skip(1).any(|line| {
+        let Some(colon) = line.iter().position(|b| *b == b':') else {
+            return false;
+        };
+        let (name, value) = line.split_at(colon);
+        let value = value.get(1..).unwrap_or_default().trim_ascii();
+        let (scheme, given) = value.split_at(value.len().min(7));
+        name.trim_ascii().eq_ignore_ascii_case(b"authorization")
+            && scheme.eq_ignore_ascii_case(b"bearer ")
+            && aws_lc_rs::constant_time::verify_slices_are_equal(given.trim_ascii(), token).is_ok()
+    })
 }
 
 /// Binds the endpoint.
@@ -283,7 +361,127 @@ mod tests {
             metrics: Arc::default(),
             extra: Arc::new(|| "extra 1\n".into()),
             ready: Arc::new(ready),
+            token: Ok(None),
         }
+    }
+
+    #[tokio::test]
+    async fn a_token_guards_the_metrics_only() {
+        let e = Endpoint {
+            token: Ok(Some(Arc::from(&b"s3cret"[..]))),
+            ..endpoint(|| true)
+        };
+        let ask = |auth: &'static str| {
+            let e = e.clone();
+            async move {
+                let reply = get(e, &["GET /metrics HTTP/1.1\r\n", auth, "\r\n"]).await;
+                reply.lines().next().unwrap_or_default().to_string()
+            }
+        };
+        assert_eq!(ask("").await, "HTTP/1.1 401 Unauthorized");
+        assert_eq!(
+            ask("Authorization: Bearer wrong\r\n").await,
+            "HTTP/1.1 401 Unauthorized"
+        );
+        assert_eq!(
+            ask("Authorization: s3cret\r\n").await,
+            "HTTP/1.1 401 Unauthorized"
+        );
+        assert_eq!(
+            ask("Authorization: Bearer s3cret\r\n").await,
+            "HTTP/1.1 200 OK"
+        );
+        assert_eq!(
+            ask("authorization:bearer  s3cret \r\n").await,
+            "HTTP/1.1 200 OK"
+        );
+        // The header in pieces, after the request line.
+        let split = get(
+            e.clone(),
+            &[
+                "GET /metrics HTTP/1.1\r\nAuthor",
+                "ization: Bearer s3",
+                "cret\r\n\r\n",
+            ],
+        )
+        .await;
+        assert!(split.starts_with("HTTP/1.1 200 OK"), "{split}");
+        let denied = get(e.clone(), &["GET / HTTP/1.1\r\n\r\n"]).await;
+        assert!(denied.contains("WWW-Authenticate: Bearer\r\n"), "{denied}");
+        for path in ["/health", "/ready"] {
+            let reply = get(e.clone(), &[&format!("GET {path} HTTP/1.1\r\n\r\n")]).await;
+            assert!(reply.starts_with("HTTP/1.1 200 OK"), "{path}: {reply}");
+        }
+    }
+
+    /// A token file that cannot be read keeps `/metrics` closed, not the
+    /// health checks.
+    #[tokio::test]
+    async fn without_its_token_only_the_metrics_are_closed() {
+        let e = Endpoint {
+            token: Err("metrics.token: No such file".into()),
+            ..endpoint(|| true)
+        };
+        let metrics = get(e.clone(), &["GET /metrics HTTP/1.1\r\n\r\n"]).await;
+        assert!(metrics.starts_with("HTTP/1.1 503"), "{metrics}");
+        assert!(!metrics.contains("pumboprox_"), "{metrics}");
+        for path in ["/health", "/ready"] {
+            let reply = get(e.clone(), &[&format!("GET {path} HTTP/1.1\r\n\r\n")]).await;
+            assert!(reply.starts_with("HTTP/1.1 200 OK"), "{path}: {reply}");
+        }
+    }
+
+    /// Idle connections hold at most [`MAX_CONNECTIONS`] descriptors; one
+    /// more is closed unanswered, and a place frees up when one goes.
+    #[tokio::test]
+    async fn connections_at_once_are_limited() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(serve(listener, endpoint(|| true)));
+        let mut idle = Vec::new();
+        for _ in 0..MAX_CONNECTIONS {
+            idle.push(TcpStream::connect(addr).await.unwrap());
+        }
+        let ask = || async {
+            let mut s = TcpStream::connect(addr).await.unwrap();
+            let _ = s.write_all(b"GET /health HTTP/1.1\r\n\r\n").await;
+            let mut reply = String::new();
+            let _ = s.read_to_string(&mut reply).await;
+            reply
+        };
+        assert_eq!(ask().await, "", "one too many is closed");
+        drop(idle.pop());
+        let mut reply = String::new();
+        for _ in 0..50 {
+            reply = ask().await;
+            if !reply.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(reply.starts_with("HTTP/1.1 200 OK"), "{reply}");
+        server.abort();
+    }
+
+    #[test]
+    fn the_token_file_is_private_and_trimmed() {
+        let path = std::env::temp_dir().join(format!("pumbo-metrics-token-{}", std::process::id()));
+        std::fs::write(&path, "s3cret\n").unwrap();
+        let p = path.to_str().unwrap();
+        assert!(read_token("").unwrap().is_none());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            // A mounted secret (0644, 0440) works, with a warning.
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert_eq!(read_token(p).unwrap().as_deref(), Some(&b"s3cret"[..]));
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        assert_eq!(read_token(p).unwrap().as_deref(), Some(&b"s3cret"[..]));
+        std::fs::write(&path, " \n").unwrap();
+        assert!(read_token(p).unwrap_err().contains("empty"));
+        std::fs::remove_file(&path).unwrap();
+        assert!(read_token(p).is_err());
     }
 
     /// The reply to `request`, written in pieces.

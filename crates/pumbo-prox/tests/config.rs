@@ -459,3 +459,30 @@ fn getting_started_shows_the_first_start_file() {
     let block = &block[..block.find("```\n").unwrap()];
     assert_eq!(block, pumbo_prox::config::DEFAULT_FILE);
 }
+
+/// Metrics on an address other hosts reach only with
+/// `metrics-allow-remote`; loopback works as before.
+#[test]
+fn remote_metrics_need_allow_remote() {
+    let logging = |extra: &str| Config::parse(&format!("{SAMPLE}\nlogging:\n{extra}"));
+    let cfg = logging("  metrics-bind: \"127.0.0.1:9100\"\n").unwrap();
+    assert!(!cfg.logging.metrics_allow_remote);
+    assert!(cfg.logging.metrics_token_file.is_empty());
+    let err = logging("  metrics-bind: \"0.0.0.0:9100\"\n")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("logging.metrics-bind 0.0.0.0:9100 is not a loopback address")
+            && err.contains("logging.metrics-allow-remote: true"),
+        "{err}"
+    );
+    let cfg = logging(
+        "  metrics-bind: \"0.0.0.0:9100\"\n  metrics-allow-remote: true\n  metrics-token-file: metrics.token\n",
+    )
+    .unwrap();
+    assert_eq!(cfg.logging.metrics_token_file, "metrics.token");
+    let err = logging("  metrics-bind: \"localhost\"\n")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("must be an address with a port"), "{err}");
+}
