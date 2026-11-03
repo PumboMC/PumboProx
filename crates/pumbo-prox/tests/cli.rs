@@ -242,3 +242,55 @@ fn the_bridge_key_can_come_from_the_environment() {
     assert!(String::from_utf8_lossy(&out.stdout).contains(&key), "{err}");
     assert!(!dir.join("bridge.key").exists(), "no key file is written");
 }
+
+#[cfg(unix)]
+#[test]
+fn migrate_config_renames_old_keys_and_keeps_a_copy() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = empty_dir("migrate");
+    let file = dir.join("pumboprox.yml");
+    let old = small_config("# for old plugins\nbungeecord-channel:\n  enabled: false\n");
+    let migrate = || {
+        std::fs::write(&file, &old).unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let out = pumboprox(&["migrate-config", file.to_str().unwrap()]);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let said = migrate();
+    assert!(
+        said.contains("bungeecord-channel is now messaging-channel"),
+        "{said}"
+    );
+    assert!(
+        said.contains("to go back to an older PumboProx, restore"),
+        "{said}"
+    );
+    let new = std::fs::read_to_string(&file).unwrap();
+    assert!(new.starts_with("config-version: 2\n"), "{new}");
+    assert!(
+        new.contains("# for old plugins\nmessaging-channel:\n  enabled: false\n"),
+        "{new}"
+    );
+    let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o640);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("pumboprox.yml.bak")).unwrap(),
+        old
+    );
+    // A second migration keeps the first copy.
+    migrate();
+    assert!(dir.join("pumboprox.yml.bak.1").is_file());
+    let out = pumboprox(&["migrate-config", file.to_str().unwrap()]);
+    assert!(out.status.success());
+    assert!(
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .contains("needs no changes")
+    );
+    assert!(!dir.join("pumboprox.yml.bak.2").exists());
+}

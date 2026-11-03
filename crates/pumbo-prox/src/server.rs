@@ -490,7 +490,12 @@ impl Proxy {
             p.host.set_required_gates(host.plugins.required_gates);
         }
         self.commit(runtime);
-        for w in loaded.unknown.iter().chain(&unresolved) {
+        for w in loaded
+            .unknown
+            .iter()
+            .chain(&loaded.warnings)
+            .chain(&unresolved)
+        {
             warn!("{w}");
         }
         if relog && let Err(e) = crate::logging::set_filter(&logging) {

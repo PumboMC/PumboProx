@@ -57,7 +57,7 @@ async fn listener_from_config() {
 fn e4_sections_are_checked() {
     let ok = format!(
         "{SAMPLE}\nforced-hosts:\n  mc.example.org: [lobby]\ncommands:\n  operators: [069a79f4-44e9-4726-a5be-fca90e38aaf5]\n\
-         bungeecord-channel:\n  subchannels: [Connect]\nswitching:\n  resource-packs-on-switch: keep\n"
+         messaging-channel:\n  subchannels: [Connect]\nswitching:\n  resource-packs-on-switch: keep\n"
     );
     Config::parse(&ok).unwrap();
     for (bad, why) in [
@@ -68,7 +68,7 @@ fn e4_sections_are_checked() {
         ),
         ("commands:\n  operators: [Notch]\n", "not a UUID"),
         (
-            "bungeecord-channel:\n  subchannels: [KickPlayer]\n",
+            "messaging-channel:\n  subchannels: [KickPlayer]\n",
             "unknown subchannel KickPlayer",
         ),
     ] {
@@ -305,7 +305,7 @@ fn gate_timeouts_default_and_warn() {
 
 #[test]
 fn unknown_keys_are_named_with_their_line() {
-    let notes = |text: &str| Config::parse_checked(text).unwrap().1;
+    let notes = |text: &str| Config::parse_checked(text).unwrap().1.unknown;
     assert_eq!(notes(pumbo_prox::config::DEFAULT_FILE), []);
     assert_eq!(notes(SAMPLE), []);
     let typo = format!("{SAMPLE}limits:\n  max-player: 10\n");
@@ -359,5 +359,46 @@ fn bad_values_name_their_line() {
             "pumboprox.yml line {}: commands.operators: Notch is not a UUID",
             text.lines().count()
         )
+    );
+}
+
+#[test]
+fn the_old_name_of_the_messaging_channel_still_works() {
+    let old = format!("{SAMPLE}bungeecord-channel:\n  subchannels: [Connect]\n");
+    let (cfg, remarks) = Config::parse_checked(&old).unwrap();
+    assert_eq!(cfg.messaging_channel.subchannels, ["Connect"]);
+    assert_eq!(remarks.unknown, []);
+    let line = old.lines().count() - 1;
+    assert_eq!(
+        remarks.warnings,
+        [(
+            Some(line),
+            "bungeecord-channel is now messaging-channel; it still works, and `pumboprox migrate-config` renames it in the file".into()
+        )]
+    );
+    // Its values are checked under the new name.
+    let bad = old.replace("[Connect]", "[KickPlayer]");
+    assert!(
+        Config::parse(&bad)
+            .unwrap_err()
+            .to_string()
+            .contains("messaging-channel: unknown subchannel KickPlayer")
+    );
+    // Both: the new one wins, never a refusal.
+    let both = format!("{old}messaging-channel:\n  subchannels: [IP]\n");
+    let (cfg, remarks) = Config::parse_checked(&both).unwrap();
+    assert_eq!(cfg.messaging_channel.subchannels, ["IP"]);
+    assert!(
+        remarks.warnings[0]
+            .1
+            .contains("is ignored because messaging-channel is set")
+    );
+    // A file from a newer version.
+    let (_, remarks) = Config::parse_checked(&format!("config-version: 3\n{SAMPLE}")).unwrap();
+    assert_eq!(remarks.warnings[0].0, Some(1));
+    assert!(
+        remarks.warnings[0]
+            .1
+            .starts_with("config-version 3 is newer")
     );
 }

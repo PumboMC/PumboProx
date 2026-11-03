@@ -1046,15 +1046,15 @@ async fn cancelled_chat_and_commands_become_chat_ack() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn bungeecord_channel_and_client_brand() {
+async fn messaging_channel_and_client_brand() {
     let lobby = Backend::start(spec("lobby")).await;
     let games = Backend::start(spec("games")).await;
     let cfg = config(
         &[("lobby", &lobby), ("games", &games)],
-        "bungeecord-channel:\n  subchannels: [Connect, UUID, GetServer, GetServers, PlayerCount, PlayerList, ConnectOther]\n",
+        "messaging-channel:\n  subchannels: [Connect, UUID, GetServer, GetServers, PlayerCount, PlayerList, ConnectOther]\n",
     );
     let (proxy, addr) = start_proxy(&cfg).await;
-    let mut p = join(addr, "Bungee").await;
+    let mut p = join(addr, "Courier").await;
     // From a client the channel is dropped.
     p.c.send(&ServerboundCustomPayload {
         channel: bungee::CHANNEL.into(),
@@ -1089,7 +1089,7 @@ async fn bungeecord_channel_and_client_brand() {
         parse(2, 2).0,
         [
             "UUID".to_string(),
-            pumbo_identity::offline_uuid("Bungee").simple().to_string()
+            pumbo_identity::offline_uuid("Courier").simple().to_string()
         ]
     );
     // IP is off in this config: no answer, so the next reply is PlayerCount.
@@ -1097,7 +1097,7 @@ async fn bungeecord_channel_and_client_brand() {
         parse(3, 2),
         (vec!["PlayerCount".into(), "ALL".into()], Some(1))
     );
-    assert_eq!(parse(4, 3).0, ["PlayerList", "lobby", "Bungee"]);
+    assert_eq!(parse(4, 3).0, ["PlayerList", "lobby", "Courier"]);
     // Connect moves the sender, ConnectOther another player.
     lobby.ctl(ask(&["Connect", "games"]));
     next_login(&mut p).await;

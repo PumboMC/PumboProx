@@ -24,6 +24,8 @@ usage: pumboprox [command]
                                      file is written with the defaults
   check-config [file]                check the file and the plugin configs
                                      without starting the proxy
+  migrate-config [file]              rename old keys in the file (a copy of
+                                     it stays as <file>.bak)
   describe <plugin> [--json] [file]  a plugin's description as JSON
   version, --version, -V             versions of PumboProx and the protocols
   help, --help, -h                   this text
@@ -63,6 +65,9 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("check-config") => check_config(args.get(1).map_or(DEFAULT_CONFIG, String::as_str)),
+        Some("migrate-config") => {
+            migrate_config(args.get(1).map_or(DEFAULT_CONFIG, String::as_str))
+        }
         Some("run") => run(args.get(1).map_or(DEFAULT_CONFIG, String::as_str)),
         Some("describe") => describe(&args),
         None => run(DEFAULT_CONFIG),
@@ -174,6 +179,7 @@ fn check_config(path: &str) -> ExitCode {
         unknown = loaded.unknown;
         // Warnings of the checks (e.g. a backend outside private networks) go to stderr.
         pumbo_prox::logging::init(&cfg.logging);
+        loaded.warnings.iter().for_each(|w| warn!("{w}"));
         for w in cfg
             .check_backend_names()
             .map_err(|e| format!("{path}: {e}"))?
@@ -222,6 +228,42 @@ fn check_config(path: &str) -> ExitCode {
     }
 }
 
+/// `migrate-config [file]`: old keys renamed in the file, a copy of the
+/// old file first (never over an older copy).
+fn migrate_config(path: &str) -> ExitCode {
+    let file = std::path::Path::new(path);
+    let result = read(path).and_then(|text| {
+        let Some((new, changes)) = pumbo_prox::migrate::migrate_text(&text)? else {
+            return Ok(None);
+        };
+        let backup = pumbo_prox::route::backup(file, &text)?;
+        pumbo_prox::route::write(file, &new)?;
+        Ok(Some((changes, backup)))
+    });
+    match result {
+        Ok(None) => {
+            println!(
+                "{path} needs no changes (config-version {})",
+                pumbo_prox::migrate::CONFIG_VERSION
+            );
+            ExitCode::SUCCESS
+        }
+        Ok(Some((changes, backup))) => {
+            changes.iter().for_each(|c| println!("{path} {c}"));
+            let backup = backup.display();
+            println!(
+                "{path} is at config-version {}; the old file is {backup}: to go back to an older PumboProx, restore {backup}",
+                pumbo_prox::migrate::CONFIG_VERSION
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("migrate-config: {path}: {e}; the file is unchanged");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// First start: the default config and an empty `plugins/` next to it.
 /// A `.toml` of the same name is left to [`read`]'s message.
 fn create_default(path: &str) -> Result<bool, String> {
@@ -247,6 +289,7 @@ fn run(path: &str) -> ExitCode {
         text,
         config: cfg,
         unknown,
+        warnings,
     } = match load(path) {
         Ok(c) => c,
         Err(e) => {
@@ -255,7 +298,7 @@ fn run(path: &str) -> ExitCode {
         }
     };
     pumbo_prox::logging::init(&cfg.logging);
-    unknown.iter().for_each(|u| warn!("{u}"));
+    unknown.iter().chain(&warnings).for_each(|u| warn!("{u}"));
     match cfg.check_backend_names() {
         Ok(warnings) => warnings.iter().for_each(|w| warn!("{w}")),
         Err(e) => {

@@ -240,14 +240,57 @@ pub(crate) fn save(
     })
 }
 
-/// A new temporary file, never more open than the old file, written and
-/// synced, then renamed over it.
-fn write(path: &std::path::Path, text: &str) -> Result<(), String> {
+/// A copy of the config before a rewrite: `<file>.bak`, or `.bak.1` and up
+/// when that exists (an older copy is never replaced), with the file's mode.
+pub fn backup(path: &std::path::Path, text: &str) -> Result<std::path::PathBuf, String> {
     use std::io::Write as _;
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    for n in 0..1000 {
+        let bak = path.with_file_name(match n {
+            0 => format!("{name}.bak"),
+            n => format!("{name}.bak.{n}"),
+        });
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+            let mode = std::fs::metadata(path).map_or(0o600, |m| m.permissions().mode());
+            options.mode(mode & 0o777);
+        }
+        match options.open(&bak) {
+            Ok(mut f) => {
+                // Root's copy of the proxy's file stays readable by the proxy's user.
+                #[cfg(unix)]
+                if let Ok(m) = std::fs::metadata(path) {
+                    use std::os::unix::fs::MetadataExt as _;
+                    let _ = std::os::unix::fs::fchown(&f, Some(m.uid()), Some(m.gid()));
+                }
+                f.write_all(text.as_bytes())
+                    .and_then(|()| f.sync_all())
+                    .map_err(|e| format!("{}: {e}", bak.display()))?;
+                return Ok(bak);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(format!("{}: {e}", bak.display())),
+        }
+    }
+    Err(format!("{}: too many .bak copies", path.display()))
+}
+
+/// A new temporary file, never more open than the old file and with its
+/// owner (a file rewritten by root stays the proxy's), written and synced,
+/// then renamed over it. A link is followed: the file it points to is
+/// replaced, the link stays.
+pub fn write(path: &std::path::Path, text: &str) -> Result<(), String> {
+    use std::io::Write as _;
+    let target = std::fs::canonicalize(path);
+    let path = target.as_deref().unwrap_or(path);
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let tmp = path.with_extension(format!("yml.{}.{n}.tmp", std::process::id()));
-    let old = std::fs::metadata(path).ok().map(|m| m.permissions());
+    let meta = std::fs::metadata(path).ok();
+    let old = meta.as_ref().map(|m| m.permissions());
     let result = (|| {
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);
@@ -258,6 +301,12 @@ fn write(path: &std::path::Path, text: &str) -> Result<(), String> {
         }
         let mut file = options.open(&tmp)?;
         file.write_all(text.as_bytes())?;
+        #[cfg(unix)]
+        if let Some(m) = &meta {
+            use std::os::unix::fs::MetadataExt as _;
+            // Only root can give a file away; anyone else keeps their own.
+            let _ = std::os::unix::fs::fchown(&file, Some(m.uid()), Some(m.gid()));
+        }
         if let Some(p) = old {
             file.set_permissions(p)?;
         }
@@ -699,6 +748,22 @@ mod tests {
     use super::*;
 
     const FILE: &str = "# My network\nlistener:\n  - bind: \"0.0.0.0:25565\"   # public\nservers:\n  lobby: { address: \"127.0.0.1:25566\" }\n  survival: { address: \"127.0.0.1:25567\" }\n\nrouting:\n  # players start here\n  try: [lobby]   # keep lobby first\n\n# the end\nlogging:\n  level: info\n";
+
+    /// A config that is a link (to a file kept elsewhere) stays a link.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_file_is_written_through_the_link() {
+        let dir = std::env::temp_dir().join(format!("pumbo-route-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("real")).unwrap();
+        let (real, link) = (dir.join("real/pumboprox.yml"), dir.join("pumboprox.yml"));
+        std::fs::write(&real, "old\n").unwrap();
+        std::os::unix::fs::symlink("real/pumboprox.yml", &link).unwrap();
+        write(&link, "new\n").unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().is_symlink());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "new\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn a_value_changes_and_the_rest_stays() {

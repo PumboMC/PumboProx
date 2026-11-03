@@ -12,6 +12,7 @@ mod keys;
 pub mod limits;
 pub mod logging;
 pub mod metrics;
+pub mod migrate;
 pub mod modules;
 pub mod net;
 mod play;

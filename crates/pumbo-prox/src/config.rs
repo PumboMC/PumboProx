@@ -48,6 +48,15 @@ impl ConfigError {
 /// Messages about keys, each with the key's line when it was found.
 pub type Notes = Vec<(Option<usize>, String)>;
 
+/// What [`Config::parse_checked`] has to say about a file that loads.
+#[derive(Debug, Default)]
+pub struct Remarks {
+    /// Keys nothing reads.
+    pub unknown: Notes,
+    /// Old keys still read, a newer `config-version`.
+    pub warnings: Notes,
+}
+
 /// The config file as the start, `reload` and `check-config` read it: the
 /// text (the plugin host reads its sections from it too), the typed config
 /// and what the owner should hear about the file.
@@ -58,6 +67,8 @@ pub struct Loaded {
     /// Keys nothing reads: a warning at start and reload, an error in
     /// `check-config`. Each starts with the file and line.
     pub unknown: Vec<String>,
+    /// Old keys still read (`pumboprox migrate-config` renames them).
+    pub warnings: Vec<String>,
 }
 
 /// Reads and checks the config file; every reader of the file goes through
@@ -65,18 +76,21 @@ pub struct Loaded {
 pub fn load(path: &std::path::Path) -> Result<Loaded, String> {
     let text = read(path)?;
     let file = file_label(path);
-    let (config, unknown) = Config::parse_checked(&text).map_err(|e| e.in_file(&file))?;
-    let unknown = unknown
-        .iter()
-        .map(|(line, m)| match line {
-            Some(n) => format!("{file} line {n}: {m}"),
-            None => format!("{file}: {m}"),
-        })
-        .collect();
+    let (config, remarks) = Config::parse_checked(&text).map_err(|e| e.in_file(&file))?;
+    let lines = |notes: &Notes| -> Vec<String> {
+        notes
+            .iter()
+            .map(|(line, m)| match line {
+                Some(n) => format!("{file} line {n}: {m}"),
+                None => format!("{file}: {m}"),
+            })
+            .collect()
+    };
     Ok(Loaded {
+        unknown: lines(&remarks.unknown),
+        warnings: lines(&remarks.warnings),
         text,
         config,
-        unknown,
     })
 }
 
@@ -139,8 +153,15 @@ pub struct Config {
     pub commands: CommandsConfig,
     #[serde(default)]
     pub plugin_messages: PluginMessagesConfig,
+    /// `config-version`: 1 when missing (see `migrate`).
     #[serde(default)]
-    pub bungeecord_channel: BungeeCordConfig,
+    pub config_version: Option<u64>,
+    #[serde(default)]
+    pub messaging_channel: MessagingChannelConfig,
+    /// `bungeecord-channel`, the name before `config-version` 2; read into
+    /// `messaging-channel` when that is not set.
+    #[serde(default, rename = "bungeecord-channel")]
+    pub legacy_messaging_channel: Option<MessagingChannelConfig>,
     #[serde(default)]
     pub messages: MessagesConfig,
     #[serde(default, rename = "virtual")]
@@ -544,15 +565,16 @@ impl Default for PluginMessagesConfig {
     }
 }
 
-/// `bungeecord:main` for old backend plugins (§2.8, decision §9 point 8).
+/// `messaging-channel`: the `bungeecord:main` channel for old backend
+/// plugins (§2.8, decision §9 point 8).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case", default)]
-pub struct BungeeCordConfig {
+pub struct MessagingChannelConfig {
     pub enabled: bool,
     pub subchannels: Vec<String>,
 }
 
-pub const BUNGEECORD_SUBCHANNELS: &[&str] = &[
+pub const MESSAGING_SUBCHANNELS: &[&str] = &[
     "Connect",
     "ConnectOther",
     "IP",
@@ -563,11 +585,11 @@ pub const BUNGEECORD_SUBCHANNELS: &[&str] = &[
     "PlayerList",
 ];
 
-impl Default for BungeeCordConfig {
+impl Default for MessagingChannelConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            subchannels: BUNGEECORD_SUBCHANNELS
+            subchannels: MESSAGING_SUBCHANNELS
                 .iter()
                 .map(|s| s.to_string())
                 .collect(),
@@ -760,9 +782,13 @@ impl Config {
         Self::parse_checked(text).map(|(cfg, _)| cfg)
     }
 
-    /// [`Config::parse`] plus the keys nothing reads, with their lines.
-    pub fn parse_checked(text: &str) -> Result<(Self, Notes), ConfigError> {
-        let cfg: Config = pumbo_core::yaml::from_str(text).map_err(ConfigError::Yaml)?;
+    /// [`Config::parse`] plus what the owner should hear about the file:
+    /// keys nothing reads and old keys, with their lines.
+    pub fn parse_checked(text: &str) -> Result<(Self, Remarks), ConfigError> {
+        let mut cfg: Config = pumbo_core::yaml::from_str(text).map_err(ConfigError::Yaml)?;
+        let value: serde_json::Value =
+            pumbo_core::yaml::from_str(text).map_err(ConfigError::Yaml)?;
+        let warnings = crate::migrate::apply(&mut cfg, &value, text);
         cfg.validate().map_err(|e| match e {
             ConfigError::Key { key, message } => match crate::keys::line_of(text, &key) {
                 Some(line) => ConfigError::At { line, message },
@@ -770,14 +796,12 @@ impl Config {
             },
             other => other,
         })?;
-        let value: serde_json::Value =
-            pumbo_core::yaml::from_str(text).map_err(ConfigError::Yaml)?;
         let mut unknown: Notes = crate::keys::unknown(&value, &cfg)
             .iter()
             .map(|u| (crate::keys::line_of(text, &u.path), u.message()))
             .collect();
         unknown.sort_by_key(|(line, _)| line.unwrap_or(usize::MAX));
-        Ok((cfg, unknown))
+        Ok((cfg, Remarks { unknown, warnings }))
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
@@ -856,13 +880,13 @@ impl Config {
                 ));
             }
         }
-        for sub in &self.bungeecord_channel.subchannels {
-            if !BUNGEECORD_SUBCHANNELS.contains(&sub.as_str()) {
+        for sub in &self.messaging_channel.subchannels {
+            if !MESSAGING_SUBCHANNELS.contains(&sub.as_str()) {
                 return Err(ConfigError::key(
-                    &["bungeecord-channel", "subchannels"],
+                    &["messaging-channel", "subchannels"],
                     format!(
-                        "bungeecord-channel: unknown subchannel {sub} (known: {})",
-                        BUNGEECORD_SUBCHANNELS.join(", ")
+                        "messaging-channel: unknown subchannel {sub} (known: {})",
+                        MESSAGING_SUBCHANNELS.join(", ")
                     ),
                 ));
             }

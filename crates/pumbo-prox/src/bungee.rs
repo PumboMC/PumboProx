@@ -66,7 +66,7 @@ fn reply(parts: &[&str], int: Option<i32>) -> Action {
 
 /// Handles one message from a backend.
 pub fn handle(proxy: &Proxy, rt: &Runtime, sender: &Sender<'_>, mut data: &[u8]) -> Action {
-    let cfg = &rt.config.bungeecord_channel;
+    let cfg = &rt.config.messaging_channel;
     let Some(sub) = read_utf(&mut data) else {
         return Action::None;
     };

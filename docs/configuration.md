@@ -12,11 +12,19 @@ Everything the proxy reads from `pumboprox.yml`. The file written on the first s
   - **reload**: a `reload` is enough. Settings of a login (limits, `login`, forwarding, authentication, translation) apply to connections made after the reload.
   - **restart**: the proxy reads it once at start; stop the proxy and start it again.
 
+## config-version
+
+`config-version: 2` says which version of the file layout the file follows; a file without it is version 1. When a key gets a new name, the proxy still reads the old one and warns with its line, and `pumboprox migrate-config [file]` renames it in the file: comments and layout stay, the file keeps its mode and owner, and the old file is kept as `pumboprox.yml.bak` (or `.bak.1` and up when that exists). Older versions of PumboProx do not start with a file that has `config-version: 2`; to go back to one, restore the `.bak` copy.
+
+| Version | Change |
+| --- | --- |
+| 2 | `bungeecord-channel` is `messaging-channel` |
+
 Times are in milliseconds unless the key says otherwise (`-secs`, `-seconds`). Texts take `&` colour codes (`&a`, `&#39FF88`) or text tags (`<green>`).
 
 ## Contents
 
-[listener](#listener) · [status](#status) · [login](#login) · [authentication](#authentication) · [forwarding](#forwarding) · [servers](#servers) · [routing](#routing) · [forced-hosts](#forced-hosts) · [translation](#translation) · [storage](#storage) · [limits](#limits) · [logging](#logging) · [switching](#switching) · [commands](#commands) · [plugin-messages](#plugin-messages) · [bungeecord-channel](#bungeecord-channel) · [messages](#messages) · [virtual](#virtual) · [tab](#tab) · [pumbox](#pumbox) · [bridge](#bridge) · [managed-servers](#managed-servers) · [plugins](#plugins) · [services](#services) · [permissions](#permissions) · [placeholders](#placeholders) · [server-group](#server-group) · [style](#style)
+[listener](#listener) · [status](#status) · [login](#login) · [authentication](#authentication) · [forwarding](#forwarding) · [servers](#servers) · [routing](#routing) · [forced-hosts](#forced-hosts) · [translation](#translation) · [storage](#storage) · [limits](#limits) · [logging](#logging) · [switching](#switching) · [commands](#commands) · [plugin-messages](#plugin-messages) · [messaging-channel](#messaging-channel) · [messages](#messages) · [virtual](#virtual) · [tab](#tab) · [pumbox](#pumbox) · [bridge](#bridge) · [managed-servers](#managed-servers) · [plugins](#plugins) · [services](#services) · [permissions](#permissions) · [placeholders](#placeholders) · [server-group](#server-group) · [style](#style)
 
 ## listener
 
@@ -199,9 +207,9 @@ Moving players between servers.
 | --- | --- | --- | --- |
 | `server-brand-suffix` | `" (PumboProx)"` | Added to the server brand the client shows (F3); empty leaves it unchanged | reload |
 
-## bungeecord-channel
+## messaging-channel
 
-The `bungeecord:main` plugin message channel, for older server plugins that ask the proxy for players and servers.
+The `bungeecord:main` plugin message channel, for older server plugins that ask the proxy for players and servers. Before `config-version: 2` this section was called `bungeecord-channel`; the old name still works with a warning, and `pumboprox migrate-config` renames it.
 
 | Key | Default | Description | Applies |
 | --- | --- | --- | --- |
