@@ -1,6 +1,8 @@
-# PumboProx, written on the first start. Change it and type `reload` in the
-# console; it names the changes that need a restart, such as listeners.
-# Every other setting has a default.
+# PumboProx, written on the first start; the proxy never overwrites it.
+# Change it and type `reload` in the console; it names the changes that need
+# a restart, such as listeners. A line "# key: value" shows a setting with
+# its default: remove the "# " to change it. All settings and their
+# defaults are in docs/configuration.md of the PumboProx repository.
 
 listener:
   - bind: "0.0.0.0:25565"
@@ -8,16 +10,23 @@ listener:
     # proxy-protocol: true             # only trusted-proxies may connect
     # trusted-proxies: ["10.0.0.0/8"]  # optional instead of true also lets players in directly
 
+# The entry in the server list. The MOTD takes & colour codes or text tags.
+# status:
+#   motd: "&aMy network"
+#   max-players: 500            # only the number shown; see limits.max-players
+#   favicon: server-icon.png    # a 64x64 PNG next to this file
+
 # Players log in with a Mojang account. "per-player" or false let players
 # without one in too, under any name and without a password: use them only
 # with PumboAuth (gate auth in plugins.required-gates).
 login:
   online-mode: true
+  # accept-transfers: false     # true: players sent here by /transfer
 
-# Servers you run yourself. For example:
-#   lobby: { address: "127.0.0.1:25566" }
-# Addresses outside private networks (and Tailscale) are refused unless the
-# server has allow-public: true: forwarding is not encrypted.
+# Servers you run yourself: replace {} with them, for example
+# { lobby: { address: "127.0.0.1:25566" } }. Addresses outside private networks
+# (and Tailscale) are refused unless the server has allow-public: true:
+# forwarding is not encrypted.
 servers: {}
 
 # Servers the proxy downloads and runs itself: /prox download, /prox servers.
@@ -25,12 +34,14 @@ servers: {}
 managed-servers:
   enabled: true
   download-from-game: true
+  # ports: 25700-25799          # ports of new servers
 
 # Modern forwarding; servers need the secret from this file (Pumpkin:
 # [networking.proxy.velocity] in pumpkin.toml, Paper: proxies.velocity).
 forwarding:
   mode: modern
   secret-file: forwarding.secret
+  # secret-env: PUMBO_FORWARDING_SECRET   # the secret from this variable instead
 
 plugins:
   dir: plugins
@@ -39,24 +50,33 @@ plugins:
 # commands of the proxy reach them. Servers from /prox servers new get it
 # installed and set up; on servers you run yourself put PumboBridge into
 # plugins/ and copy the key from /prox bridge key.
-# bridge:
-#   enabled: true
-#   listen: "127.0.0.1:25578"
-#   key-file: bridge.key
-#   key-env: PUMBO_BRIDGE_KEY   # the key from this variable instead
-#   allow-public: false   # true accepts 0.0.0.0 or a public address
+bridge:
+  enabled: true
+  listen: "127.0.0.1:25578"
+  key-file: bridge.key
+  # key-env: PUMBO_BRIDGE_KEY   # the key from this variable instead
+  # allow-public: false         # true accepts 0.0.0.0 or a public address
 
-# Players online at most (0: no limit; operators join anyway) and players
-# the login gates (PumboAuth, PumboFilter) hold at once.
+# Limits against floods, per address and for the whole proxy. max-players:
+# players online at most (0: no limit; operators join anyway); max-in-gates:
+# players the login gates (PumboAuth, PumboFilter) hold at once.
 # limits:
 #   max-players: 0
 #   max-in-gates: 500
+#   connections-per-ip-per-second: 3
+#   concurrent-per-ip: 5
+#   status-per-ip-per-second: 10
+#   max-pending-logins: 2000
 
-# Logs: error, warn, info, debug, trace or off, and levels per module.
+# Logs: error, warn, info, debug, trace or off, and levels per module. With
+# log-ips false addresses show as a hash; metrics-bind serves Prometheus
+# metrics on a loopback address.
 # logging:
 #   level: info
 #   filters:
 #     pumbo_host: debug
+#   log-ips: true
+#   metrics-bind: "127.0.0.1:9100"
 
 # Players wait in an empty world while no server is available, and join one
 # as soon as it is ready.

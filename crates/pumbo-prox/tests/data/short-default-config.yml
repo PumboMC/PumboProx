@@ -1,0 +1,63 @@
+# PumboProx, written on the first start. Change it and type `reload` in the
+# console; it names the changes that need a restart, such as listeners.
+# Every other setting has a default.
+
+listener:
+  - bind: "0.0.0.0:25565"
+    # Behind DDoS protection or a load balancer that sends the PROXY header:
+    # proxy-protocol: true             # only trusted-proxies may connect
+    # trusted-proxies: ["10.0.0.0/8"]  # optional instead of true also lets players in directly
+
+# Players log in with a Mojang account. "per-player" or false let players
+# without one in too, under any name and without a password: use them only
+# with PumboAuth (gate auth in plugins.required-gates).
+login:
+  online-mode: true
+
+# Servers you run yourself. For example:
+#   lobby: { address: "127.0.0.1:25566" }
+# Addresses outside private networks (and Tailscale) are refused unless the
+# server has allow-public: true: forwarding is not encrypted.
+servers: {}
+
+# Servers the proxy downloads and runs itself: /prox download, /prox servers.
+# The first one that is ready becomes the server players join.
+managed-servers:
+  enabled: true
+  download-from-game: true
+
+# Modern forwarding; servers need the secret from this file (Pumpkin:
+# [networking.proxy.velocity] in pumpkin.toml, Paper: proxies.velocity).
+forwarding:
+  mode: modern
+  secret-file: forwarding.secret
+
+plugins:
+  dir: plugins
+
+# PumboBridge: the plugin on your Pumpkin servers connects here, so ranks and
+# commands of the proxy reach them. Servers from /prox servers new get it
+# installed and set up; on servers you run yourself put PumboBridge into
+# plugins/ and copy the key from /prox bridge key.
+# bridge:
+#   enabled: true
+#   listen: "127.0.0.1:25578"
+#   key-file: bridge.key
+#   allow-public: false   # true accepts 0.0.0.0 or a public address
+
+# Players online at most (0: no limit; operators join anyway) and players
+# the login gates (PumboAuth, PumboFilter) hold at once.
+# limits:
+#   max-players: 0
+#   max-in-gates: 500
+
+# Players wait in an empty world while no server is available, and join one
+# as soon as it is ready.
+pumbox:
+  enabled: true
+
+# Player UUIDs with every proxy permission. /prox op and /prox deop edit it.
+# On a new network, without operators or servers, the console shows a code:
+# the first player to type /prox claim <code> is added here.
+commands:
+  operators: []

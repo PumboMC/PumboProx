@@ -402,3 +402,60 @@ fn the_old_name_of_the_messaging_channel_still_works() {
             .starts_with("config-version 3 is newer")
     );
 }
+
+/// The first-start file with every "# key: value" line uncommented.
+fn uncommented(text: &str) -> String {
+    text.lines()
+        .map(|l| {
+            let lead = &l[..l.len() - l.trim_start().len()];
+            let Some(body) = l.trim_start().strip_prefix("# ") else {
+                return l.to_string();
+            };
+            let t = body.trim_start();
+            let key = t.split(':').next().unwrap_or_default();
+            let setting = key.starts_with(|c: char| c.is_ascii_lowercase())
+                && key
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+                && t[key.len()..]
+                    .strip_prefix(':')
+                    .is_some_and(|r| r.is_empty() || r.starts_with(' '));
+            if setting {
+                format!("{lead}{body}")
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn the_first_start_file_explains_more_and_changes_nothing() {
+    use pumbo_prox::config::DEFAULT_FILE;
+    let short = include_str!("data/short-default-config.yml");
+    let (cfg, remarks) = Config::parse_checked(DEFAULT_FILE).unwrap();
+    assert_eq!(remarks.unknown, []);
+    assert_eq!(remarks.warnings, []);
+    assert_eq!(
+        format!("{cfg:?}"),
+        format!("{:?}", Config::parse(short).unwrap())
+    );
+    // No version line: a new install can still go back to an older release.
+    assert!(!DEFAULT_FILE.contains("config-version"));
+    // Every commented setting is a real key.
+    let all = uncommented(DEFAULT_FILE);
+    assert!(all.contains("\nlimits:\n  max-players: 0\n"), "{all}");
+    let (_, remarks) = Config::parse_checked(&all).unwrap();
+    assert_eq!(remarks.unknown, []);
+    pumbo_host::HostConfig::parse(&all).unwrap();
+}
+
+#[test]
+fn getting_started_shows_the_first_start_file() {
+    let page = include_str!("../../../docs/getting-started.md");
+    let from = page.find("## The config").unwrap();
+    let block = page[from..].split("```yaml\n").nth(1).unwrap();
+    let block = &block[..block.find("```\n").unwrap()];
+    assert_eq!(block, pumbo_prox::config::DEFAULT_FILE);
+}
