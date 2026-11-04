@@ -435,13 +435,15 @@ async fn serve(
             },
         );
     }
-    c.flush().await.map_err(e)?;
+    // Registered before the flush that carries the play login: a test can send a
+    // command as soon as its client has joined, and the session must be there.
     let (tx, mut rx) = mpsc::unbounded_channel();
     {
         let mut l = log.lock().unwrap();
         l.joins += 1;
         l.ctl.push(tx);
     }
+    c.flush().await.map_err(e)?;
     let mut tick = tokio::time::interval(Duration::from_millis(500));
     let mut noise = tokio::time::interval(Duration::from_millis(10));
     let mut ka = 1;
