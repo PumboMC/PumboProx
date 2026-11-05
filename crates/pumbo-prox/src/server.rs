@@ -808,8 +808,10 @@ impl Proxy {
         self.shutdown.subscribe()
     }
 
+    /// `send_replace`, not `send`: with nobody subscribed yet (a stop right
+    /// after the start) `send` fails and drops the value, so the stop is lost.
     pub fn stop(&self) {
-        let _ = self.shutdown.send(true);
+        self.shutdown.send_replace(true);
     }
 
     pub fn active_sessions(&self) -> usize {
@@ -1039,6 +1041,19 @@ mod tests {
         drop(held);
         assert!(ran, "the only worker is stuck waiting for the lock");
         rt.block_on(refresh).unwrap().unwrap();
+    }
+
+    /// A stop that comes before anything waits for it (a `stop` typed right
+    /// after the start) is kept: the serve loop that subscribes later sees it.
+    #[test]
+    fn a_stop_before_anyone_listens_is_kept() {
+        let cfg = Config::parse(
+            "listener:\n  - bind: \"127.0.0.1:0\"\nlogin:\n  online-mode: false\nforwarding:\n  mode: none\n",
+        )
+        .unwrap();
+        let proxy = Proxy::new(cfg, None).unwrap();
+        proxy.stop();
+        assert!(*proxy.shutdown_signal().borrow(), "the stop was lost");
     }
 
     #[test]
