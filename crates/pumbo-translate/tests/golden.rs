@@ -567,6 +567,11 @@ impl RecipeReader<'_> {
 #[test]
 fn recipes_in_the_clients_layout() {
     let Some(server) = session(777) else {
+        assert!(
+            std::env::var_os("PUMBO_REQUIRE_RECORDINGS").is_none(),
+            "no recordings in {:?}",
+            full_root()
+        );
         eprintln!("skipped: no recordings in {:?}", full_root());
         return;
     };

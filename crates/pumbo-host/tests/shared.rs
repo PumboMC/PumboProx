@@ -2132,17 +2132,15 @@ async fn quoted_arguments_keep_their_spaces() {
     host.shutdown().await;
 }
 
-/// PumboPerms on the proxy (`PUMBO_PERMS_WASM`: a built `pumbo-perms.wasm`;
-/// without it the test does nothing) imports `permissions.yml` with 3000
+/// PumboPerms on the proxy (`PUMBO_PERMS_WASM`: a built `pumbo-perms.wasm`,
+/// run with `--ignored`) imports `permissions.yml` with 3000
 /// players in 20 groups of 50 nodes, then takes a change in `default`, which
 /// every group inherits, with 200 of them online. Neither trips the time
 /// budget, also with `memory-mb: 64`.
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs PUMBO_PERMS_WASM, a built pumbo-perms.wasm"]
 async fn provider_change_fits_wasm_budget() {
-    let Ok(wasm) = std::env::var("PUMBO_PERMS_WASM") else {
-        eprintln!("[skip] PUMBO_PERMS_WASM is not set");
-        return;
-    };
+    let wasm = std::env::var("PUMBO_PERMS_WASM").expect("PUMBO_PERMS_WASM");
     logs();
     let mut yml = String::from("groups:\n  default: {}\n");
     for g in 0..20 {

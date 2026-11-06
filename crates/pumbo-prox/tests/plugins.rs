@@ -888,14 +888,11 @@ async fn wildcards_do_not_grant_operator_nodes() {
 
 /// `/pp` arguments complete on the proxy as on Pumpkin: online players, then
 /// groups and permission nodes; the first word only what the player may use
-/// (`PUMBO_PERMS_WASM`: a built `pumbo-perms.wasm`; without it the test does
-/// nothing).
+/// (`PUMBO_PERMS_WASM`: a built `pumbo-perms.wasm`, run with `--ignored`).
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs PUMBO_PERMS_WASM, a built pumbo-perms.wasm"]
 async fn pp_tab_completes_arguments() {
-    let Ok(wasm) = std::env::var("PUMBO_PERMS_WASM") else {
-        eprintln!("[skip] PUMBO_PERMS_WASM is not set");
-        return;
-    };
+    let wasm = std::env::var("PUMBO_PERMS_WASM").expect("PUMBO_PERMS_WASM");
     let (proxy, addr, plugins) = pumbox_with(
         "pp-args",
         "",
