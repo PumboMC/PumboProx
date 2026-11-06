@@ -14,11 +14,14 @@ Pick one:
   ```sh
   mkdir pumbo && cd pumbo        # pumboprox.yml goes here
   docker run -dit --name pumboprox -p 25565:25565 \
+    --init --stop-timeout 60 \
     -v "$PWD:/data" --user "$(id -u):$(id -g)" \
     ghcr.io/pumbomc/pumboprox:beta
   ```
 
-  Inside the container `127.0.0.1` is the container itself: give the servers in `pumboprox.yml` addresses the container can reach (another container's name on the same Docker network, or `--network host` on Linux). A server name has to resolve to a private address, as it does on a Docker network. Console: `docker attach pumboprox`, leave it with Ctrl+P Ctrl+Q. `docker stop pumboprox` shuts the proxy down cleanly.
+  Inside the container `127.0.0.1` is the container itself: give the servers in `pumboprox.yml` addresses the container can reach (another container's name on the same Docker network, or `--network host` on Linux). A server name has to resolve to a private address, as it does on a Docker network. Console: `docker attach pumboprox`, leave it with Ctrl+P Ctrl+Q. Metrics and health checks in a container: [Metrics and health](configuration.md#metrics-and-health).
+
+  **Stopping in a container.** `docker stop pumboprox` sends SIGTERM and the proxy stops cleanly: players get a message, then the [servers the proxy runs](servers.md) get `stop` and up to `managed-servers.stop-timeout-secs` (30 s) to save their worlds, then plugins shut down. Docker kills a container after 10 s unless told otherwise, which can cut a world save short, hence `--stop-timeout 60` above (`stop_grace_period: 60s` in compose). With a longer `stop-timeout-secs`, the proxy logs the time to set as it starts stopping. `--init` (`init: true` in compose) reaps the processes of servers the proxy started; the proxy itself would otherwise be PID 1.
 - **Build from source** (Rust stable):
 
   ```sh

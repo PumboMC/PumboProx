@@ -180,9 +180,98 @@ Protection built into the proxy, before any plugin. The per-address limits count
 | `level` | `info` | `error`, `warn`, `info`, `debug`, `trace` or `off`; another word stops the start (and a `reload` keeps the old config). Replies to console commands show at every level | reload |
 | `filters` | empty | Levels per module over `level`, for example `pumbo_host: debug` to see the plugin host in detail | reload |
 | `log-ips` | `true` | `false`: addresses in logs become a hash with a random key per run, the same address giving the same hash until a restart | restart |
-| `metrics-bind` | empty (off) | `ip:port` for Prometheus metrics at `http://<ip:port>/metrics`, with `/health` and `/ready` next to them. A loopback address (`127.0.0.1:9100`) unless `metrics-allow-remote` is on | restart |
+| `metrics-bind` | empty (off) | `ip:port` for Prometheus metrics at `http://<ip:port>/metrics`, with `/health` and `/ready` next to them (see [Metrics and health](#metrics-and-health)). A loopback address (`127.0.0.1:9100`) unless `metrics-allow-remote` is on | restart |
 | `metrics-allow-remote` | `false` | `true`: `metrics-bind` may be an address other hosts reach (`0.0.0.0:9100` in a container). Anyone who reaches the port reads player counts and server names, so set `metrics-token-file` too | restart |
 | `metrics-token-file` | empty (none) | File with a token; `/metrics` then answers only requests with `Authorization: Bearer <token>`. Keep it readable only by the proxy's user (mode `0600`); a file others can read, such as a mounted secret, gives a warning. Surrounding whitespace is ignored. A file that cannot be read fails `check-config`, and at start `/metrics` answers `503` with an error in the log. `/health` and `/ready` never need it | restart |
+
+### Metrics and health
+
+With `metrics-bind` set, the proxy answers plain HTTP on that address, at most 64 connections at once (more are closed right away) and 5 s for each request:
+
+| Path | Answer |
+| --- | --- |
+| `/metrics` (also `/`) | The series below in the Prometheus text format. With `metrics-token-file`, only for `Authorization: Bearer <token>`, otherwise `401` |
+| `/health` | `200 ok` while the process runs. It answers from the first moments of the start, before plugins, managed servers (which may download a release first) and the listeners |
+| `/ready` | `200 ready` once the listeners take players, every gate in `plugins.required-gates` and plugin in `plugins.required-plugins` is loaded and the proxy is not stopping; `503 not ready` otherwise, and at once when it starts stopping. A server that is down does not count: players wait in the [Pumbox](#pumbox) until it is back |
+
+`/health` and `/ready` carry no data and never need the token. Scraping with a token:
+
+```yaml
+scrape_configs:
+  - job_name: pumboprox
+    authorization:
+      credentials_file: /etc/prometheus/pumboprox.token
+    static_configs:
+      - targets: ["127.0.0.1:9100"]
+```
+
+In a container `127.0.0.1` is the container itself, so the address has to be `0.0.0.0:9100`, with `metrics-allow-remote: true` and, unless only the host can reach the port, a token. Publish the port on the host's loopback only:
+
+```yaml
+# pumboprox.yml
+logging:
+  metrics-bind: "0.0.0.0:9100"
+  metrics-allow-remote: true
+  metrics-token-file: metrics.token   # chmod 600
+```
+
+```yaml
+# compose.yml
+services:
+  pumboprox:
+    image: ghcr.io/pumbomc/pumboprox:beta
+    init: true                 # reaps the servers the proxy starts
+    stop_grace_period: 60s     # see "Stopping in a container" in getting-started.md
+    ports:
+      - "25565:25565"
+      - "127.0.0.1:9100:9100"
+    volumes:
+      - ./pumbo:/data
+```
+
+The image has no shell and no HTTP client, so it has no `HEALTHCHECK`; let the orchestrator ask instead. In Kubernetes, with metrics on:
+
+```yaml
+livenessProbe:
+  httpGet: { path: /health, port: 9100 }
+readinessProbe:
+  httpGet: { path: /ready, port: 9100 }
+startupProbe:   # a first start may download a server release
+  httpGet: { path: /ready, port: 9100 }
+  failureThreshold: 60
+  periodSeconds: 5
+```
+
+Series (counters end in `_total`, the rest are gauges):
+
+| Series | Labels | Counts |
+| --- | --- | --- |
+| `pumboprox_connections_total` | | Accepted connections |
+| `pumboprox_connections_rejected_total` | `reason`: `pending_logins`, `ip_rate`, `ip_concurrent`, `status_rate`, `proxy_header`, `proxy_untrusted` | Connections closed by a limit or a bad PROXY header |
+| `pumboprox_timeouts_total` | `phase`: `handshake`, `login`, `idle` | Connections closed by a timeout |
+| `pumboprox_status_total` | `kind`: `modern`, `legacy` | Server list pings |
+| `pumboprox_logins_total` | `result`: `online`, `offline`, `denied`, `auth_failed`, `auth_unavailable` | Logins |
+| `pumboprox_protocol_errors_total` | | Connections closed for a malformed packet |
+| `pumboprox_limit_kicks_total` | `limit`: `packets` | Players kicked for `limits.client-packets-per-second` or `client-bytes-per-second` |
+| `pumboprox_dropped_packets_total` | `kind`: `command_suggestion`, `keep_alive`, `custom_payload`, `session_command`, `virtual_input` | Packets the proxy dropped: command completions over the limit, keep-alive answers to nothing the proxy sent, plugin messages from clients on the channel servers use to message the proxy, commands for a session whose queue was full, input a virtual world had no room for |
+| `pumboprox_fixed_packets_total` | `kind`: `trail_particle` | Packets from a server repaired before they reach the client |
+| `pumboprox_bytes_total` | `from`: `client`, `backend` | Bytes relayed |
+| `pumboprox_backend_connects_total` | `result`: `ok`, `failed` | Connections to servers |
+| `pumboprox_switches_total` | `result`: `ok`, `failed` | Server switches |
+| `pumboprox_fallbacks_total` | | Players moved to another server after theirs closed |
+| `pumboprox_reconnects_total` | | Reconnects of a player to the server they are on (a plugin asked for one) |
+| `pumboprox_proxy_commands_total` | | Proxy commands run |
+| `pumboprox_chat_cancelled_total` | | Chat messages a plugin cancelled |
+| `pumboprox_virtual_entries_total`, `pumboprox_virtual_releases_total` | | Players who entered and left a virtual world (gates, the Pumbox) |
+| `pumboprox_auth_requests_total`, `pumboprox_auth_request_microseconds_total` | | Requests to the authentication service and their total time |
+| `pumboprox_transfers_total` | `result`: `blocked`, `switched` | `transfer` packets from servers, blocked without `allow-transfers` or turned into a switch |
+| `pumboprox_premium_checks_total` | `result`: `cached`, `lookup`, `throttled`, `rate_limited` | Premium-name checks of `online-mode: per-player` |
+| `pumboprox_translate_dropped_total` | `to`: `client`, `server`; `packet`: its name, `unknown` for an ID the tables do not have | Packets the version translator dropped (one it cannot read, or one the other version does not have). The first of each per server is logged at `debug` |
+| `pumboprox_players_online` | | Players online |
+| `pumboprox_pending_logins` | | Connections still logging in |
+| `pumboprox_players_in_gates` | | Players held by a gate |
+| `pumboprox_backend_online` | `server` | `1` unless the server is [offline](#servers) after failed logins or, run by the proxy, not ready |
+| `pumbo_plugin_<plugin>_<name>` | the plugin's | Metrics plugins declare |
 
 ## switching
 
