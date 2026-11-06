@@ -1,6 +1,6 @@
 [package]
 name = "pumbo-fuzz"
-description = "Fuzz targets for the frame decoder, packet decoders of every phase, NBT, text and version translation"
+description = "Fuzz targets for the frame decoder, packet decoders of every phase, NBT, text, version translation and bridge frames"
 version = "0.0.0"
 edition = "2024"
 license = "GPL-3.0-only"
@@ -12,6 +12,7 @@ cargo-fuzz = true
 [dependencies]
 bytes = "1.12"
 libfuzzer-sys = "0.4"
+pumbo-bridge-proto = { path = "../crates/pumbo-bridge-proto" }
 pumbo-data = { path = "../crates/pumbo-data" }
 pumbo-nbt = { path = "../crates/pumbo-nbt" }
 pumbo-protocol = { path = "../crates/pumbo-protocol" }
@@ -82,6 +83,13 @@ bench = false
 [[bin]]
 name = "translate"
 path = "fuzz_targets/translate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bridge_wire"
+path = "fuzz_targets/bridge_wire.rs"
 test = false
 doc = false
 bench = false
