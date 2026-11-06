@@ -358,6 +358,7 @@ Where the [PumboBridge](bridge.md) plugin on your Pumpkin servers connects. Unkn
 | `trusted-plugins` | `[pumbo-core]` | Plugins that may send commands to the servers; any plugin that uses the bridge may read from them | restart |
 | `stats-ms` | `5000` | How often a server reports its TPS and load | restart |
 | `player-stats-ms` | `2000` | How often a server reports its player data | restart |
+| `test-silence-ms` | `15000` | For tests: how long a bridge may stay silent before the proxy closes it; it is pinged every third of that | restart |
 
 ## managed-servers
 

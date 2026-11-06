@@ -52,6 +52,9 @@ pub struct BridgeConfig {
     pub player_stats_ms: u32,
     /// Allow `listen` outside loopback and private networks.
     pub allow_public: bool,
+    /// For tests: how long a bridge may stay silent before it is closed. It
+    /// is pinged every third of that.
+    pub test_silence_ms: u64,
 }
 
 impl Default for BridgeConfig {
@@ -66,6 +69,7 @@ impl Default for BridgeConfig {
             stats_ms: 5000,
             player_stats_ms: 2000,
             allow_public: false,
+            test_silence_ms: 15_000,
         }
     }
 }
@@ -94,8 +98,6 @@ impl BridgeConfig {
 }
 
 const HANDSHAKE: Duration = Duration::from_secs(5);
-const PING_EVERY: Duration = Duration::from_secs(5);
-const SILENCE: Duration = Duration::from_secs(15);
 /// A write to the bridge that makes no progress for this long (the server
 /// stopped reading) ends the session; a slow link that keeps reading does not.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -534,7 +536,9 @@ impl Bridge {
         let (mut rd, mut wr) = sock.into_split();
         let mut tx = codec.clone();
         let mut last_rx = Instant::now();
-        let mut ping = tokio::time::interval(PING_EVERY);
+        // A zero interval would panic, a tiny one ping in a busy loop.
+        let silence = Duration::from_millis(self.cfg.test_silence_ms.max(300));
+        let mut ping = tokio::time::interval(silence / 3);
         'session: loop {
             loop {
                 match codec.decode(&buf) {
@@ -576,8 +580,8 @@ impl Bridge {
                     last_rx += began.elapsed();
                 }
                 _ = ping.tick() => {
-                    if last_rx.elapsed() > SILENCE {
-                        break "silent for 15 s (no answer to pings)".into();
+                    if last_rx.elapsed() > silence {
+                        break format!("silent for {} s (no answer to pings)", silence.as_secs_f64());
                     }
                     if let Ok(mut p) = link.ping_at.lock() {
                         p.get_or_insert_with(Instant::now);

@@ -304,6 +304,12 @@ async fn setup(tag: &str, timeout_ms: u64) -> Setup {
 /// `setup` with the plugin host started from the same config, as the proxy
 /// does: `extra` adds to the config (`plugins:`, `permissions:`).
 async fn setup_with(tag: &str, timeout_ms: u64, extra: Option<&str>) -> Setup {
+    setup_bridge(tag, &format!("  command-timeout-ms: {timeout_ms}\n"), extra).await
+}
+
+/// `setup_with` where `bridge` holds the keys of the `bridge` section other
+/// than `enabled`, `listen` and `key-file`.
+async fn setup_bridge(tag: &str, bridge: &str, extra: Option<&str>) -> Setup {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("pumbo-bridge-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -326,8 +332,7 @@ bridge:
   enabled: true
   listen: "127.0.0.1:0"
   key-file: {key:?}
-  command-timeout-ms: {timeout_ms}
-"#,
+{bridge}"#,
         key = key_file.display().to_string()
     ) + extra.unwrap_or_default();
     let path = dir.join("pumboprox.yml");
@@ -595,20 +600,21 @@ async fn timeout_disconnect_and_reconnect() {
     assert!(task.await.unwrap().is_ok());
 }
 
-/// A bridge that stops answering (its server froze) is closed after 15 s,
-/// and the log says why. Takes 15 to 20 s.
+/// A bridge that stops answering (its server froze) is closed once the
+/// silence runs out (15 s, here 1.5 s), and the log says why.
 #[tokio::test]
 async fn silent_bridge_is_closed_with_the_reason() {
     logs();
-    let mut s = setup("silent", 5000).await;
+    let bridge = "  command-timeout-ms: 5000\n  test-silence-ms: 1500\n";
+    let mut s = setup_bridge("silent", bridge, None).await;
     let mut fb = FakeBridge::connect(s.addr, &s.key).await.unwrap();
     assert_eq!(fb.pair(&mut s.survival).await, "survival");
     // From here on the bridge reads nothing and sends nothing.
     let mut rest = Vec::new();
-    let end = tokio::time::timeout(Duration::from_secs(25), fb.sock.read_to_end(&mut rest)).await;
+    let end = tokio::time::timeout(Duration::from_secs(10), fb.sock.read_to_end(&mut rest)).await;
     assert!(end.is_ok(), "the proxy closes a silent bridge");
     assert!(
-        logged("bridge on survival closed: silent for 15 s").await,
+        logged("bridge on survival closed: silent for 1.5 s").await,
         "{}",
         logs()
     );
