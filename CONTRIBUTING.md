@@ -67,7 +67,7 @@ Connect your client to `127.0.0.1:25565`. What `up` sets up:
 - the proxy from `cargo build --release -p pumbo-prox`, with modern forwarding and PumboBridge turned on;
 - two servers on 25566 and 25567, listening on `127.0.0.1` only, offline behind the proxy, telemetry off, each with its own random seed;
 - a new forwarding secret and bridge key, written into the proxy's files and into every server's `pumpkin.toml` and PumboBridge `config.yml`;
-- plugins from `dist/`: `PumboBridge*.wasm` goes to both servers, every other `.wasm` to the proxy. Download them from the plugin releases or build them in the plugin repositories, and put only the PumboBridge build that matches your Pumpkin version there. Without PumboBridge the servers run without the bridge.
+- plugins from `dist/`: `PumboBridge*.wasm` goes to both servers, every other `.wasm` to the proxy. Download them from the plugin releases or build them in the plugin repositories, and put only the PumboBridge build that matches your Pumpkin version there. Without PumboBridge the servers run without the bridge. On Pumpkin 0.2.1 the Pumpkin plugins need their 0.2.1 build: the released 26.3 files (up to PumboPerms 1.0.0 and 0.1.2-beta of the others) load only on Pumpkin 0.2.0.
 
 `up` on an existing network keeps its configs, worlds and data, copies the plugins from `dist/` again and only starts what is not running. So after rebuilding a plugin, or to try a change in `target/dev-network/proxy/pumboprox.yml` or a server's `pumpkin.toml`, run `down` and `up`. Pumpkin is started as it is, without arguments, in its own folder.
 
