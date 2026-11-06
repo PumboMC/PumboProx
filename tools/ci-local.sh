@@ -5,10 +5,11 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# One test run at a time on this machine; the lock goes away on any exit.
+# One test run at a time on this machine; the lock goes away on any exit, and
+# one left by a killed run is taken over (tools/lock.sh).
 if [ "${PERMS_TEST_LOCK_HELD:-}" != 1 ]; then
-  until mkdir /tmp/perms-prod-tests.lock 2>/dev/null; do sleep 5; done
-  trap 'rmdir /tmp/perms-prod-tests.lock' EXIT
+  . tools/lock.sh
+  take_lock /tmp/perms-prod-tests.lock
 fi
 
 step() { echo; echo "== $*"; }
@@ -22,6 +23,9 @@ if git grep -n -i -E "$banned" -- . ':!*NOTICE' ':!*/licenses/*' ':!Cargo.lock' 
   echo "banned text found"
   exit 1
 fi
+
+step scripts
+tools/lock-test.sh
 
 step fmt
 cargo fmt --all --check
