@@ -773,12 +773,18 @@ fn host_files(tag: &str, provider: bool) -> (PathBuf, String) {
 /// The test plugin of pumbo-host, built once for wasm32-wasip2.
 fn test_plugin() -> PathBuf {
     static PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    PATH.get_or_init(|| {
+    PATH.get_or_init(|| wasm_plugin("pumbo-host-test-plugin"))
+        .clone()
+}
+
+/// Builds the plugin `package` of the workspace for wasm32-wasip2.
+fn wasm_plugin(package: &str) -> PathBuf {
+    {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let target = root.join("target/wasm-plugins");
         let ok = std::process::Command::new(env!("CARGO"))
             .current_dir(&root)
-            .args(["build", "--locked", "-p", "pumbo-host-test-plugin"])
+            .args(["build", "--locked", "-p", package])
             .args([
                 "--target",
                 "wasm32-wasip2",
@@ -790,10 +796,12 @@ fn test_plugin() -> PathBuf {
             .status()
             .unwrap()
             .success();
-        assert!(ok, "cargo build of the test plugin");
-        target.join("wasm32-wasip2/plugin/pumbo_host_test_plugin.wasm")
-    })
-    .clone()
+        assert!(ok, "cargo build of {package}");
+        target.join(format!(
+            "wasm32-wasip2/plugin/{}.wasm",
+            package.replace('-', "_")
+        ))
+    }
 }
 
 /// Steve logged in to the proxy (the host knows him).
@@ -1062,4 +1070,31 @@ async fn set_dropped_by_a_full_queue_is_sent_again() {
     s.bridge.perms_changed(STEVE, Some("lobby"));
     let set = fb.perm_set().await.expect("the set again");
     assert_eq!(set.nodes, gamemode_set());
+}
+
+/// The bridge-test plugin (`bt …`, tests/plugins/bridge-test) built as
+/// WebAssembly loads and reaches the bridge from the console.
+#[tokio::test(flavor = "multi_thread")]
+async fn bridge_test_plugin_calls_the_bridge() {
+    let (dir, extra) = host_files("bt", false);
+    let plugins = dir.join("plugins");
+    std::fs::copy(
+        wasm_plugin("pumbo-bridge-test-plugin"),
+        plugins.join("bridge-test.wasm"),
+    )
+    .unwrap();
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/plugins/bridge-test/bridge-test.yml");
+    std::fs::copy(manifest, plugins.join("bridge-test.yml")).unwrap();
+    let mut s = setup_with("bt", 5000, Some(&extra)).await;
+    let mut fb = FakeBridge::connect(s.addr, &s.key).await.unwrap();
+    fb.pair(&mut s.lobby).await;
+    let host = s.proxy.plugins.get().unwrap().clone();
+
+    host.console("bt qs lobby").unwrap();
+    let (id, m, args) = fb.command().await.unwrap();
+    assert_eq!(m, method::Q_SERVER);
+    let q: api::QServer = args.deserialized().unwrap();
+    assert_eq!(q.server.as_deref(), Some("lobby"));
+    fb.ok(id).await;
 }

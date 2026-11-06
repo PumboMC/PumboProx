@@ -36,7 +36,8 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 (cd tests/spikes/wasm-async/guest && cargo clippy --target wasm32-wasip2 --locked \
   --target-dir "$ROOT/target/spike-guest" -- -D warnings)
 # The SDK and plugins as WebAssembly (E5); the host tests build them too.
-cargo clippy -p pumbo-sdk -p pumbo-example -p pumbo-host-test-plugin --target wasm32-wasip2 --locked \
+cargo clippy -p pumbo-sdk -p pumbo-example -p pumbo-host-test-plugin -p pumbo-bridge-test-plugin \
+  --target wasm32-wasip2 --locked \
   --target-dir "$ROOT/target/wasm-plugins" -- -D warnings
 
 step test

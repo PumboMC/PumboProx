@@ -1,6 +1,7 @@
 //! PumboBridge end-to-end test plugin: `/bt …` (also from the proxy console)
-//! calls `pumbo:bridge@1.0` and logs `bt <word>: ok …` or `bt <word>: err …`,
-//! which the test driver reads from the proxy log.
+//! calls `pumbo:bridge@1.0` and logs `bt <word>: ok …` or `bt <word>: err …`
+//! for runs by hand against real servers. crates/pumbo-prox/tests/bridge.rs
+//! loads it against a stand-in bridge.
 //!
 //! `bt tp <player> <x> <y> <z> [dimension]`, `bt tpp <player> <to>`,
 //! `bt spawn <player> [dimension]`, `bt gm <player> <mode>`, `bt heal <player>`,
