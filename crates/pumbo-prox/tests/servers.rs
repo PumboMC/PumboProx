@@ -46,19 +46,14 @@ fn fake_bin() -> PathBuf {
 }
 
 /// A proxy with `lobby` (a scripted backend) and servers from the proxy on
-/// ports `first..first+9`; the stand-in is Pumpkin `TAG`.
-async fn proxy(
-    tag: &str,
-    first: u16,
-    operator: &str,
-) -> (Arc<Proxy>, std::net::SocketAddr, PathBuf, String) {
-    proxy_with(tag, first, operator, None).await
+/// ten free ports; the stand-in is Pumpkin `TAG`.
+async fn proxy(tag: &str, operator: &str) -> (Arc<Proxy>, std::net::SocketAddr, PathBuf, String) {
+    proxy_with(tag, operator, None).await
 }
 
 /// [`proxy`] with Pumpkin releases from `releases` and downloads from the game.
 async fn proxy_with(
     tag: &str,
-    first: u16,
     operator: &str,
     releases: Option<&str>,
 ) -> (Arc<Proxy>, std::net::SocketAddr, PathBuf, String) {
@@ -75,9 +70,9 @@ async fn proxy_with(
          commands:\n  operators: [\"{op}\"]\n\
          limits:\n  connections-per-ip-per-second: 1000\n  concurrent-per-ip: 1000\n\
          managed-servers:\n  enabled: true\n  dir: \"{d}/servers\"\n  versions-dir: \"{d}/versions\"\n  \
-         ports: {first}-{}\n  stop-timeout-secs: 5\n  download-from-game: {}\n  \
+         ports: {}\n  stop-timeout-secs: 5\n  download-from-game: {}\n  \
          templates:\n    default: {{ autostart: false, restart-on-crash: 2 }}\n",
-        first + 9,
+        common::ephemeral_ports(),
         releases.is_some(),
         d = common::toml_path(&dir),
     );
@@ -163,7 +158,7 @@ async fn new_server(proxy: &Arc<Proxy>, dir: &std::path::Path, name: &str, upstr
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_new_server_joins_the_network() {
-    let (proxy, addr, dir, lobby) = proxy("join", 25750, "Admin").await;
+    let (proxy, addr, dir, lobby) = proxy("join", "Admin").await;
     let m = proxy.servers.get().unwrap().clone();
     let _cleanup = Cleanup(m.clone());
     // Online before the server exists: its session must see it at once.
@@ -255,7 +250,7 @@ async fn suggest(p: &mut Player, id: i32, text: &str) -> Vec<String> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn servers_stop_with_the_proxy_and_players_need_permission() {
-    let (proxy, addr, dir, lobby) = proxy("stop", 25760, "Admin").await;
+    let (proxy, addr, dir, lobby) = proxy("stop", "Admin").await;
     let m = proxy.servers.get().unwrap().clone();
     let _cleanup = Cleanup(m.clone());
     new_server(&proxy, &dir, "hub", &lobby).await;
@@ -309,10 +304,11 @@ async fn the_first_ready_server_takes_the_players_from_the_pumbox() {
         "listener:\n  - bind: \"127.0.0.1:0\"\nlogin:\n  online-mode: false\nforwarding:\n  mode: none\n\
          limits:\n  connections-per-ip-per-second: 1000\n  concurrent-per-ip: 1000\n\
          managed-servers:\n  enabled: true\n  dir: \"{d}/servers\"\n  versions-dir: \"{d}/versions\"\n  \
-         ports: 25870-25879\n  stop-timeout-secs: 5\n  \
+         ports: {ports}\n  stop-timeout-secs: 5\n  \
          templates:\n    default: {{ autostart: false }}\n\
          # players join here\nrouting: {{}}\n",
         d = common::toml_path(&dir),
+        ports = common::ephemeral_ports(),
     );
     let file = dir.join("pumboprox.yml");
     std::fs::write(&file, &config).unwrap();
@@ -378,8 +374,9 @@ async fn routing_may_name_a_server_made_later() {
     let config = format!(
         "listener:\n  - bind: \"127.0.0.1:0\"\nforwarding:\n  mode: none\n\
          managed-servers:\n  enabled: true\n  dir: \"{d}/servers\"\n  versions-dir: \"{d}/versions\"\n  \
-         ports: 25880-25889\nrouting:\n  try: [later]\nforced-hosts:\n  play.example.org: [later]\n",
+         ports: {ports}\nrouting:\n  try: [later]\nforced-hosts:\n  play.example.org: [later]\n",
         d = common::toml_path(&dir),
+        ports = common::ephemeral_ports(),
     );
     let (proxy, _) = common::start_proxy(&config).await;
     pumbo_prox::servers::start(&proxy).unwrap();
@@ -389,7 +386,7 @@ async fn routing_may_name_a_server_made_later() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn downloads_from_the_game_are_off_by_default() {
-    let (_proxy, addr, _, _) = proxy("dl", 25770, "Admin").await;
+    let (_proxy, addr, _, _) = proxy("dl", "Admin").await;
     let mut p = Player::join(addr, module(777), JoinOptions::new("Admin"))
         .await
         .unwrap();
@@ -477,7 +474,7 @@ fn clean(text: &str) {
 async fn a_download_shows_its_progress_on_a_boss_bar() {
     static FILE: [u8; 60_000] = [3; 60_000];
     let api = fake_github(&FILE, 40).await;
-    let (proxy, addr, dir, _) = proxy_with("bar", 25780, "Admin", Some(&api)).await;
+    let (proxy, addr, dir, _) = proxy_with("bar", "Admin", Some(&api)).await;
     let mut p = Player::join(addr, module(777), JoinOptions::new("Admin"))
         .await
         .unwrap();
@@ -512,7 +509,7 @@ async fn a_download_shows_its_progress_on_a_boss_bar() {
 async fn running_downloads_can_be_stopped() {
     static FILE: [u8; 400_000] = [5; 400_000];
     let api = fake_github(&FILE, 50).await;
-    let (proxy, _, dir, _) = proxy_with("stopdl", 25790, "Admin", Some(&api)).await;
+    let (proxy, _, dir, _) = proxy_with("stopdl", "Admin", Some(&api)).await;
     let m = proxy.servers.get().unwrap().clone();
     let _cleanup = Cleanup(m.clone());
     let mut said = console(&proxy, "prox download stop");
@@ -576,7 +573,7 @@ async fn running_downloads_can_be_stopped() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_route_is_shown_and_changed_in_the_config_file() {
-    let (proxy, addr, dir, lobby) = proxy("route", 25790, "Admin").await;
+    let (proxy, addr, dir, lobby) = proxy("route", "Admin").await;
     let file = dir.join("../pumboprox.yml");
     let m = proxy.servers.get().unwrap().clone();
     let _cleanup = Cleanup(m.clone());
@@ -651,7 +648,7 @@ async fn the_route_is_shown_and_changed_in_the_config_file() {
 /// when deleted.
 #[tokio::test(flavor = "multi_thread")]
 async fn plugins_see_servers_made_after_the_start() {
-    let (proxy, _, dir, lobby) = proxy("plugins", 25640, "Admin").await;
+    let (proxy, _, dir, lobby) = proxy("plugins", "Admin").await;
     let m = proxy.servers.get().unwrap().clone();
     let _cleanup = Cleanup(m.clone());
     let host_text = format!(
@@ -685,7 +682,7 @@ async fn plugins_see_servers_made_after_the_start() {
 /// differs only in letter case: both would share one permission context.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_config_server_wins_over_a_proxy_server_in_any_case() {
-    let (proxy, _, dir, lobby) = proxy("case", 25900, "Admin").await;
+    let (proxy, _, dir, lobby) = proxy("case", "Admin").await;
     let file = dir.join("../pumboprox.yml");
     let m = proxy.servers.get().unwrap().clone();
     let _cleanup = Cleanup(m.clone());
@@ -711,7 +708,7 @@ async fn a_config_server_wins_over_a_proxy_server_in_any_case() {
 /// position.
 #[tokio::test(flavor = "multi_thread")]
 async fn every_command_answers_its_arguments() {
-    let (proxy, _, dir, lobby) = proxy("args", 25760, "Admin").await;
+    let (proxy, _, dir, lobby) = proxy("args", "Admin").await;
     let m = proxy.servers.get().unwrap().clone();
     let _cleanup = Cleanup(m.clone());
     new_server(&proxy, &dir, "arena", &lobby).await;

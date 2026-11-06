@@ -47,6 +47,22 @@ pub fn module(protocol: i32) -> Arc<dyn VersionModule> {
     ))
 }
 
+/// Ten ports from where the OS hands out ephemeral ones, `"p-p+9"`, for
+/// `managed-servers.ports`: a test never lands on the fixed ports of networks
+/// running on the same machine. The manager checks each one is free.
+pub fn ephemeral_ports() -> String {
+    loop {
+        let p = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        if p <= u16::MAX - 9 {
+            return format!("{p}-{}", p + 9);
+        }
+    }
+}
+
 /// Starts a proxy from config text; returns it with the first listener's address.
 pub async fn start_proxy(toml: &str) -> (Arc<Proxy>, SocketAddr) {
     start_proxy_at(toml, None).await

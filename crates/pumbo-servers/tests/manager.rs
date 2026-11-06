@@ -43,8 +43,8 @@ fn fake_bin() -> PathBuf {
     .clone()
 }
 
-/// A fresh folder with the stand-in as Pumpkin `TAG`; ports `first..first+9`.
-fn config(tag: &str, first: u16) -> Config {
+/// A fresh folder with the stand-in as Pumpkin `TAG` and ten free ports.
+fn config(tag: &str) -> Config {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
         "servers-{tag}-{}-{}",
         std::process::id(),
@@ -65,10 +65,26 @@ fn config(tag: &str, first: u16) -> Config {
         enabled: true,
         dir: dir.join("servers"),
         versions_dir: dir.join("versions"),
-        ports: format!("{first}-{}", first + 9),
+        ports: ephemeral_ports(),
         stop_timeout_secs: 5,
         templates,
         ..Config::default()
+    }
+}
+
+/// Ten ports from where the OS hands out ephemeral ones, `"p-p+9"`, so a test
+/// never lands on the fixed ports of networks running on the same machine.
+/// The manager still checks each one is free before it uses it.
+fn ephemeral_ports() -> String {
+    loop {
+        let p = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        if p <= u16::MAX - 9 {
+            return format!("{p}-{}", p + 9);
+        }
     }
 }
 
@@ -134,7 +150,7 @@ async fn create(m: &Arc<Manager>, name: &str) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_start_stop() {
-    let m = manager(config("life", 25750));
+    let m = manager(config("life"));
     m.create("lobby", None, None, &["lobby".into()])
         .await
         .unwrap_err();
@@ -196,7 +212,7 @@ async fn create_start_stop() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn restarts_after_a_crash_then_gives_up() {
-    let mut cfg = config("crash", 25760);
+    let mut cfg = config("crash");
     cfg.templates.get_mut("default").unwrap().restart_on_crash = 1;
     let m = manager(cfg);
     create(&m, "arena").await;
@@ -221,7 +237,7 @@ async fn restarts_after_a_crash_then_gives_up() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_server_ignoring_stop_is_killed() {
-    let mut cfg = config("kill", 25770);
+    let mut cfg = config("kill");
     cfg.stop_timeout_secs = 1;
     let m = manager(cfg);
     create(&m, "stubborn").await;
@@ -248,7 +264,7 @@ async fn a_server_ignoring_stop_is_killed() {
 #[tokio::test(flavor = "multi_thread")]
 async fn secret_files_are_private() {
     use std::os::unix::fs::PermissionsExt as _;
-    let m = manager(config("secrets", 25640));
+    let m = manager(config("secrets"));
     create(&m, "arena").await;
     let dir = m.config.dir.join("arena");
     let files = [
@@ -271,7 +287,7 @@ async fn secret_files_are_private() {
 
 #[test]
 fn a_server_left_by_a_crashed_proxy_is_taken_over() {
-    let cfg = config("orphan", 25780);
+    let cfg = config("orphan");
     let rt = tokio::runtime::Runtime::new().unwrap();
     let pid = rt.block_on(async {
         let m = manager(cfg.clone());
@@ -302,7 +318,7 @@ fn a_server_left_by_a_crashed_proxy_is_taken_over() {
 /// reused) gets no signal and is not taken over.
 #[test]
 fn a_reused_pid_is_left_alone() {
-    let cfg = config("reused", 25650);
+    let cfg = config("reused");
     let rt = tokio::runtime::Runtime::new().unwrap();
     let pid = rt.block_on(async {
         let m = manager(cfg.clone());
@@ -336,7 +352,7 @@ fn a_reused_pid_is_left_alone() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn autostart_and_a_stale_pid() {
-    let mut cfg = config("boot", 25790);
+    let mut cfg = config("boot");
     cfg.templates.get_mut("default").unwrap().autostart = true;
     let m = manager(cfg.clone());
     create(&m, "arena").await;
@@ -566,8 +582,7 @@ fn executable(path: &Path) -> bool {
 async fn real_pumpkin() {
     let bin = PathBuf::from(std::env::var("PUMBO_PUMPKIN_BIN").expect("PUMBO_PUMPKIN_BIN"));
     let tag = std::env::var("PUMBO_PUMPKIN_TAG").unwrap_or_else(|_| TAG.into());
-    let mut cfg = config("real", 25795);
-    cfg.ports = "25795-25799".into();
+    let mut cfg = config("real");
     cfg.stop_timeout_secs = 30;
     cfg.templates.get_mut("default").unwrap().version = tag.clone();
     let version = cfg.versions_dir.join("pumpkin").join(&tag);
@@ -703,7 +718,7 @@ async fn new_server_gets_bridge_plugin_and_config() {
     let good = pumbo_servers::versions::hex(
         aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, FILE).as_ref(),
     );
-    let with = |base: String, first: u16| {
+    let with = |base: String| {
         let sources: Vec<Arc<dyn Source>> = vec![Arc::new(Pumpkin::default())];
         let network = Network {
             velocity_secret: None,
@@ -711,14 +726,14 @@ async fn new_server_gets_bridge_plugin_and_config() {
             bridge_releases: Some(base),
         };
         Manager::new(
-            config("bridge", first),
+            config("bridge"),
             network,
             sources,
             Arc::new(ProcessRunner::default()),
         )
         .unwrap()
     };
-    let m = with(fake_bridge_releases(FILE, good).await, 25760);
+    let m = with(fake_bridge_releases(FILE, good).await);
     m.create("arena", None, None, &[]).await.unwrap();
     let dir = m.config.dir.join("arena");
     assert_eq!(
@@ -732,7 +747,7 @@ async fn new_server_gets_bridge_plugin_and_config() {
     );
 
     // A file that does not match SHA256SUMS never reaches a server.
-    let m = with(fake_bridge_releases(FILE, "0".repeat(64)).await, 25770);
+    let m = with(fake_bridge_releases(FILE, "0".repeat(64)).await);
     m.create("arena", None, None, &[]).await.unwrap();
     let plugins = m.config.dir.join("arena/plugins");
     assert!(!plugins.join("PumboBridge-26.3.wasm").exists());

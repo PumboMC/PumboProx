@@ -369,8 +369,13 @@ async fn reload_checks_the_whole_file_first() {
     assert!(!proxy.runtime().config.servers.contains_key("extra"));
     std::fs::remove_file(&perms).unwrap();
 
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
     let good = more
-        .replace("127.0.0.1:0", "127.0.0.1:25659")
+        .replace("127.0.0.1:0", &format!("127.0.0.1:{port}"))
         .replace("routing:", "logging:\n  level: error\n\nrouting:");
     std::fs::write(&file, &good).unwrap();
     assert_eq!(proxy.reload().unwrap(), ["listener"]);
