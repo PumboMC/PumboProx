@@ -47,6 +47,8 @@ cargo test -p spike-wasm-async --release --locked -- --nocapture --test-threads=
 step deny
 # Advisories run in .github/workflows/audit.yml, so a new one does not fail every branch.
 cargo deny --locked check bans licenses sources
+# The fuzz workspace has its own lock; libFuzzer's NCSA license is only in fuzz builds.
+cargo deny --manifest-path fuzz/Cargo.toml --locked check bans sources
 
 step build-aws-lc
 cargo build --release --locked -p spike-rsa

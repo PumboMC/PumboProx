@@ -28,8 +28,12 @@ env:
   # A new Rust brings new lints, so it comes in its own update, not on every branch at once.
   # renovate: datasource=github-releases depName=rust-lang/rust
   RUST_VERSION: 1.99.0
+  # Fuzz targets need nightly; a dated one, for the same reason.
+  RUST_NIGHTLY: nightly-2026-10-07
   # renovate: datasource=crate depName=cargo-deny
   CARGO_DENY_VERSION: 0.20.2
+  # renovate: datasource=crate depName=cargo-fuzz
+  CARGO_FUZZ_VERSION: 0.13.2
 
 jobs:
   check:
@@ -61,6 +65,22 @@ jobs:
         run: rustup toolchain install 1.96.0 --profile minimal
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo +1.96.0 check --workspace --locked
+
+  # The fuzz targets still build (they run in fuzz.yml).
+  fuzz-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Rust nightly and cargo-fuzz
+        run: |
+          rustup toolchain install "$RUST_NIGHTLY" --profile minimal
+          cargo install cargo-fuzz --locked --version "$CARGO_FUZZ_VERSION"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: fuzz
+      - working-directory: fuzz
+        run: cargo "+$RUST_NIGHTLY" fuzz build -O
 
   # Build and tests on macOS, as ci-local.sh runs them without the wasm spike.
   macos:
@@ -126,10 +146,15 @@ jobs:
       - run: cargo run -p pumbo-datagen --release --locked -- tables
       - run: git diff --exit-code crates/pumbo-data/tables
       - run: cargo test -p pumbo-datagen -p pumbo-data --locked -- --nocapture
-      # Recordings of vanilla servers (plan §2.5, E2): synced.txt must not change
-      # and the codec must round-trip every recorded packet.
+      # Recordings of vanilla servers (plan §2.5, E2): synced.txt must not change,
+      # the codec must round-trip every recorded packet, and translation for older
+      # clients and the virtual world's chunks are checked against them.
       - run: cargo run -p pumbo-datagen --release --locked -- record
       - run: git diff --exit-code crates/pumbo-data/tables
-      - run: cargo test -p pumbo-testclient --locked --test golden -- --nocapture
+      - name: Tests on the recordings
         env:
           PUMBO_REQUIRE_RECORDINGS: '1'
+        run: |
+          cargo test -p pumbo-testclient --locked --test golden -- --nocapture
+          cargo test -p pumbo-translate --locked --test golden -- --nocapture
+          cargo test -p pumbo-virtual --locked --test sections -- --nocapture

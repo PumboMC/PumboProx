@@ -2,7 +2,7 @@ name: fuzz
 
 # Fuzzing (plan E2): the frame decoder, the packet decoders of every phase,
 # NBT and text parsers, version translation and bridge frames, one hour each.
-# By hand only.
+# By hand only; ci.yml checks on every push that the targets still build.
 on:
   workflow_dispatch:
 
