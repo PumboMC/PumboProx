@@ -33,7 +33,9 @@ pub fn sha1_file(path: &Path) -> Result<String, Error> {
 pub fn download(url: &str, dest: &Path, sha1: Option<&str>) -> Result<(), Error> {
     let part = PathBuf::from(format!("{}.part", dest.display()));
     let status = Command::new("curl")
-        .args(["-fsSL", "--retry", "2", "-A", USER_AGENT, "-o"])
+        .args(["-fsSL", "--retry", "2", "-A", USER_AGENT])
+        // A stalled connection fails instead of hanging; the jars take seconds.
+        .args(["--connect-timeout", "15", "--max-time", "900", "-o"])
         .arg(&part)
         .arg(url)
         .status()

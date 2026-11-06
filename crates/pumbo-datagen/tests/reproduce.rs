@@ -7,10 +7,13 @@ use pumbo_datagen::{default_cache, diff, fetch, group, reports};
 #[test]
 fn committed_tables_match_the_reports() {
     let cache = default_cache();
-    let Ok(releases) = fetch::releases_since(&cache, "1.21", true) else {
+    // Without a cached manifest `releases_since` would download one: a plain
+    // `cargo test` stays off the network.
+    if !cache.join("version_manifest_v2.json").is_file() {
         eprintln!("no cached manifest in {}, skipping", cache.display());
         return;
-    };
+    }
+    let releases = fetch::releases_since(&cache, "1.21", true).unwrap();
     let mut per_release = Vec::new();
     for r in &releases {
         let dir = cache.join(&r.id);
