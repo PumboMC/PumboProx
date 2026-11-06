@@ -1,0 +1,2 @@
+# Checkouts on Windows keep LF: tests compare files read with include_str!.
+* text=auto eol=lf

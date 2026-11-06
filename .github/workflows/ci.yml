@@ -1,7 +1,8 @@
 name: ci
 
 # "check" runs tools/ci-local.sh on Linux; release.yml waits for it, so it
-# stays one job named check (a matrix would rename it). The release targets
+# stays one job named check (a matrix would rename it). The repository is
+# public, so the macOS and Windows jobs cost no minutes. The release targets
 # (Windows, macOS, Linux aarch64 and musl) are built by release.yml on a tag,
 # or by hand with its Run workflow button before tagging.
 on:
@@ -60,6 +61,45 @@ jobs:
         run: rustup toolchain install 1.96.0 --profile minimal
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo +1.96.0 check --workspace --locked
+
+  # Build and tests on macOS, as ci-local.sh runs them without the wasm spike.
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal -t wasm32-wasip2
+          rustup default "$RUST_VERSION"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Tests
+        run: |
+          # macOS allows 256 open files by default; the e2e tests hold 3000 connections.
+          ulimit -n 10240
+          cargo test --workspace --locked --exclude spike-wasm-async
+
+  # Windows: the protocol, the proxy's own tests, its config and the e2e tests.
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      # aws-lc-sys uses its bundled NASM objects, no NASM install.
+      AWS_LC_SYS_PREBUILT_NASM: 1
+      # Lints are checked on Linux; code only Windows builds must not fail here on a warning.
+      RUSTFLAGS: ''
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal -t wasm32-wasip2
+          rustup default "$RUST_VERSION"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo test --locked -p pumbo-protocol
+      - run: cargo test --locked -p pumbo-prox --lib --test config --test e2e
 
   # Generator tables (plan §2.5): every release from 1.21 on, run on demand.
   # The committed tables must come out byte for byte the same.
