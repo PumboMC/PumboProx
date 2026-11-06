@@ -8,5 +8,10 @@ ARG TARGETARCH
 COPY --chmod=755 pumboprox-${TARGETARCH} /usr/local/bin/pumboprox
 WORKDIR /data
 EXPOSE 25565
+# The proxy stops its managed servers on SIGTERM (Docker's default) and logs
+# how long that may take: give the container a stop_grace_period of at least
+# that (60s with the default stop-timeout-secs), and init: true so servers
+# it starts are reaped.
+STOPSIGNAL SIGTERM
 ENTRYPOINT ["pumboprox"]
 CMD ["run", "/data/pumboprox.yml"]

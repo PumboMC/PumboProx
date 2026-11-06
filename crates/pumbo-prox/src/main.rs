@@ -464,6 +464,7 @@ fn run(path: &str) -> ExitCode {
             },
             () = signals.recv() => {
                 info!("stopping (signal during the start)");
+                log_stop_budget(&proxy);
                 tokio::select! {
                     () = shutdown(&proxy) => {}
                     () = signals.recv() => forced_stop(),
@@ -490,6 +491,7 @@ fn run(path: &str) -> ExitCode {
         tokio::spawn(async move {
             signals.recv().await;
             info!("stopping (signal)");
+            log_stop_budget(&stopping);
             stopping.stop();
             signals.recv().await;
             forced_stop();
@@ -543,6 +545,7 @@ async fn console(proxy: std::sync::Arc<Proxy>) {
             },
             "stop" | "end" => {
                 info!("stopping");
+                log_stop_budget(&proxy);
                 proxy.stop();
                 return;
             }
@@ -657,7 +660,15 @@ async fn shutdown(proxy: &Proxy) {
         m.shutdown().await;
     }
     if let Some(p) = proxy.plugins.get() {
-        let _ = tokio::time::timeout(Duration::from_secs(4), p.host.shutdown()).await;
+        let _ = tokio::time::timeout(pumbo_prox::server::PLUGIN_SHUTDOWN, p.host.shutdown()).await;
+    }
+}
+
+/// With managed servers: the time a container must give the proxy to stop.
+fn log_stop_budget(proxy: &Proxy) {
+    if proxy.servers.get().is_some_and(|m| !m.list().is_empty()) {
+        let line = pumbo_prox::server::stop_budget(&proxy.runtime().config.managed_servers);
+        info!("{line}");
     }
 }
 

@@ -261,7 +261,7 @@ impl Manager {
         self.closing.store(true, Ordering::Relaxed);
         let names: Vec<String> = self.entries().into_keys().collect();
         let stops = names.iter().map(|n| self.stop(n));
-        let limit = Duration::from_secs(self.config.stop_timeout_secs + 10);
+        let limit = self.config.shutdown_limit();
         if tokio::time::timeout(limit, futures::future::join_all(stops))
             .await
             .is_err()

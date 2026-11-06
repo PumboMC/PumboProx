@@ -55,6 +55,12 @@ impl Default for Config {
 }
 
 impl Config {
+    /// How long stopping every server may take: `stop-timeout-secs`, then
+    /// the kill.
+    pub fn shutdown_limit(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.stop_timeout_secs.saturating_add(10))
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         servers::parse_ports(&self.ports).map(|_| ())
     }

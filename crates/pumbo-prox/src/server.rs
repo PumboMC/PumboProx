@@ -325,6 +325,23 @@ pub type ChatFilter = dyn Fn(&GameProfile, ChatInput<'_>) -> bool + Send + Sync;
 /// Commands per session waiting in its queue.
 const SESSION_QUEUE: usize = 64;
 
+/// Sessions get this long to end after the listeners close.
+pub const SESSION_DRAIN: Duration = Duration::from_secs(5);
+/// Plugins get this long for their `shutdown`, after the managed servers.
+pub const PLUGIN_SHUTDOWN: Duration = Duration::from_secs(4);
+
+/// Logged when the proxy starts stopping with managed servers: a container
+/// that kills the proxy before this cuts a world save short (Docker waits
+/// 10 s by default).
+pub fn stop_budget(m: &pumbo_servers::Config) -> String {
+    let worst = SESSION_DRAIN + m.shutdown_limit() + PLUGIN_SHUTDOWN;
+    let grace = (worst.as_secs() + 5).div_ceil(10) * 10;
+    format!(
+        "stopping: managed servers get up to {} s (managed-servers.stop-timeout-secs); a container needs stop_grace_period of at least {grace}s",
+        m.stop_timeout_secs
+    )
+}
+
 pub struct Proxy {
     pub versions: VersionRegistry,
     newest: Arc<dyn VersionModule>,
@@ -961,10 +978,8 @@ impl Proxy {
             let _ = t.await;
         }
         sweeper.abort();
-        for _ in 0..50 {
-            if self.active_sessions() == 0 {
-                break;
-            }
+        let drained = tokio::time::Instant::now() + SESSION_DRAIN;
+        while self.active_sessions() > 0 && tokio::time::Instant::now() < drained {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
@@ -1014,6 +1029,23 @@ pub(crate) fn off_worker<R>(f: impl FnOnce() -> R) -> R {
 mod tests {
     use super::*;
     use crate::world::VirtualCmd;
+
+    /// Stopping names the time a container must give the proxy, from
+    /// `stop-timeout-secs`.
+    #[test]
+    fn the_stop_budget_follows_the_stop_timeout() {
+        let mut m = pumbo_servers::Config::default();
+        assert_eq!(
+            stop_budget(&m),
+            "stopping: managed servers get up to 30 s (managed-servers.stop-timeout-secs); a container needs stop_grace_period of at least 60s"
+        );
+        m.stop_timeout_secs = 120;
+        let line = stop_budget(&m);
+        assert!(
+            line.contains("up to 120 s") && line.ends_with("at least 150s"),
+            "{line}"
+        );
+    }
 
     /// A refresh that waits for the config lock (held by a reload that
     /// resolves server names) leaves the other tasks of its worker running.
