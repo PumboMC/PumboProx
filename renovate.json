@@ -1,1 +1,7 @@
-{ "extends": ["github>PumboMC/.github:renovate-config"] }
+{
+  "extends": [
+    "github>PumboMC/.github:renovate-config",
+    "helpers:pinGitHubActionDigests",
+    "customManagers:githubActionsVersions"
+  ]
+}

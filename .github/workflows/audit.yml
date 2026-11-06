@@ -14,16 +14,26 @@ on:
     paths: [Cargo.lock, '**/Cargo.toml', deny.toml, .github/workflows/audit.yml]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+env:
+  # renovate: datasource=github-releases depName=rust-lang/rust
+  RUST_VERSION: 1.99.0
+  # renovate: datasource=crate depName=cargo-deny
+  CARGO_DENY_VERSION: 0.20.2
+
 jobs:
   advisories:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Rust
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-      - uses: Swatinem/rust-cache@v2
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: cargo-deny
-        run: cargo install cargo-deny --locked --version 0.20.2
+        run: cargo install cargo-deny --locked --version "$CARGO_DENY_VERSION"
       - run: cargo deny --locked check advisories

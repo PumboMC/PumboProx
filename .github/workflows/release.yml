@@ -14,6 +14,9 @@ permissions: {}
 
 env:
   CARGO_TERM_COLOR: always
+  # The same Rust as ci.yml.
+  # renovate: datasource=github-releases depName=rust-lang/rust
+  RUST_VERSION: 1.99.0
 
 jobs:
   verify:
@@ -45,6 +48,8 @@ jobs:
     name: build ${{ matrix.name }}
     needs: verify
     runs-on: ${{ matrix.os }}
+    # The slowest build so far took 24 minutes.
+    timeout-minutes: 60
     permissions:
       contents: read
     strategy:
@@ -68,21 +73,21 @@ jobs:
       # Windows x86_64: aws-lc-sys uses its bundled NASM objects, no NASM install.
       AWS_LC_SYS_PREBUILT_NASM: 1
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Rust
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
           rustup target add ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: ${{ matrix.name }}
       - if: runner.os == 'Linux'
-        uses: mlugg/setup-zig@v2
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           use-cache: false
       - if: runner.os == 'Linux'
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-zigbuild
       - name: Build and pack
@@ -112,7 +117,7 @@ jobs:
           # README.md lives in PumboMC/PumboProx, not in the development monorepo.
           if [ -f README.md ]; then cp README.md "$dir"; fi
           if [ "$RUNNER_OS" = Windows ]; then 7z a "$dir.zip" "$dir"; else tar czf "$dir.tar.gz" "$dir"; fi
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.name }}
           path: pumboprox-${{ matrix.name }}.*
@@ -123,10 +128,11 @@ jobs:
     if: github.event_name == 'push'
     needs: build
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           merge-multiple: true
       - name: Release
@@ -146,12 +152,13 @@ jobs:
     if: github.event_name == 'push'
     needs: build
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: '*-musl'
           merge-multiple: true
@@ -171,9 +178,9 @@ jobs:
             *) tags+=,$name:latest ;;
           esac
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Image for the smoke test
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: image
           file: Dockerfile
@@ -188,12 +195,12 @@ jobs:
           image() { docker run --rm -i -v "$PWD/smoke:/data" --user "$(id -u):$(id -g)" pumboprox:smoke "$@"; }
           echo stop | image
           image check-config
-      - uses: docker/login-action@v4
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - uses: docker/build-push-action@v7
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: image
           file: Dockerfile
