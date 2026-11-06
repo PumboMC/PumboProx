@@ -177,7 +177,13 @@ mod tests {
         assert_eq!(IpDisplay::new(true).show(ip), "203.0.113.7");
         let h = IpDisplay::new(false);
         let a = h.show(ip);
-        assert!(a.starts_with("ip-") && !a.contains("203"));
+        // Twelve hex digits and no dot. Random hex can contain "203", so the
+        // shape is checked, not the digits of the address.
+        let hex = a.strip_prefix("ip-").unwrap();
+        assert!(
+            hex.len() == 12 && hex.bytes().all(|b| b.is_ascii_hexdigit()),
+            "{a}"
+        );
         assert_eq!(a, h.show(ip));
         assert_ne!(a, h.show("203.0.113.8".parse().unwrap()));
         assert_eq!(session_id().len(), 8);
