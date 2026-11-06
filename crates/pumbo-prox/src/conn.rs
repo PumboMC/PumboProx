@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use bytes::{Buf, Bytes, BytesMut};
 use pumbo_core::listener::Transport;
-use pumbo_core::translate::{PacketTranslator, Translated};
+use pumbo_core::translate::{Dropped, PacketTranslator, Translated};
 use pumbo_protocol::RawFrame;
 use pumbo_protocol::crypto::{Cfb8Decrypt, Cfb8Encrypt, CryptoError, cfb8_pair};
 use pumbo_protocol::frame::{self, FrameConfig, FrameError};
@@ -69,6 +69,18 @@ struct Translation {
     translator: Box<dyn PacketTranslator>,
     ready: VecDeque<RawFrame>,
     out: Translated,
+    on_drop: OnDrop,
+}
+
+/// Told of every packet the translator dropped.
+pub type OnDrop = Box<dyn FnMut(Dropped) + Send>;
+
+impl Translation {
+    fn report_drops(&mut self) {
+        for d in self.out.dropped.drain(..) {
+            (self.on_drop)(d);
+        }
+    }
 }
 
 impl std::fmt::Debug for Conn {
@@ -104,11 +116,12 @@ impl Conn {
     }
 
     /// Translates everything from now on (after the backend login).
-    pub fn set_translator(&mut self, translator: Box<dyn PacketTranslator>) {
+    pub fn set_translator(&mut self, translator: Box<dyn PacketTranslator>, on_drop: OnDrop) {
         self.translation = Some(Translation {
             translator,
             ready: VecDeque::new(),
             out: Translated::default(),
+            on_drop,
         });
     }
 
@@ -281,6 +294,7 @@ impl Conn {
                 return Ok(None);
             };
             t.translator.backend_to_client(&f, &mut t.out);
+            t.report_drops();
             t.ready.extend(t.out.to_client.drain(..));
             // Answers of the translator itself (e.g. accepting what the client cannot show).
             for a in t.out.to_backend.drain(..) {
@@ -307,6 +321,7 @@ impl Conn {
             payload: Bytes::copy_from_slice(payload),
         };
         t.translator.client_to_backend(&f, &mut t.out);
+        t.report_drops();
         // Translators answer the client only from backend frames, so
         // `to_client` is empty here; route it to the client if one ever needs to.
         t.out.to_client.clear();

@@ -354,6 +354,7 @@ pub struct Proxy {
     /// Backends already reported, per reason (secure chat §2.8 point 1, D-COMPAT-1).
     warned: Mutex<HashSet<(&'static str, String)>>,
     pub metrics: Arc<Metrics>,
+    pub translate_drops: crate::metrics::TranslateDrops,
     pub ips: Arc<IpLimiter>,
     /// Connections before the end of login (§2.7). It outlives the runtime,
     /// so a reload resizes it instead of opening a fresh pool.
@@ -449,6 +450,7 @@ impl Proxy {
             chat_filter: RwLock::new(None),
             warned: Mutex::new(HashSet::new()),
             metrics: Arc::new(Metrics::default()),
+            translate_drops: crate::metrics::TranslateDrops::default(),
             ips: Arc::new(IpLimiter::default()),
             pending,
             auth_slots,
@@ -939,6 +941,7 @@ impl Proxy {
                     return String::new();
                 };
                 let mut out = p.render_health();
+                out.push_str(&p.translate_drops.render());
                 if let Some(plugins) = p.plugins.get() {
                     out.push_str(&plugins.host.render_metrics());
                 }

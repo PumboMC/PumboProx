@@ -16,6 +16,18 @@ use pumbo_protocol::{ProtocolVersion, RawFrame};
 pub struct Translated {
     pub to_client: Vec<RawFrame>,
     pub to_backend: Vec<RawFrame>,
+    /// Packets the translator dropped (a frame it cannot read, or one the
+    /// other version does not have).
+    pub dropped: Vec<Dropped>,
+}
+
+/// A dropped packet, by its name in the version tables (`unknown` for an ID
+/// they do not have), so a client cannot add names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Dropped {
+    /// From the backend to the client; `false`: from the client.
+    pub to_client: bool,
+    pub packet: &'static str,
 }
 
 /// Translator of one backend connection, from the end of the backend login

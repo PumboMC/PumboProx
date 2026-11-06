@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use bytes::Bytes;
 use pumbo_core::registry::{ModuleConfig, ModuleError};
-use pumbo_core::translate::{PacketTranslator, Translated, TranslationPlan, TranslatorProvider};
+use pumbo_core::translate::{
+    Dropped, PacketTranslator, Translated, TranslationPlan, TranslatorProvider,
+};
 use pumbo_protocol::{Direction, Phase, ProtocolVersion, RawFrame};
 use pumbo_translate_mv as mv;
 
@@ -183,7 +185,34 @@ impl Session {
             .extend(self.out.to_client.drain(..).map(frame));
         out.to_backend
             .extend(self.out.to_server.drain(..).map(frame));
+        let client = self.inner.tables().client_protocol();
+        out.dropped.extend(self.out.dropped.drain(..).map(|d| {
+            let (protocol, direction) = match d.bound {
+                mv::Bound::Client => (mv::SERVER_PROTOCOL, Direction::Clientbound),
+                mv::Bound::Server => (client, Direction::Serverbound),
+            };
+            let phase = match d.phase {
+                mv::Phase::Configuration => Phase::Configuration,
+                mv::Phase::Play => Phase::Play,
+            };
+            Dropped {
+                to_client: d.bound == mv::Bound::Client,
+                packet: packet_name(ProtocolVersion(protocol), phase, direction, d.id),
+            }
+        }));
     }
+}
+
+/// The name of a packet in the embedded tables, `unknown` when they lack it.
+fn packet_name(v: ProtocolVersion, phase: Phase, direction: Direction, id: i32) -> &'static str {
+    pumbo_data::tables(v)
+        .ok()
+        .and_then(|t| {
+            t.packets
+                .iter()
+                .find(|p| p.phase == phase && p.direction == direction && p.id == id)
+        })
+        .map_or("unknown", |p| p.name.as_str())
 }
 
 impl PacketTranslator for Session {
@@ -207,6 +236,46 @@ pub(crate) fn factory(_: &ModuleConfig) -> Result<Arc<dyn TranslatorProvider>, M
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Dropped packets come out by name: one the client cannot read, and an
+    /// ID no table has.
+    #[test]
+    fn drops_carry_the_packet_name() {
+        let Some(TranslationPlan::Translate(mut t)) = Multiversion::default().plan(
+            ProtocolVersion(769),
+            Some(ProtocolVersion(mv::SERVER_PROTOCOL)),
+        ) else {
+            panic!("no translator");
+        };
+        let tables = pumbo_data::tables(ProtocolVersion(mv::SERVER_PROTOCOL)).unwrap();
+        let id = |phase, name| {
+            tables
+                .packets
+                .iter()
+                .find(|p| {
+                    p.phase == phase && p.direction == Direction::Clientbound && p.name == name
+                })
+                .unwrap()
+                .id
+        };
+        let frame = |id| RawFrame {
+            id,
+            payload: Bytes::new(),
+        };
+        let mut out = Translated::default();
+        t.backend_to_client(
+            &frame(id(Phase::Configuration, "finish_configuration")),
+            &mut out,
+        );
+        assert!(out.dropped.is_empty());
+        t.backend_to_client(&frame(id(Phase::Play, "add_entity")), &mut out);
+        t.backend_to_client(&frame(0x7fff), &mut out);
+        let dropped = |packet| Dropped {
+            to_client: true,
+            packet,
+        };
+        assert_eq!(out.dropped, [dropped("add_entity"), dropped("unknown")]);
+    }
 
     #[test]
     fn plans_only_older_clients_on_26_3() {

@@ -247,6 +247,7 @@ fn login_future(
     address: String,
     player: ForwardedPlayer,
     cookies: HashMap<String, Vec<u8>>,
+    on_drop: crate::conn::OnDrop,
 ) -> LoginFuture {
     Box::pin(async move {
         let mut conn = timeout(
@@ -256,7 +257,7 @@ fn login_future(
         .await
         .unwrap_or_else(|_| Err(BackendFail::Unavailable("login timed out".into())))?;
         if let Some(t) = translator {
-            conn.set_translator(t);
+            conn.set_translator(t, on_drop);
         }
         Ok(conn)
     })
@@ -1120,6 +1121,10 @@ impl Play<'_> {
                 info.address.clone(),
                 self.player.clone(),
                 self.tracked.cookies.get(&name).cloned().unwrap_or_default(),
+                {
+                    let (proxy, server) = (self.proxy.clone(), name.clone());
+                    Box::new(move |d| proxy.translate_drops.count(&server, d))
+                },
             );
             // `on-server-connect` (E5) runs before the login, in this future.
             self.next = Next::Connecting(match self.proxy.plugins.get().cloned() {

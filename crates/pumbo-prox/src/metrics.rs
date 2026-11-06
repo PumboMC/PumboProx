@@ -1,11 +1,13 @@
 //! Counters and the Prometheus text endpoint, on loopback only (§2.11).
 
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use pumbo_core::translate::Dropped;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -100,6 +102,60 @@ impl Metrics {
 
     pub fn add(c: &AtomicU64, n: u64) {
         c.fetch_add(n, Ordering::Relaxed);
+    }
+}
+
+/// `pumboprox_translate_dropped_total{to, packet}`: packets the version
+/// translator dropped, by name from the version tables (bounded labels).
+#[derive(Debug, Default)]
+pub struct TranslateDrops(Mutex<Drops>);
+
+#[derive(Debug, Default)]
+struct Drops {
+    counts: BTreeMap<(bool, &'static str), u64>,
+    /// Per server, the packets already logged.
+    logged: HashMap<String, HashSet<(bool, &'static str)>>,
+}
+
+impl TranslateDrops {
+    /// Counts one; the first of each packet per server is logged at `debug`
+    /// (a client can cause one per packet it sends).
+    pub fn count(&self, server: &str, d: Dropped) {
+        let Ok(mut drops) = self.0.lock() else {
+            return;
+        };
+        let key = (d.to_client, d.packet);
+        *drops.counts.entry(key).or_default() += 1;
+        let first = match drops.logged.get_mut(server) {
+            Some(seen) => seen.insert(key),
+            None => {
+                drops
+                    .logged
+                    .insert(server.to_string(), HashSet::from([key]));
+                true
+            }
+        };
+        if first {
+            let from = if d.to_client { "server" } else { "client" };
+            tracing::debug!(
+                "server {server}: the version translator dropped {} from the {from} (pumboprox_translate_dropped_total)",
+                d.packet
+            );
+        }
+    }
+
+    pub fn render(&self) -> String {
+        let mut out = String::from("# TYPE pumboprox_translate_dropped_total counter\n");
+        if let Ok(drops) = self.0.lock() {
+            for ((to_client, packet), n) in &drops.counts {
+                let to = if *to_client { "client" } else { "server" };
+                let _ = writeln!(
+                    out,
+                    "pumboprox_translate_dropped_total{{to=\"{to}\",packet=\"{packet}\"}} {n}"
+                );
+            }
+        }
+        out
     }
 }
 
@@ -531,6 +587,31 @@ mod tests {
         assert!(other.starts_with("HTTP/1.1 404"), "{other}");
         let post = get(e, &["POST /metrics HTTP/1.1\r\n\r\n"]).await;
         assert!(post.starts_with("HTTP/1.1 404"), "{post}");
+    }
+
+    #[test]
+    fn translate_drops_by_packet() {
+        let drops = TranslateDrops::default();
+        let d = |to_client, packet| Dropped { to_client, packet };
+        drops.count("lobby", d(true, "add_entity"));
+        drops.count("lobby", d(true, "add_entity"));
+        drops.count("game", d(true, "add_entity"));
+        drops.count("lobby", d(false, "unknown"));
+        assert_eq!(
+            drops.render(),
+            "# TYPE pumboprox_translate_dropped_total counter\n\
+             pumboprox_translate_dropped_total{to=\"server\",packet=\"unknown\"} 1\n\
+             pumboprox_translate_dropped_total{to=\"client\",packet=\"add_entity\"} 3\n"
+        );
+        let logged = drops
+            .0
+            .lock()
+            .unwrap()
+            .logged
+            .values()
+            .map(HashSet::len)
+            .sum::<usize>();
+        assert_eq!(logged, 3, "once per packet and server");
     }
 
     #[tokio::test]

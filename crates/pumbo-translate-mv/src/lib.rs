@@ -40,13 +40,25 @@ use remap::{IdMap, Via};
 pub struct Output {
     pub to_client: Vec<(i32, Vec<u8>)>,
     pub to_server: Vec<(i32, Vec<u8>)>,
+    /// Packets that produced nothing at all.
+    pub dropped: Vec<Dropped>,
 }
 
 impl Output {
     pub fn clear(&mut self) {
         self.to_client.clear();
         self.to_server.clear();
+        self.dropped.clear();
     }
+}
+
+/// A packet dropped by the translator: a server packet (`Bound::Client`, in
+/// the server's IDs) or a client packet (`Bound::Server`, in the client's).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Dropped {
+    pub phase: Phase,
+    pub bound: Bound,
+    pub id: i32,
 }
 
 /// Why tables could not be built.
@@ -510,7 +522,7 @@ impl Translator {
             .unwrap_or_default();
         let start = out.to_client.len();
         let waited = self.state.waiting.len();
-        self.run(phase, route, payload, out, true);
+        self.run(phase, (id, route), payload, out, true);
         // The server's stream switches after `finish_configuration` and `start_configuration`.
         let name = self.tables.server.packet_name(phase, Bound::Client, id);
         self.server_phase = match (phase, name) {
@@ -548,7 +560,7 @@ impl Translator {
             .ok()
             .and_then(|i| self.tables.to_server.get(phase.index())?.get(i).copied())
             .unwrap_or_default();
-        self.run(phase, route, payload, out, false);
+        self.run(phase, (id, route), payload, out, false);
         // The client's stream switches with its acknowledgements.
         let name = self.tables.client.packet_name(phase, Bound::Server, id);
         self.client_phase = match (phase, name) {
@@ -561,11 +573,12 @@ impl Translator {
     fn run(
         &mut self,
         phase: Phase,
-        route: Route,
+        (id, route): (i32, Route),
         payload: &[u8],
         out: &mut Output,
         to_client: bool,
     ) {
+        let produced = out.to_client.len() + out.to_server.len();
         let mut after = Vec::new();
         let translated = match route.handler {
             None => Some(payload.to_vec()),
@@ -588,6 +601,13 @@ impl Translator {
             } else {
                 out.to_server.push((id, payload));
             }
+        } else if after.is_empty() && out.to_client.len() + out.to_server.len() == produced {
+            let bound = if to_client {
+                Bound::Client
+            } else {
+                Bound::Server
+            };
+            out.dropped.push(Dropped { phase, bound, id });
         }
         for (name, payload) in after {
             let mut ctx = Ctx {
@@ -660,6 +680,33 @@ mod tests {
             [map.get(0), map.get(1), map.get(2)],
             [Some(1), Some(0), None]
         );
+    }
+
+    /// A packet that yields nothing is reported: one the client cannot read
+    /// and one the client's version does not have.
+    #[test]
+    fn drops_are_reported() {
+        let mut client = version(775);
+        client.packets[1][0].retain(|n| n != "bundle_delimiter");
+        let mut t = Translator::new(Arc::new(Tables::new(client, version(777)).unwrap()));
+        let mut out = Output::default();
+        t.to_client(0, &[], &mut out);
+        t.to_client(0, &[1], &mut out);
+        t.to_client(3, &[], &mut out);
+        t.to_client(2, &[0; 8], &mut out);
+        let play = |id| Dropped {
+            phase: Phase::Play,
+            bound: Bound::Client,
+            id,
+        };
+        assert_eq!(out.dropped, [play(0), play(3)]);
+        assert_eq!(
+            out.to_client.len(),
+            2,
+            "finish_configuration and keep_alive"
+        );
+        out.clear();
+        assert!(out.dropped.is_empty());
     }
 
     #[test]
