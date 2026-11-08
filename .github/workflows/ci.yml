@@ -84,7 +84,7 @@ jobs:
 
   # Build and tests on macOS, as ci-local.sh runs them without the wasm spike.
   macos:
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

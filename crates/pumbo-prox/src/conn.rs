@@ -19,6 +19,10 @@ use tokio::time::Instant;
 
 /// A write that takes longer than this means the peer stopped reading.
 pub(crate) const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a closing connection waits for the peer to close its side. A
+/// client that got its kick closes at once; this only bounds one that does
+/// not (under the stop's five-second wait for sessions).
+const LINGER: Duration = Duration::from_secs(2);
 const READ_CHUNK: usize = 32 * 1024;
 /// A read buffer that grew over this (with the chunks of a join, say) gets
 /// a fresh allocation once it is empty and the burst is over, so the burst
@@ -374,9 +378,18 @@ impl Conn {
         Ok(())
     }
 
+    /// Sends what is buffered, ends the write side, then reads and drops what
+    /// the peer still sends until it closes or [`LINGER`] passes. A socket
+    /// closed with unread data sends a reset, and on a reset Windows throws
+    /// away what the peer has not read yet: the kick reason would be lost.
     pub async fn shutdown(&mut self) {
         let _ = self.flush().await;
         let _ = tokio::time::timeout(Duration::from_secs(1), self.stream.shutdown()).await;
+        let mut sink = [0u8; 8192];
+        let _ = tokio::time::timeout(LINGER, async {
+            while matches!(self.stream.read(&mut sink).await, Ok(n) if n > 0) {}
+        })
+        .await;
     }
 }
 
@@ -387,6 +400,26 @@ mod tests {
     /// Writes for a moment, as a session waiting for the client's packets does.
     async fn write_a_moment(c: &mut Conn) {
         let _ = tokio::time::timeout(Duration::from_millis(50), c.fill_writing(None, true)).await;
+    }
+
+    /// Closing reads what the peer still sends, so the socket never closes
+    /// with unread data (a reset, which loses the kick on Windows).
+    #[tokio::test]
+    async fn shutdown_reads_what_the_peer_still_sends() {
+        let (a, mut peer) = tokio::io::duplex(1024);
+        let mut c = Conn::new(
+            Box::pin(a),
+            FrameConfig::from_client(),
+            FrameConfig::from_backend(),
+        );
+        // More than the pipe holds: the peer finishes only if someone reads.
+        let sender = tokio::spawn(async move { peer.write_all(&[7; 64 * 1024]).await });
+        c.shutdown().await;
+        let sent = tokio::time::timeout(Duration::from_secs(1), sender).await;
+        assert!(
+            matches!(sent, Ok(Ok(Ok(())))),
+            "the peer's data was not read"
+        );
     }
 
     /// A peer that takes less than one read's worth stays stalled since the
