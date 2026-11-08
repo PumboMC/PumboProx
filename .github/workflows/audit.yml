@@ -19,7 +19,7 @@ permissions:
 
 env:
   # renovate: datasource=github-releases depName=rust-lang/rust
-  RUST_VERSION: 1.99.0
+  RUST_VERSION: 1.99.1
   # renovate: datasource=crate depName=cargo-deny
   CARGO_DENY_VERSION: 0.20.2
 

@@ -16,7 +16,7 @@ env:
   CARGO_TERM_COLOR: always
   # The same Rust as ci.yml.
   # renovate: datasource=github-releases depName=rust-lang/rust
-  RUST_VERSION: 1.99.0
+  RUST_VERSION: 1.99.1
 
 jobs:
   verify:
