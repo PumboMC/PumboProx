@@ -310,8 +310,10 @@ async fn init_host_call_loop_times_out() {
 }
 
 /// Loading has its own budget: `init` that works 600 ms without calling the
-/// host loads (`load-budget-ms`, 2 s), the same work in a command is stopped
-/// (`budget-ms`, 200 ms), and the restart after it loads again.
+/// host loads (`load-budget-ms`, 2 s), work in a command is stopped
+/// (`budget-ms`, 200 ms), and the restart after it loads again. The budgets
+/// count the time the plugin ran, not wall time, so the command works far
+/// longer than its budget: a loaded machine runs it for a fraction of that.
 #[tokio::test(flavor = "multi_thread")]
 async fn loading_has_its_own_budget() {
     let env = Env::new("loadbudget");
@@ -322,7 +324,7 @@ async fn loading_has_its_own_budget() {
     assert_eq!(slot.status(), Status::Running);
     host.player_joined(player(1, "a", Some("lobby")));
     assert_eq!(
-        fail_by(&host, "busy", CommandSender::Player(1), "/busy 600").await,
+        fail_by(&host, "busy", CommandSender::Player(1), "/busy 60000").await,
         CommandOutcome::Handled
     );
     wait_for("restart of busy", LONG, || slot.status() == Status::Running).await;
