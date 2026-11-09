@@ -159,13 +159,14 @@ async fn call(
     method: &str,
     n: u64,
     ctx: Option<u64>,
+    timeout_ms: Option<u32>,
 ) -> Result<Vec<u8>, ServiceError> {
     pumbo_sdk::services::call(
         service.to_string(),
         method.to_string(),
         n.to_le_bytes().to_vec(),
         CallOptions {
-            timeout_ms: None,
+            timeout_ms,
             player: None,
             ctx,
         },
@@ -408,7 +409,9 @@ impl pumbo_sdk::Plugin for TestPlugin {
             }
             "call" => {
                 let n = arg(&e, 2).parse().unwrap_or(0);
-                let msg = match call(&arg(&e, 0), &arg(&e, 1), n, None).await {
+                // An optional fourth argument is the call's timeout in ms.
+                let timeout_ms = arg(&e, 3).parse().ok();
+                let msg = match call(&arg(&e, 0), &arg(&e, 1), n, None, timeout_ms).await {
                     Ok(b) => format!("call ok {}", num(&b)),
                     Err(err) => format!("call err {}", err_name(&err)),
                 };
@@ -417,7 +420,7 @@ impl pumbo_sdk::Plugin for TestPlugin {
             "flood" => {
                 let n: usize = arg(&e, 0).parse().unwrap_or(0);
                 let service = arg(&e, 1);
-                let calls = (0..n).map(|_| call(&service, "slow", 0, None));
+                let calls = (0..n).map(|_| call(&service, "slow", 0, None, None));
                 let results = futures::future::join_all(calls).await;
                 let overloaded = results
                     .iter()
@@ -822,7 +825,7 @@ impl pumbo_sdk::Plugin for TestPlugin {
                     return Ok(0u64.to_le_bytes().to_vec());
                 }
                 let peer = self.config.get().peer.clone();
-                match call(&peer, "ping", n - 1, Some(c.ctx)).await {
+                match call(&peer, "ping", n - 1, Some(c.ctx), None).await {
                     Ok(b) => Ok((num(&b) + 1).to_le_bytes().to_vec()),
                     Err(e) => Err(CallReject::Rejected(err_name(&e))),
                 }

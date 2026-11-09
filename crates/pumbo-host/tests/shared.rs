@@ -126,8 +126,10 @@ async fn services_cycle_and_errors() {
     // A provider in an endless loop traps: `provider-failed`, it restarts,
     // consumers get `on-service-changed` both ways.
     bridge.clear();
+    // The caller waits up to 30 s, so the provider's time budget ends the
+    // call, not the caller's one-second default, however slow the machine.
     assert!(
-        ask(&host, b, 1, "/acall test:b spin 0", "call")
+        ask(&host, b, 1, "/acall test:b spin 0 30000", "call")
             .await
             .contains("providerfailed")
     );
