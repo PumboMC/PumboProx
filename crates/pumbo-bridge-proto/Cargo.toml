@@ -14,7 +14,7 @@ sdk = ["dep:pumbo-sdk"]
 
 [dependencies]
 ciborium.workspace = true
-hmac = "0.12"
+hmac = "0.13"
 pumbo-sdk = { workspace = true, optional = true }
 serde.workspace = true
 sha2 = "0.10"
