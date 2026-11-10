@@ -66,7 +66,7 @@ bcrypt = { version = "0.17", default-features = false, features = ["std"] }
 bytes = "1.12"
 # The version wasmtime-wasi uses: plugin data directories resolved like the guest's own sandbox.
 cap-primitives = "=4.0.3"
-cfb8 = "0.8"
+cfb8 = "0.9"
 ciborium = "0.2"
 # The icon and file details of pumboprox.exe, compiled in by the build script on Windows.
 embed-resource = "3.0"
