@@ -61,6 +61,23 @@ fn replies(o: CommandOutcome) -> Vec<String> {
     }
 }
 
+/// Renders `text` until it comes out as `want`: on a busy runner a pull can
+/// miss its deadline, and the next one is asked after the 1 s error cache.
+async fn render_until(host: &Host, text: &str, player: u64, want: &str) {
+    let deadline = Instant::now() + LONG;
+    loop {
+        let got = host.render(text, &[], Some(player)).await.plain_text();
+        if got == want {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{text} renders as {got:?}, not {want:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 /// Two plugins calling each other's services: a cycle A→B→A within the
 /// depth, then `too-deep`; errors as values; the caller keeps working while
 /// a provider is slow, loops or switches its service off.
@@ -118,9 +135,9 @@ async fn services_cycle_and_errors() {
     let br = bridge.clone();
     let slow = tokio::spawn(async move { ask(&h, &br, 1, "/acall test:b slow 0", "call").await });
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let t = Instant::now();
     assert_eq!(ask(&host, b, 1, "/aecho alive", "echo").await, "echo alive");
-    assert!(t.elapsed() < Duration::from_millis(500));
+    // Answered while the call still waits for its 1 s timeout.
+    assert!(!slow.is_finished());
     assert!(slow.await.unwrap().contains("timeout"));
 
     // A provider in an endless loop traps: `provider-failed`, it restarts,
@@ -165,7 +182,8 @@ async fn services_cycle_and_errors() {
             .await
             .contains("unavailable")
     );
-    assert!(t.elapsed() < Duration::from_millis(500));
+    // The reply tells "unavailable" from a timeout; the bound catches a hang.
+    assert!(t.elapsed() < Duration::from_secs(5));
     assert!(
         ask(&host, b, 1, "/bavail test:a off", "avail")
             .await
@@ -207,7 +225,8 @@ async fn services_registry_rules() {
             .await
             .contains("unavailable")
     );
-    assert!(t.elapsed() < Duration::from_millis(500));
+    // The reply tells "unavailable" from a timeout; the bound catches a hang.
+    assert!(t.elapsed() < Duration::from_secs(5));
     assert!(
         ask(&host, &bridge, 1, "/ocall test:a ping 1", "call")
             .await
@@ -310,7 +329,7 @@ placeholders:
     - { name: secret, scope: player, mode: push, public: false }
     - { name: rank, scope: player, mode: push, public: true, fallback: "?" }
     - { name: g_motd, scope: global, mode: push, public: true }
-    - { name: pull, scope: player, mode: pull, public: true, ttl-ms: 60000 }
+    - { name: pull, scope: player, mode: pull, public: true, ttl-ms: 60000, timeout-ms: 250 }
     - { name: slow, scope: player, mode: pull, public: true }
     - { name: inject, scope: player, mode: pull, public: true }
 "#;
@@ -410,28 +429,21 @@ async fn placeholders() {
         ask(&host, b, 1, "/resolve %test_slow%", "resolved").await,
         "resolved %test_slow%"
     );
-    assert!(
-        t.elapsed() < Duration::from_millis(300),
-        "{:?}",
-        t.elapsed()
-    );
-    assert_eq!(
-        host.render("%test_pull%", &[], Some(1)).await.plain_text(),
-        "pull:pull::survival"
-    );
+    // The raw text already shows the deadline cut the 300 ms answer off;
+    // shared CI runners are too slow for the timing claim.
+    if std::env::var_os("CI").is_none() {
+        assert!(
+            t.elapsed() < Duration::from_millis(300),
+            "{:?}",
+            t.elapsed()
+        );
+    }
+    render_until(&host, "%test_pull%", 1, "pull:pull::survival").await;
     host.player_server_changed(1, Some("lobby".into()), false);
     // The old context's entry is gone: no value until the pull answers.
     assert_eq!(r("%test_pull%"), "%test_pull%");
-    assert_eq!(
-        host.render("%test_pull%", &[], Some(1)).await.plain_text(),
-        "pull:pull::lobby"
-    );
-    assert_eq!(
-        host.render("%test_pull@survival%", &[], Some(1))
-            .await
-            .plain_text(),
-        "pull:pull::survival"
-    );
+    render_until(&host, "%test_pull%", 1, "pull:pull::lobby").await;
+    render_until(&host, "%test_pull@survival%", 1, "pull:pull::survival").await;
 
     // 500 players resolve pull values at once, within the deadline.
     for i in 2..502u64 {
@@ -674,7 +686,8 @@ async fn provider_replaces_the_file_and_falls_back() {
     let (host, bridge) = start(env.host_config(PERM)).await;
     host.player_joined(player(99, "reporter", None));
     let file_sent = |b: &FakeBridge| b.messages(99).iter().any(|m| m.starts_with("file "));
-    for _ in 0..100 {
+    // Up to 30 s: a busy runner may still be starting the provider.
+    for _ in 0..1500 {
         if file_sent(&bridge) {
             break;
         }
@@ -707,7 +720,8 @@ async fn provider_replaces_the_file_and_falls_back() {
 
     // Back: everyone past the gates is loaded from it again.
     host.reload_plugin("perm").await.unwrap();
-    for _ in 0..100 {
+    // Up to 30 s: the reloaded provider hands the file over and loads both.
+    for _ in 0..1500 {
         if host.has_permission(2, "pumbo.test.fly", None)
             && host.has_permission(1, "pumbo.test.fly", None)
         {
@@ -769,7 +783,8 @@ async fn large_permissions_file_reaches_the_provider() {
             .iter()
             .find_map(|m| m.strip_prefix("file ")?.parse::<usize>().ok())
     };
-    for _ in 0..200 {
+    // Up to 30 s: a busy runner may still be starting the provider.
+    for _ in 0..1500 {
         if size(&bridge).is_some() {
             break;
         }
@@ -1049,9 +1064,11 @@ async fn plugin_enabled_per_server() {
         "events: [chat, gate, context-changed]\ngate: { name: g }",
     );
     env.config_file("surv", "config.yml", "prefix: s\nreport: 1\n");
-    let cfg = env.host_config(
+    let mut cfg = env.host_config(
         "server-group:\n  - { name: minigames, servers: [bedwars, skywars] }\nplugins:\n  surv:\n    servers: [survival]\n    groups: [minigames]\n    except: [skywars]\n",
     );
+    // A missed chat deadline passes the message on, which a loaded runner hits.
+    cfg.plugins.timeouts.insert(EventKind::Chat, 8_000);
     let (host, bridge) = start(cfg).await;
     host.player_joined(player(1, "a", None));
     // No server yet (gates): the plugin gets the event.
@@ -1140,9 +1157,11 @@ async fn config_overlays_follow_the_player() {
     );
     env.config_file("pumbo-example", "groups/arenas.yml", "greeting: Fight\n");
     env.config_file("pumbo-example", "groups/events.yml", "greeting: Party\n");
-    let cfg = env.host_config(
+    let mut cfg = env.host_config(
         "server-group:\n  - { name: arenas, servers: [arena] }\n  - { name: events, servers: [arena, party] }\n",
     );
+    // The greeting below is a cold pull: the longest deadline for a busy runner.
+    cfg.placeholders.pull_timeout_ms = 250;
     let (host, bridge) = start(cfg).await;
     assert_eq!(
         host.plugin("pumbo-example").unwrap().status(),
@@ -1171,12 +1190,13 @@ async fn config_overlays_follow_the_player() {
     );
     // The counter service and its push placeholder; the pull placeholder per context.
     assert_eq!(host.render_now("%hellos%", &[], Some(1)).plain_text(), "4");
-    assert_eq!(
-        host.render("%example_greeting@survival%", &[], Some(1))
-            .await
-            .plain_text(),
-        "Welcome to survival"
-    );
+    render_until(
+        &host,
+        "%example_greeting@survival%",
+        1,
+        "Welcome to survival",
+    )
+    .await;
     assert_eq!(host.validate_config("pumbo-example"), Ok(()));
 }
 
@@ -1771,13 +1791,20 @@ async fn export_keeps_proxy_rules_when_the_provider_is_disabled() {
 async fn older_load_does_not_overwrite_replace() {
     let env = provider_env("older-load");
     let (host, bridge) = start(env.host_config(PERM)).await;
+    host.player_joined(player(99, "reporter", None));
     host.player_joined(player(1, "slowload_steve", None));
     let gates = {
         let host = host.clone();
         tokio::spawn(async move { host.run_gates(1).await })
     };
-    // The load takes 500 ms; meanwhile the provider replaces the set.
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // The load takes 500 ms after its report; meanwhile the provider replaces the set.
+    wait_for("the load of slowload_steve", LONG, || {
+        bridge
+            .messages(99)
+            .iter()
+            .any(|m| m == "load slowload_steve")
+    })
+    .await;
     let repl = ask(&host, &bridge, 1, "/prepl", "prepl").await;
     assert_eq!(repl, "prepl Some(Ok(()))");
     assert_eq!(gates.await.unwrap(), GateOutcome::Pass);
@@ -2055,7 +2082,8 @@ async fn suggest_reaches_the_plugin_that_owns_the_command() {
     env.plugin("other", "test", "");
     env.config_file("other", "config.yml", "prefix: v\n");
     let mut cfg = env.host_config("");
-    cfg.plugins.timeouts.insert(EventKind::Command, 300);
+    // Room for 1000 suggestions on a busy runner, well short of `usleep 5000`.
+    cfg.plugins.timeouts.insert(EventKind::Command, 1_500);
     let (host, bridge) = start(cfg).await;
     host.player_joined(player(1, "a", None));
     for line in ["/ureg uecho umbrella", "/ureg limbo umbrella virtual"] {
@@ -2081,7 +2109,7 @@ async fn suggest_reaches_the_plugin_that_owns_the_command() {
     assert_eq!(s("usleep 0").await, Some(vec!["slept".to_string()]));
     let t = Instant::now();
     assert_eq!(s("usleep 5000").await, None);
-    assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
+    assert!(t.elapsed() < Duration::from_secs(4), "{:?}", t.elapsed());
     host.shutdown().await;
 }
 

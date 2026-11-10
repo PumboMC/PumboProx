@@ -12,8 +12,8 @@
 //! - `busy_init_ms` from the config: `init` works that long without
 //!   calling the host; `hostloop_init`: `init` calls the host in an endless
 //!   loop,
-//! - gate by name prefix: `deny_`, `hold_` (released after 50 ms), `slow_`,
-//!   `never_` (hold without release), `locale_` (deny with the locale the
+//! - gate by name prefix: `deny_`, `hold_` (released after 50 ms), `slow_` (passes after 5 s),
+//!   `never_` (hold without release; both report `gate <name>` first), `locale_` (deny with the locale the
 //!   gate sees), `early_` (title, action bar and boss bar, then a virtual
 //!   world, all before the client is in play), otherwise pass,
 //! - `on-pre-login` answers `pre_login` from the config (`force-online`,
@@ -692,9 +692,17 @@ impl pumbo_sdk::Plugin for TestPlugin {
                 Err(e) => GateReply::Deny(plain(&e)),
             }
         } else if name.starts_with("never_") {
+            pumbo_sdk::players::send_message(
+                self.config.get().report,
+                plain(format!("gate {name}")),
+            );
             GateReply::Hold
         } else if name.starts_with("slow_") {
-            pumbo_sdk::scheduler::sleep(1000).await;
+            pumbo_sdk::players::send_message(
+                self.config.get().report,
+                plain(format!("gate {name}")),
+            );
+            pumbo_sdk::scheduler::sleep(5000).await;
             GateReply::Pass
         } else {
             GateReply::Pass

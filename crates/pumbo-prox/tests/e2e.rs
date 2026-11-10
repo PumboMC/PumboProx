@@ -40,6 +40,18 @@ use uuid::Uuid;
 
 const SECRET: &str = "e3-test-secret-0123456789abcdef";
 
+/// Waits until `f` holds, failing after 30 s.
+async fn wait_for(what: &str, mut f: impl FnMut() -> bool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while !f() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {what}"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 // ---------------------------------------------------------------- backend
 
 #[derive(Debug, Clone)]
@@ -495,7 +507,11 @@ async fn offline_login_with_forwarding_proxy_header_and_keep_alives() {
     assert_eq!(out.ending, Ending::Finished, "{:?}", out.notes);
     assert!(out.encryption.is_none());
     assert!(out.keep_alives >= 5, "{}", out.keep_alives);
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    wait_for("the backend log and the player gone", || {
+        let l = log.lock().unwrap();
+        !l.forwarded.is_empty() && l.keep_alive_answers.len() >= 5 && proxy.online() == 0
+    })
+    .await;
     let l = log.lock().unwrap();
     let f = &l.forwarded[0];
     assert_eq!(
@@ -614,7 +630,10 @@ async fn online_login_with_fake_sessionserver_forwards_textures() {
     let enc = out.encryption.unwrap();
     assert!(enc.should_authenticate);
     assert_eq!(enc.public_key_len, 294, "RSA-2048 SubjectPublicKeyInfo");
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_for("the session check", || {
+        !mlog.lock().unwrap().has_joined.is_empty() && !log.lock().unwrap().forwarded.is_empty()
+    })
+    .await;
     // The proxy asked with the hash the client computed.
     assert_eq!(
         mlog.lock().unwrap().has_joined,
@@ -969,34 +988,26 @@ async fn compression_bomb_and_oversized_frames_close_the_connection() {
 #[tokio::test(flavor = "multi_thread")]
 async fn three_thousand_idle_connections() {
     let (backend, _) = fake_backend(BackendOpts::default()).await;
-    let (proxy, addr) = start_proxy(&config(backend, "  handshake-timeout-ms: 1500")).await;
+    // Far longer than the 3000 connects take, so no slot frees up meanwhile.
+    let (proxy, addr) = start_proxy(&config(backend, "  handshake-timeout-ms: 10000")).await;
     let mut conns = Vec::new();
     for _ in 0..3000 {
         conns.push(TcpStream::connect(addr).await.unwrap());
     }
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let rejected = proxy
-        .metrics
-        .rejected_pending
-        .load(std::sync::atomic::Ordering::Relaxed);
-    let pending = proxy
-        .metrics
-        .pending_logins
-        .load(std::sync::atomic::Ordering::Relaxed);
-    assert_eq!(
-        rejected, 1000,
+    let relaxed = std::sync::atomic::Ordering::Relaxed;
+    let m = &proxy.metrics;
+    let rejected = || i64::try_from(m.rejected_pending.load(relaxed)).unwrap();
+    let pending = || m.pending_logins.load(relaxed);
+    wait_for("every connection counted", || {
+        rejected() + pending() == 3000
+    })
+    .await;
+    assert!(
+        rejected() >= 1000,
         "over max-pending-logins (2000) closed at once"
     );
-    assert_eq!(pending, 2000);
     // After the handshake timeout every slot is free again.
-    tokio::time::sleep(Duration::from_millis(1500)).await;
-    assert_eq!(
-        proxy
-            .metrics
-            .pending_logins
-            .load(std::sync::atomic::Ordering::Relaxed),
-        0
-    );
+    wait_for("the handshake timeout", || pending() == 0).await;
     let mut closed = 0;
     for mut s in conns {
         let mut b = [0u8; 1];

@@ -340,15 +340,20 @@ async fn panic_denies_gate_and_restarts() {
         "test",
         "events: [gate]\ngate: { name: auth, priority: 100 }",
     );
+    env.config_file("auth", "config.yml", "report: 99\n");
     let mut cfg = env.host_config("");
     cfg.plugins.required_gates = vec!["auth".into()];
     cfg.plugins.max_failures = 3;
-    let (host, _) = start(cfg).await;
+    let (host, bridge) = start(cfg).await;
     assert!(host.login_open().is_ok());
+    host.player_joined(player(99, "reporter", None));
     host.player_joined(player(1, "slow_a", None));
     let h = host.clone();
     let gate = tokio::spawn(async move { h.run_gates(1).await });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_for("the gate of slow_a", LONG, || {
+        bridge.messages(99).iter().any(|m| m == "gate slow_a")
+    })
+    .await;
     assert_eq!(
         host.dispatch_command(CommandSender::Console, "/panic"),
         CommandOutcome::Handled
@@ -395,15 +400,20 @@ async fn panic_denies_gate_and_restarts() {
 async fn plugin_command_unloads_and_loads() {
     let env = Env::new("plugin-cmd");
     env.plugin("auth", "test", "events: [gate]\ngate: { name: auth }");
+    env.config_file("auth", "config.yml", "report: 99\n");
     let mut cfg = env.host_config("");
     cfg.plugins.required_gates = vec!["auth".into()];
-    let (host, _) = start(cfg).await;
+    let (host, bridge) = start(cfg).await;
     let words = |l: &str| l.split(' ').map(str::to_string).collect::<Vec<_>>();
     let admin = |line: &str| host.proxy_admin(CommandSender::Console, &words(line));
+    host.player_joined(player(99, "reporter", None));
     host.player_joined(player(1, "never_a", None));
     let h = host.clone();
     let gate = tokio::spawn(async move { h.run_gates(1).await });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_for("the gate of never_a", LONG, || {
+        bridge.messages(99).iter().any(|m| m == "gate never_a")
+    })
+    .await;
     assert_eq!(admin("plugin unload auth"), CommandOutcome::Handled);
     let r = tokio::time::timeout(LONG, gate).await.unwrap().unwrap();
     assert!(matches!(r, GateOutcome::Deny(_)), "{r:?}");
@@ -432,19 +442,21 @@ async fn gate_deadline_and_hold() {
     let env = Env::new("gate-deadline");
     env.plugin("auth", "test", "events: [gate]\ngate: { name: auth }");
     let mut cfg = env.host_config("");
-    cfg.plugins.gate_timeouts.insert("auth".into(), 300);
+    // Long enough for the 50 ms hold on a busy runner, short of the 5 s slow gate.
+    cfg.plugins.gate_timeouts.insert("auth".into(), 2_000);
     let (host, _) = start(cfg).await;
     host.player_joined(player(1, "slow_a", None));
     let t = Instant::now();
+    // The slow gate would pass after 5 s: a deny is the deadline.
     assert!(matches!(host.run_gates(1).await, GateOutcome::Deny(_)));
-    assert!(t.elapsed() < Duration::from_secs(1));
+    assert!(t.elapsed() >= Duration::from_millis(1_900));
     // hold + release after 50 ms passes; hold without release times out.
     host.player_joined(player(2, "hold_b", None));
     assert_eq!(host.run_gates(2).await, GateOutcome::Pass);
     host.player_joined(player(3, "never_c", None));
     let t = Instant::now();
     assert!(matches!(host.run_gates(3).await, GateOutcome::Deny(_)));
-    assert!(t.elapsed() >= Duration::from_millis(250));
+    assert!(t.elapsed() >= Duration::from_millis(1_900));
 }
 
 /// A required gate whose module is missing closes logins, and its sensitive

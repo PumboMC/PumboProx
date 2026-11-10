@@ -649,8 +649,17 @@ async fn teleports_wait_for_the_client() {
     };
     let (b1, b2) = (s.bridge.clone(), s.bridge.clone());
     let (t1, t2) = (tp(1.0), tp(2.0));
+    let watchers = gate.receiver_count();
     let first = tokio::spawn(async move { call(&b1, "pumbo-core", method::TELEPORT, &t1).await });
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // The first teleport is held once it watches the gate.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while gate.receiver_count() == watchers {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the first teleport is not held"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     let second = tokio::spawn(async move { call(&b2, "pumbo-core", method::TELEPORT, &t2).await });
     assert_eq!(rejected(&first.await.unwrap()), err::SUPERSEDED);
     // Nothing reached the bridge while the client had a teleport to confirm.

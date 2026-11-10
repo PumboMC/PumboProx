@@ -636,8 +636,8 @@ async fn downloads_can_be_cancelled() {
             .contains("is being downloaded")
     );
     // Some bytes are on disk before the cancel.
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    assert!(dir.join("pumpkin").join(TAG).join("pumpkin.part").exists());
+    let part = dir.join("pumpkin").join(TAG).join("pumpkin.part");
+    wait("the partial file", 10, || part.exists()).await;
     assert!(s.cancel("pumpkin", TAG));
     assert!(s.cancel("pumpkin", FLAKY));
     assert!(!s.cancel("pumpkin", "canary"));

@@ -402,6 +402,25 @@ mod tests {
         let _ = tokio::time::timeout(Duration::from_millis(50), c.fill_writing(None, true)).await;
     }
 
+    /// Writes until the peer has taken `n` bytes, then a moment more. On a
+    /// machine that stops the thread for longer than one moment the peer is
+    /// still fed, so its read cannot wait for bytes nobody writes.
+    async fn write_while_taking(c: &mut Conn, peer: &mut tokio::io::DuplexStream, n: usize) {
+        let mut took = vec![0; n];
+        let read = peer.read_exact(&mut took);
+        tokio::pin!(read);
+        loop {
+            tokio::select! {
+                r = &mut read => {
+                    r.unwrap();
+                    break;
+                }
+                () = write_a_moment(c) => {}
+            }
+        }
+        write_a_moment(c).await;
+    }
+
     /// Closing reads what the peer still sends, so the socket never closes
     /// with unread data (a reset, which loses the kick on Windows).
     #[tokio::test]
@@ -436,13 +455,9 @@ mod tests {
         c.queue(0, &[7; 100_000]).unwrap();
         write_a_moment(&mut c).await;
         let since = c.stalled_since().unwrap();
-        let mut took = vec![0; 8 * 1024];
-        let (_, r) = tokio::join!(write_a_moment(&mut c), peer.read_exact(&mut took));
-        r.unwrap();
+        write_while_taking(&mut c, &mut peer, 8 * 1024).await;
         assert_eq!(c.stalled_since(), Some(since));
-        let mut took = vec![0; 40 * 1024];
-        let (_, r) = tokio::join!(write_a_moment(&mut c), peer.read_exact(&mut took));
-        r.unwrap();
+        write_while_taking(&mut c, &mut peer, 40 * 1024).await;
         let since = c.stalled_since().unwrap();
         // 30 s on: the next write gives up.
         c.stalled = Some((since.checked_sub(WRITE_TIMEOUT).unwrap(), 0));
