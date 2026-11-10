@@ -16,6 +16,10 @@
 //!   with and without `chat-session-forwarding`. Paper trusts a services key
 //!   made here (`-Dminecraft.api.services.host`, `openssl` signs the chat
 //!   key), so signatures are really checked. Results are printed.
+//! - `pumpkin_switching`: two Pumpkin servers of one binary.
+//! - `pumpkin_two_versions`: Pumpkin 0.2.0 (777) and 0.1.0-dev (776) at once,
+//!   a 776 client between them (`PUMBO_PUMPKIN_777`, `PUMBO_PUMPKIN_776`, each
+//!   with the template from `tools/pumpkin-template.sh` next to it).
 //!
 //! `cargo test -p pumbo-prox --test backends_switching -- --ignored --nocapture --test-threads=1`
 #![allow(
@@ -867,6 +871,154 @@ fn pumpkin_switching() {
         r
     }));
     for s in b2.into_iter().chain([b1]) {
+        s.stop();
+    }
+    eprintln!("{report:?}");
+    report.unwrap();
+}
+
+// ---------------------------------------------------------------- two versions
+
+/// A Pumpkin binary from `key`; a test that needs one fails without it.
+fn pumpkin_bin(key: &str) -> PathBuf {
+    let Some(bin) = std::env::var_os(key).map(PathBuf::from) else {
+        panic!("set {key} to a Pumpkin binary (with its pumpkin.toml template next to it)");
+    };
+    assert!(bin.is_file(), "{key}: {} is not a file", bin.display());
+    assert!(
+        bin.with_file_name("pumpkin.toml").is_file(),
+        "{key}: no pumpkin.toml template next to {} (tools/pumpkin-template.sh)",
+        bin.display()
+    );
+    bin
+}
+
+/// A lobby on Pumpkin 0.2.0 (777, `PUMBO_PUMPKIN_777`) and a second server
+/// on Pumpkin 0.1.0-dev (776, `PUMBO_PUMPKIN_776`) at the same time, each
+/// with the `pumpkin.toml` template next to its binary. A 776 client is
+/// translated on the lobby and native on the other server: `/server` there
+/// and back, chat and a command on both, then the 776 server stops and the
+/// client falls back to the lobby.
+#[test]
+#[ignore = "needs PUMBO_PUMPKIN_777 and PUMBO_PUMPKIN_776"]
+fn pumpkin_two_versions() {
+    let (new, old) = (
+        pumpkin_bin("PUMBO_PUMPKIN_777"),
+        pumpkin_bin("PUMBO_PUMPKIN_776"),
+    );
+    let secret = "pumbo-e4-pumpkin-versions-secret-01";
+    let start = |bin: &Path, port: u16| {
+        let template = std::fs::read_to_string(bin.with_file_name("pumpkin.toml")).unwrap();
+        let dir = work().join(format!("pumpkin-versions-{port}-{}", rand_tag()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("pumpkin.toml"),
+            pumpkin_config(&template, port, secret),
+        )
+        .unwrap();
+        let p = Pumpkin::start(bin, &dir);
+        wait_port(SocketAddr::from(([127, 0, 0, 1], port)));
+        p
+    };
+    let lobby = start(&new, BACKEND_PORT);
+    let mut games = Some(start(&old, B1_PORT));
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let report = rt.block_on(Box::pin(async {
+        let secret_path = secret_file(&format!("e4-versions-{}", rand_tag()), secret);
+        let cfg = format!(
+            "listener:\n  - bind: \"127.0.0.1:{CHAT_PROXY_PORT}\"\nlogin:\n  online-mode: false\n\
+             forwarding:\n  mode: modern\n  secret-file: \"{}\"\n\
+             servers:\n  lobby: {{ address: \"127.0.0.1:{BACKEND_PORT}\", protocol: 777 }}\n\
+             \x20 games: {{ address: \"127.0.0.1:{B1_PORT}\", protocol: 776 }}\n\
+             routing:\n  try: [lobby]\nswitching:\n  reconnect-cooldown-ms: 0\n",
+            toml_path(&secret_path)
+        );
+        let (proxy, addr) = start_proxy(&cfg).await;
+        let r = async {
+            let mut p = Player::join(addr, module(776), JoinOptions::new("PumboMix"))
+                .await
+                .map_err(|e| e.to_string())?;
+            // Pumpkin enforces secure chat but does not check the key's signature.
+            let expires = i64::try_from(
+                (SystemTime::now() + Duration::from_secs(86_400))
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(|e| e.to_string())?
+                    .as_millis(),
+            )
+            .map_err(|e| e.to_string())?;
+            let key = ChatKey::generate().map_err(|e| e.to_string())?;
+            p.start_chat_session(key, expires, vec![0; 256])
+                .await
+                .map_err(|e| e.to_string())?;
+            let seen = |p: &Player, text: &str| {
+                p.c.log.iter().any(|f| {
+                    f.direction == Direction::Clientbound
+                        && f.phase == Phase::Play
+                        && f.payload.windows(text.len()).any(|w| w == text.as_bytes())
+                })
+            };
+            let mut out = Vec::new();
+            for (i, to) in ["games", "lobby", "games"].into_iter().enumerate() {
+                p.command(&format!("server {to}"))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                next_login(&mut p, &format!("to {to}")).await?;
+                let on = proxy.find_player("PumboMix").and_then(|e| e.server);
+                if on.as_deref() != Some(to) {
+                    return Err(format!("on {on:?} after /server {to}"));
+                }
+                let text = format!("hello {i} on {to}");
+                p.chat(&text, None).await.map_err(|e| e.to_string())?;
+                let chat = p
+                    .pump(WAIT, |p| seen(p, &text))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                // A backend command that answers any player.
+                let action = format!("waves {i} on {to}");
+                p.command(&format!("me {action}"))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let command = p
+                    .pump(WAIT, |p| seen(p, &action))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                out.push(format!("{to}: chat back {chat}, /me back {command}"));
+                if !chat || !command {
+                    return Err(format!("{to}: {out:?}, messages {:?}", p.messages));
+                }
+            }
+            let g = games.take().ok_or("games")?;
+            let stopper = std::thread::spawn(move || g.stop());
+            next_login(&mut p, "fallback after the 776 server stops").await?;
+            stopper.join().map_err(|_| "stop thread")?;
+            let notice = p
+                .pump(WAIT, |p| {
+                    p.messages
+                        .iter()
+                        .any(|m| m.contains("You were moved to lobby"))
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+            let on = proxy.find_player("PumboMix").and_then(|e| e.server);
+            out.push(format!(
+                "fallback notice {notice}, on {on:?}, disconnect {:?}",
+                p.disconnect
+            ));
+            if !notice || on.as_deref() != Some("lobby") || p.disconnect.is_some() {
+                return Err(out.join("; "));
+            }
+            p.close().await;
+            Ok(out.join("; "))
+        }
+        .await;
+        proxy.stop();
+        r
+    }));
+    for s in games.into_iter().chain([lobby]) {
         s.stop();
     }
     eprintln!("{report:?}");
