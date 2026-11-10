@@ -1,5 +1,5 @@
-# Pull request titles start with FEAT:, FIX:, DOCS: or DEPS: (dependency
-# updates) and a space, and have at most 72 characters.
+# Pull request titles follow Conventional Commits, type(scope): description
+# with the scope optional, and have at most 72 characters.
 name: pr-title
 
 on:
@@ -20,13 +20,11 @@ jobs:
           TITLE: ${{ github.event.pull_request.title }}
           LC_ALL: C.UTF-8
         run: |
-          case $TITLE in
-            "FEAT: "* | "FIX: "* | "DOCS: "* | "DEPS: "*) ;;
-            *)
-              echo "::error::The title must start with FEAT:, FIX:, DOCS: or DEPS: and a space, e.g. \"FIX: keep comments in the config on reload\""
-              exit 1
-              ;;
-          esac
+          re='^(feat|fix|docs|refactor|test|ci|chore|perf|build)(\([a-z0-9._-]+\))?!?: [^[:space:]]'
+          if ! [[ $TITLE =~ $re ]]; then
+            echo "::error::The title must look like type(scope): description, e.g. \"fix(config): keep comments on reload\". Types: feat, fix, docs, refactor, test, ci, chore, perf, build"
+            exit 1
+          fi
           if [ "${#TITLE}" -gt 72 ]; then
             echo "::error::The title has ${#TITLE} characters, at most 72 are allowed"
             exit 1
