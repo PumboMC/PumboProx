@@ -33,7 +33,7 @@ pub use data::{Block, Bound, Phase, Synced, TagList, VersionData};
 pub use play::fix_empty_trail;
 pub use version::{OLDEST_CLIENT, SERVER_PROTOCOL};
 
-use remap::{IdMap, Via};
+use remap::{IdMap, StandIns};
 
 /// Frames produced by one translation call, as `(packet id, payload)`.
 #[derive(Debug, Default)]
@@ -197,7 +197,7 @@ impl Tables {
         }
         let entity_data = entity_data::Fields::load(client.protocol)
             .ok_or(Error::UnsupportedClient(client.protocol))?;
-        let via = Via::new(client.protocol);
+        let via = StandIns::new(client.protocol);
         let client_ids = ids_by_name(&client);
         let server_ids = ids_by_name(&server);
         let mut to_client: [Vec<Route>; 2] = Default::default();

@@ -253,6 +253,8 @@ Bug reports, fixes and plugins are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) e
 
 PumboProx is licensed under the [GNU General Public License v3.0](LICENSE). The plugin SDK, the WIT interface and the shared libraries for plugins are dual-licensed under MIT and Apache-2.0.
 
+Parts of the version translation are ported from other projects: [NOTICE](crates/pumbo-translate-mv/NOTICE) names them and their licenses. Every release archive and the Docker image (in `/usr/share/doc/pumboprox/`) carry that NOTICE and `THIRD-PARTY-LICENSES.txt`, the licenses of the libraries the proxy is built from.
+
 Windows files are signed starting with 0.2.1-beta: see the [code signing policy](docs/code-signing.md).
 
 PumboProx is not affiliated with Mojang, Microsoft or the Pumpkin project.

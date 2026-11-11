@@ -1,13 +1,12 @@
 //! Generates `data/entity_data.txt`: for every older client protocol, the
 //! client's serializer ID per server serializer and the client's field index
-//! per server field of every entity type. Ported from the `build.rs` of
-//! pumpkin-java-multiversion (MIT OR Apache-2.0).
+//! per server field of every entity type (ported, see NOTICE).
 //!
 //! `cargo run -p pumbo-translate-mv --example entity_data -- <old> <current> > data/entity_data.txt`
 //!
 //! `<old>`: a directory with `tracked_data/<folder>_tracked_data.json` and
 //! `meta_data_type/<folder>_meta_data_type.json` per older version (the
-//! `assets/` directory of pumpkin-java-multiversion); `<current>`: a directory
+//! `assets/` directory of the project NOTICE names); `<current>`: a directory
 //! with the server version's `tracked_data.json` and `meta_data_type.json`
 //! (`assets/` of Pumpkin). The files come from Pumpkin's data extractor.
 #![allow(
