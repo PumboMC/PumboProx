@@ -146,18 +146,20 @@ jobs:
           chmod +x "$DL/pumpkin-0.2.0/pumpkin"
       - name: Benchmark
         env:
-          BENCH_OUT: ${{ github.workspace }}/target/bench
+          # Outside target/: the Rust cache brings target/ back without its
+          # files, and dev-network.sh refuses to delete the emptied network.
+          BENCH_OUT: ${{ runner.temp }}/bench
         run: |
           tools/bench.sh "$DL/pumpkin-0.2.0/pumpkin"
-          cat target/bench/result.md >> "$GITHUB_STEP_SUMMARY"
+          cat "$BENCH_OUT/result.md" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: bench
           path: |
-            target/bench/result.md
-            target/bench/loadgen.txt
-            target/bench/joins.csv
-            target/bench/network/*/console.log
+            ${{ runner.temp }}/bench/result.md
+            ${{ runner.temp }}/bench/loadgen.txt
+            ${{ runner.temp }}/bench/joins.csv
+            ${{ runner.temp }}/bench/network/*/console.log
             docs/test-results.md
           if-no-files-found: ignore
