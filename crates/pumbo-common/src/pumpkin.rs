@@ -209,6 +209,21 @@ pub const PUMBO_NODES: &[&str] = &[
     "pumboperms:user.permission.unset",
     "pumboperms:user.promote",
     "pumboperms:version",
+    "pumbotabasco:chat.color",
+    "pumbotabasco:chat.format",
+    "pumbotabasco:chat.link",
+    "pumbotabasco:chat.mention",
+    "pumbotabasco:command",
+    "pumbotabasco:cpu",
+    "pumbotabasco:dump",
+    "pumbotabasco:export",
+    "pumbotabasco:import",
+    "pumbotabasco:pack",
+    "pumbotabasco:parse",
+    "pumbotabasco:reload",
+    "pumbotabasco:resync",
+    "pumbotabasco:toggle",
+    "pumbotabasco:toggle.others",
 ];
 
 /// Aliases Pumpkin 0.1.0-dev and 0.2.0 run without any permission check, with
