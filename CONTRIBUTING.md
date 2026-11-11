@@ -46,8 +46,11 @@ PUMBO_PUMPKIN_BIN=/path/to/pumpkin PUMBO_PUMPKIN_TEMPLATE=/path/to/pumpkin.toml 
 | File in `crates/pumbo-prox/tests/` | Needs |
 | --- | --- |
 | `backends.rs`, `backends_virtual.rs` | vanilla server jars (`PUMBO_JARS`), a Pumpkin binary (`PUMBO_PUMPKIN_BIN`) |
-| `backends_switching.rs` | the same, plus a Paper jar (`PUMBO_PAPER_JAR`) |
-| `translate_mv.rs` | Pumpkin 0.2.0 and a vanilla 26.3 server |
+| `backends_switching.rs` | the same, plus a Paper jar (`PUMBO_PAPER_JAR`); `pumpkin_two_versions` needs Pumpkin 0.2.0 and 0.1.0-dev (`PUMBO_PUMPKIN_777`, `PUMBO_PUMPKIN_776`) |
+| `translate_mv.rs` | Pumpkin 0.2.0 and a vanilla 26.3 server (only Pumpkin with `PUMBO_MV_BACKENDS=pumpkin`) |
+| `contracts.rs` | the released proxy plugins in `PUMBO_CONTRACT_PLUGINS`, as pinned in `tools/backends.sha256` |
+
+`tools/pumpkin-template.sh path/to/pumpkin` writes the `pumpkin.toml` template these tests read next to the binary. `.github/workflows/backends.yml` runs the Pumpkin tests, the contract test and `tools/bench.sh` (a short load benchmark whose results go to `docs/test-results.md`) every week and on demand, with the downloads pinned in `tools/backends.sha256`.
 
 `cargo run -p pumbo-datagen --release -- tables` downloads the vanilla jars into `~/.cache/pumbo-datagen` and regenerates the tables in `crates/pumbo-data/tables`; they must not change unless you add a Minecraft version.
 
