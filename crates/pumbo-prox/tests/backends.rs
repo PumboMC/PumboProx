@@ -385,12 +385,16 @@ fn pumpkin_forwarding() {
             // Pumpkin saves a player's data right after they leave.
             tokio::time::sleep(Duration::from_secs(2)).await;
             let log = pumpkin.log();
+            // The answer to `ban-ip PumboOff` names the address Pumpkin has for
+            // the player: "Banned IP address <ip>" on 0.2.0, the vanilla
+            // "Banned IP <ip>: <reason>" from 0.2.1 on. Pardon-ip says "Unbanned IP".
+            let banned = log.lines().any(|l| l.contains("Banned IP") && l.contains("203.0.113.7"));
             // Pumpkin saves player data under the UUID it got from forwarding.
             let off_uuid = pumbo_identity::offline_uuid("PumboOff").to_string();
             let notch_uuid = premium_uuid("Notch").unwrap().to_string();
             let saved = player_files(&dir);
             report.push(format!("Pumpkin player data files: {saved:?}"));
-            report.push(format!("Pumpkin log has IP 203.0.113.7 (ban-ip): {}", log.contains("Banned IP address 203.0.113.7")));
+            report.push(format!("Pumpkin log has IP 203.0.113.7 (ban-ip): {banned}"));
             proxy.stop();
             assert_eq!(premium.ending, Ending::Finished, "{:?}", premium.notes);
             assert_eq!(watcher.ending, Ending::Finished, "{:?}", watcher.notes);
@@ -399,7 +403,7 @@ fn pumpkin_forwarding() {
             assert!(seen, "textures not visible to the second player");
             assert!(saved.contains(&format!("{off_uuid}.dat")) && saved.contains(&format!("{notch_uuid}.dat")), "player data under forwarded UUIDs");
             assert!(premium.keep_alives >= 2, "Pumpkin keep-alives through the proxy");
-            assert!(log.contains("Banned IP address 203.0.113.7"), "forwarded IP in the ban-ip answer");
+            assert!(banned, "forwarded IP in the ban-ip answer");
         });
     }));
     pumpkin.stop();
