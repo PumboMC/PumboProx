@@ -1,4 +1,4 @@
-//! The PumboBridge contract (pumbo-plugins `docs/pumbo-bridge-spec.md`): the
+//! The PumboBridge contract (`docs/bridge-protocol.md` in the repository): the
 //! TCP protocol between PumboProx and the `pumbobridge` plugin on every
 //! Pumpkin server, and the types of the `pumbo:bridge@1.0` service that
 //! PumboProx plugins call.

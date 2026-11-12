@@ -1,4 +1,4 @@
-[PumboProx](../README.md) · [Get started](getting-started.md) · [Servers from the proxy](servers.md) · [Commands](commands.md) · [PumboBridge](bridge.md) · [How it works](how-it-works.md) · **Writing plugins**
+[PumboProx](../README.md) · [Get started](getting-started.md) · [Configuration](configuration.md) · [Servers from the proxy](servers.md) · [Commands](commands.md) · [PumboBridge](bridge.md) · [Bridge protocol](bridge-protocol.md) · [How it works](how-it-works.md) · **Writing plugins**
 
 ---
 

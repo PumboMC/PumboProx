@@ -1,4 +1,4 @@
-//! Messages, frames and the handshake (spec §3.3–3.5, §4).
+//! Messages, frames and the handshake (`docs/bridge-protocol.md`).
 //!
 //! Before the handshake a frame is `u32 length ‖ CBOR` (at most 4 KiB). After
 //! it: `u32 length ‖ u64 seq ‖ CBOR ‖ 16 B tag`, the tag being the first 16
@@ -8,7 +8,7 @@
 //! session key new.
 //!
 //! Handshake with the bridge key `K` (32 bytes the proxy keeps in its key
-//! file and prints with `pumbo proxy bridge key`):
+//! file and shows with `/prox bridge key`):
 //!
 //! 1. B→P `hello {proto, bridge, pumpkin, mc, instance, nb}`
 //! 2. P→B `challenge {np, proof = HMAC(K, "P"‖nb‖np‖instance)}`
@@ -622,6 +622,63 @@ mod tests {
             let f = b.encode(&m).unwrap();
             assert_eq!(p.decode(&f).unwrap().map(|x| x.0), Some(m));
         }
+    }
+
+    /// The encodings and the example frame in docs/bridge-protocol.md.
+    #[test]
+    fn documented_encoding() {
+        let ping = Codec::new(Side::Bridge).encode(&Msg::Ping).unwrap();
+        assert_eq!(hex(&ping), "00000008a161746470696e67");
+        let hello = Msg::Hello {
+            proto: crate::PROTO,
+            bridge: "0.1.0".into(),
+            pumpkin: "0.2.0".into(),
+            mc: "26.3".into(),
+            instance: INST,
+            nb: NB,
+        };
+        let v = ciborium::Value::serialized(&hello).unwrap();
+        let map = v.as_map().unwrap();
+        let get = |k: &str| {
+            map.iter()
+                .find(|(n, _)| n.as_text() == Some(k))
+                .map(|x| &x.1)
+        };
+        assert_eq!(get("t").and_then(|t| t.as_text()), Some("hello"));
+        let nb = get("nb").and_then(|n| n.as_array()).unwrap();
+        assert_eq!(nb.len(), 32, "a nonce is an array of 32 integers");
+        assert!(nb.iter().all(|b| b.as_integer() == Some(0x22.into())));
+        let leave = Msg::Ev {
+            ev: Event::Leave {
+                player: Uuid::from_u128(1),
+                pos: Pos {
+                    world: "minecraft:overworld".into(),
+                    x: 0.0,
+                    y: 64.0,
+                    z: 0.0,
+                    yaw: None,
+                    pitch: None,
+                },
+            },
+        };
+        let v = ciborium::Value::serialized(&leave).unwrap();
+        let ev = v
+            .as_map()
+            .unwrap()
+            .iter()
+            .find(|(k, _)| k.as_text() == Some("ev"));
+        let ev = ev.and_then(|(_, e)| e.as_map()).unwrap();
+        let field = |k: &str| {
+            ev.iter()
+                .find(|(n, _)| n.as_text() == Some(k))
+                .map(|x| &x.1)
+        };
+        assert_eq!(field("kind").and_then(|k| k.as_text()), Some("leave"));
+        assert_eq!(
+            field("player").and_then(|p| p.as_bytes()).map(Vec::len),
+            Some(16),
+            "a UUID is 16 bytes"
+        );
     }
 
     #[test]

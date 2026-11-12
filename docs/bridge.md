@@ -1,4 +1,4 @@
-[PumboProx](../README.md) · [Get started](getting-started.md) · [Servers from the proxy](servers.md) · [Commands](commands.md) · **PumboBridge** · [How it works](how-it-works.md) · [Writing plugins](writing-plugins.md)
+[PumboProx](../README.md) · [Get started](getting-started.md) · [Configuration](configuration.md) · [Servers from the proxy](servers.md) · [Commands](commands.md) · **PumboBridge** · [Bridge protocol](bridge-protocol.md) · [How it works](how-it-works.md) · [Writing plugins](writing-plugins.md)
 
 ---
 
@@ -28,3 +28,5 @@
 | 📊 **Read the server** | TPS, MSPT and player data as placeholders, and events like join, death and world change |
 
 Every message between the proxy and a server is signed with the key, so a fake proxy or a fake server is refused. A server without PumboBridge still works behind the proxy; plugins just can't control it, and they are told so.
+
+To write a bridge for another server engine, or to check the security of the link, see the [bridge protocol](bridge-protocol.md).

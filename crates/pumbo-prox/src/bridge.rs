@@ -1,5 +1,5 @@
-//! PumboBridge, proxy side (pumbo-plugins `docs/pumbo-bridge-spec.md` §3,
-//! §6): the `pumbobridge` plugin of every Pumpkin server connects here over
+//! PumboBridge, proxy side (see `docs/bridge-protocol.md`): the
+//! `pumbobridge` plugin of every Pumpkin server connects here over
 //! TCP, proves it has the bridge key, and is paired with its `servers`
 //! entry by a status ping whose host name carries a nonce. Plugins reach the
 //! bridges through the native service `pumbo:bridge@1.0`.
