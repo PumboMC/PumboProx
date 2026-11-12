@@ -27,7 +27,7 @@ env:
   CARGO_PROFILE_DEV_DEBUG: 0
   # A new Rust brings new lints, so it comes in its own update, not on every branch at once.
   # renovate: datasource=github-releases depName=rust-lang/rust
-  RUST_VERSION: 1.99.0
+  RUST_VERSION: 1.99.1
   # Fuzz targets need nightly; a dated one, for the same reason.
   RUST_NIGHTLY: nightly-2026-10-07
   # renovate: datasource=crate depName=cargo-deny
