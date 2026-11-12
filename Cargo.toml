@@ -55,33 +55,33 @@ await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"
 
 [workspace.dependencies]
-rand_core = { version = "0.6", features = ["getrandom"] }
-redb = "3.1"
-aes = "0.8"
-argon2 = { version = "0.5", default-features = false, features = ["password-hash", "rand", "std"] }
-aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys", "alloc"] }
+rand_core = { version = "=0.6.4", features = ["getrandom"] }
+redb = "=3.1.3"
+aes = "=0.8.4"
+argon2 = { version = "=0.5.3", default-features = false, features = ["password-hash", "rand", "std"] }
+aws-lc-rs = { version = "=1.18.1", default-features = false, features = ["aws-lc-sys", "alloc"] }
 # Already built for reqwest; the server icon in the status answer.
-base64 = "0.23"
-bcrypt = { version = "0.17", default-features = false, features = ["std"] }
-bytes = "1.12"
+base64 = "=0.23.1"
+bcrypt = { version = "=0.17.1", default-features = false, features = ["std"] }
+bytes = "=1.12.1"
 # The version wasmtime-wasi uses: plugin data directories resolved like the guest's own sandbox.
 cap-primitives = "=4.0.3"
-cfb8 = "0.8"
-ciborium = "0.2"
+cfb8 = "=0.8.1"
+ciborium = "=0.2.2"
 # The icon and file details of pumboprox.exe, compiled in by the build script on Windows.
-embed-resource = "3.0"
-flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
-futures = "0.3"
-md-5 = "0.10"
-proptest = { version = "1.11", default-features = false, features = ["std"] }
-reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
-schemars = "1"
-serde = { version = "1", features = ["derive"] }
-thiserror = "2"
-serde-saphyr = { version = "1.3", default-features = false, features = ["deserialize"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "ansi", "json"] }
-uuid = "1.27"
+embed-resource = "=3.0.12"
+flate2 = { version = "=1.1.10", default-features = false, features = ["zlib-rs"] }
+futures = "=0.3.34"
+md-5 = "=0.10.6"
+proptest = { version = "=1.11.0", default-features = false, features = ["std"] }
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls"] }
+schemars = "=1.2.2"
+serde = { version = "=1.0.229", features = ["derive"] }
+thiserror = "=2.0.21"
+serde-saphyr = { version = "=1.3.0", default-features = false, features = ["deserialize"] }
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["fmt", "std", "ansi", "json"] }
+uuid = "=1.27.0"
 pumbo-bridge-proto = { path = "crates/pumbo-bridge-proto" }
 pumbo-contracts = { path = "crates/pumbo-contracts" }
 pumbo-core = { path = "crates/pumbo-core" }
@@ -101,12 +101,12 @@ pumbo-text = { path = "crates/pumbo-text" }
 pumbo-translate = { path = "crates/pumbo-translate" }
 pumbo-translate-mv = { path = "crates/pumbo-translate-mv" }
 pumbo-virtual = { path = "crates/pumbo-virtual" }
-serde_json = "1"
-tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+serde_json = "=1.0.151"
+tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
 wasmtime = { version = "=49.0.5", default-features = false, features = ["anyhow", "async", "component-model", "component-model-async", "cranelift", "parallel-compilation", "runtime", "std"] }
 wasmtime-wasi = { version = "=49.0.5", default-features = false, features = ["p2", "p3"] }
 # The version wasmtime uses (reads the custom sections of plugins).
-wasmparser = { version = "0.258", default-features = false, features = ["std", "component-model"] }
+wasmparser = { version = "=0.258.3", default-features = false, features = ["std", "component-model"] }
 wit-bindgen = "=0.62.0"
 
 [profile.release]
