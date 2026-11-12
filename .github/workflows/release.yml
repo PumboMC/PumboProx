@@ -90,6 +90,9 @@ jobs:
         uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-zigbuild
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        with:
+          tool: cargo-about@0.9.2
       - name: Build and pack
         run: |
           dir=pumboprox-${{ matrix.name }}
@@ -113,7 +116,10 @@ jobs:
             # The first start in an empty folder writes the default config, which check-config must accept.
             (cd "$(mktemp -d)" && echo stop | "$bin" run && "$bin" check-config)
           fi
-          cp LICENSE "$dir"
+          cp LICENSE crates/pumbo-translate-mv/NOTICE "$dir"
+          cp -R crates/pumbo-translate-mv/licenses "$dir"
+          cargo about generate --locked --fail -c about.toml -m crates/pumbo-prox/Cargo.toml \
+            -o "$dir/THIRD-PARTY-LICENSES.txt" about.hbs
           # README.md lives in PumboMC/PumboProx, not in the development monorepo.
           if [ -f README.md ]; then cp README.md "$dir"; fi
           if [ "$RUNNER_OS" = Windows ]; then 7z a "$dir.zip" "$dir"; else tar czf "$dir.tar.gz" "$dir"; fi
@@ -170,6 +176,7 @@ jobs:
             tar xzf "pumboprox-linux-${a%:*}-musl.tar.gz"
             mv "pumboprox-linux-${a%:*}-musl/pumboprox" "image/pumboprox-${a#*:}"
           done
+          (cd pumboprox-linux-x86_64-musl && cp -R LICENSE NOTICE licenses THIRD-PARTY-LICENSES.txt ../image)
           name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/pumboprox
           tags=$name:${GITHUB_REF_NAME#v}
           # latest follows stable releases only, beta the pre-releases.

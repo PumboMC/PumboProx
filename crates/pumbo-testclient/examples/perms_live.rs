@@ -277,11 +277,75 @@ fn denied(lines: &[String]) -> bool {
     })
 }
 
+/// The answer says the command did what it asks for (or that it already was
+/// so): a reply that only fails to refuse it does not count.
+fn confirmed(line: &str, lines: &[String]) -> bool {
+    let has = |words: &[&str]| {
+        lines.iter().any(|l| {
+            let l = l.to_ascii_lowercase();
+            words.iter().any(|w| l.contains(w))
+        })
+    };
+    let mut words = line.trim_start_matches('/').split_whitespace();
+    match (words.next(), words.next()) {
+        (Some("pp"), Some("help")) => !lines.is_empty(),
+        // PumboPerms: the texts of its changes (lang/en.yml).
+        (Some("pp"), _) => has(&[
+            "set ",
+            "removed ",
+            "inherits",
+            "inherit ",
+            " created.",
+            "weight of group",
+            "added ",
+            "has no ",
+            "nothing changed",
+            "already exists",
+            "already on the track",
+        ]),
+        // PumboBans tells the operator about the lifted punishment.
+        (Some("pb"), Some("unban")) => has(&["lifted"]),
+        (Some("pb"), _) => has(&["banned", "muted", "kicked", "warned"]),
+        (Some("gamemode"), _) => has(&["game mode", "gamemode"]),
+        (Some("tick"), _) => has(&["tick", "frozen"]),
+        _ => false,
+    }
+}
+
+/// Sends a command that must work and waits up to 10 s for the answer that
+/// confirms it.
 async fn must_run(p: &mut Player, line: &str) -> Step {
-    let lines = ask(p, line).await?;
-    match denied(&lines) {
-        true => Err(format!("{}: /{line} was refused: {lines:?}", p.opts.name)),
-        false => Ok(()),
+    let before = p.messages.len();
+    p.command(line.trim_start_matches('/'))
+        .await
+        .map_err(|e| format!("{}: /{line}: {e}", p.opts.name))?;
+    let answer = |p: &Player| p.messages.get(before..).unwrap_or_default().to_vec();
+    // Pumpkin says nothing to a game mode the player already has (from an
+    // earlier step in the same world): then only a refusal counts.
+    let no_change = line.trim_start_matches('/') == "gamemode creative"
+        && p.logins.last().is_some_and(|l| l.game_mode == 1);
+    let wait = if no_change { 2000 } else { 10_000 };
+    pump(p, wait, |p| {
+        let a = answer(p);
+        denied(&a) || confirmed(line, &a)
+    })
+    .await?;
+    // As long as ask: the servers get the change a little after the proxy
+    // confirms it, and some steps have no packet that shows its arrival.
+    pump(p, 400, |_| false).await?;
+    let lines = answer(p);
+    if denied(&lines) {
+        return Err(format!("{}: /{line} was refused: {lines:?}", p.opts.name));
+    }
+    if no_change {
+        return Ok(());
+    }
+    match confirmed(line, &lines) {
+        true => Ok(()),
+        false => Err(format!(
+            "{}: /{line} was not confirmed in 10 s: {lines:?}",
+            p.opts.name
+        )),
     }
 }
 
@@ -325,10 +389,27 @@ async fn to_server(p: &mut Player, server: &str) -> Step {
     p.command(&format!("server {server}"))
         .await
         .map_err(|e| format!("{}: /server {server}: {e}", p.opts.name))?;
-    match pump(p, 30_000, |p| p.logins.len() > logins).await? {
+    if !pump(p, 30_000, |p| p.logins.len() > logins).await? {
+        return Err(format!(
+            "{} did not reach {server}: {:?}",
+            p.opts.name, p.disconnect
+        ));
+    }
+    // The server's command tree comes once it has the player in play.
+    let tree_after_login = |p: &Player| {
+        let play = |k: PacketKind| move |e: &(Phase, PacketKind)| *e == (Phase::Play, k);
+        p.kinds
+            .iter()
+            .rposition(play(PacketKind::Login))
+            .and_then(|i| p.kinds.get(i..))
+            .is_some_and(|after| after.iter().any(play(PacketKind::Commands)))
+    };
+    match pump(p, 10_000, tree_after_login).await? {
+        // PumboBridge then sets the player's permissions and sends the tree
+        // again; nothing announces that, so the bot gives it a second.
         true => pump(p, 1000, |_| false).await.map(|_| ()),
         false => Err(format!(
-            "{} did not reach {server}: {:?}",
+            "{} got no command tree on {server} in 10 s: {:?}",
             p.opts.name, p.disconnect
         )),
     }

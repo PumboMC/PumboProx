@@ -33,7 +33,7 @@ pub use data::{Block, Bound, Phase, Synced, TagList, VersionData};
 pub use play::fix_empty_trail;
 pub use version::{OLDEST_CLIENT, SERVER_PROTOCOL};
 
-use remap::{IdMap, Via};
+use remap::{IdMap, StandIns};
 
 /// Frames produced by one translation call, as `(packet id, payload)`.
 #[derive(Debug, Default)]
@@ -197,7 +197,7 @@ impl Tables {
         }
         let entity_data = entity_data::Fields::load(client.protocol)
             .ok_or(Error::UnsupportedClient(client.protocol))?;
-        let via = Via::new(client.protocol);
+        let via = StandIns::new(client.protocol);
         let client_ids = ids_by_name(&client);
         let server_ids = ids_by_name(&server);
         let mut to_client: [Vec<Route>; 2] = Default::default();
@@ -377,14 +377,19 @@ pub(crate) struct State {
     pub(crate) day_time: Option<(i64, bool)>,
     /// Profiles in the client's player list (`player_info_update` adds minus removals).
     pub(crate) players: HashSet<[u8; 16]>,
-    /// Players spawned before their `player_info_update`, and the frames held until it comes.
+    /// Players spawned before their `player_info_update`, the infos that came for
+    /// some of them, and the frames held from the first spawn until all came.
     pub(crate) waiting: Vec<[u8; 16]>,
+    pub(crate) held_infos: Vec<(i32, Vec<u8>)>,
     pub(crate) held: Vec<(i32, Vec<u8>)>,
+    pub(crate) held_bytes: usize,
 }
 
-/// Frames held at most while waiting for a player's info (Pumpkin sends it a
-/// few frames after the spawn).
-const HOLD_LIMIT: usize = 64;
+/// Bytes held at most while waiting for players' infos (as much as a switch
+/// keeps of the next server's packets, `config-buffer-bytes`): before them,
+/// Pumpkin 0.2.0 may send a joining player the entities and chunks of its
+/// first ticks.
+const HOLD_LIMIT: usize = 16 << 20;
 
 impl State {
     pub(crate) fn dynamic_reset(&mut self) {
@@ -537,19 +542,27 @@ impl Translator {
 
     /// A player spawned before its info is invisible to the client, so the
     /// spawn and everything after it wait for that info (Pumpkin 0.2.0 sends a
-    /// joining player's `add_entity` first).
-    // Frames, not just the entity's, are held; at most HOLD_LIMIT, then sent as they are.
+    /// joining player's `add_entity` first, and a joining player the spawns of
+    /// the players near it before their infos, which may come one by one).
+    // Frames, not just the entity's, are held; at most HOLD_LIMIT bytes, then sent as they are.
     fn hold(&mut self, out: &mut Output, start: usize, waited: usize, urgent: bool) {
         let s = &mut self.state;
-        if s.waiting.is_empty() && waited > 0 {
-            // This frame carried the last awaited info: it goes first.
+        if waited == 0 && s.waiting.is_empty() {
+            return;
+        }
+        let frames: Vec<_> = out.to_client.drain(start..).collect();
+        s.held_bytes += frames.iter().map(|(_, p)| p.len()).sum::<usize>();
+        if s.waiting.len() < waited {
+            // This frame carried an awaited info: it goes before the held spawns.
+            s.held_infos.extend(frames);
+        } else {
+            s.held.extend(frames);
+        }
+        if s.waiting.is_empty() || s.held_bytes >= HOLD_LIMIT || urgent {
+            s.waiting.clear();
+            s.held_bytes = 0;
+            out.to_client.append(&mut s.held_infos);
             out.to_client.append(&mut s.held);
-        } else if !s.waiting.is_empty() {
-            s.held.extend(out.to_client.drain(start..));
-            if s.held.len() >= HOLD_LIMIT || urgent {
-                s.waiting.clear();
-                out.to_client.append(&mut s.held);
-            }
         }
     }
 
@@ -720,12 +733,7 @@ mod tests {
         t.to_client(0, &add_player(uuid), &mut out);
         t.to_client(3, &[], &mut out);
         assert!(out.to_client.is_empty(), "held until the info");
-        let mut info = vec![0x01];
-        info.put_var_int(1);
-        info.put_slice(&uuid);
-        info.put_str("Steve");
-        info.put_var_int(0);
-        t.to_client(1, &info, &mut out);
+        t.to_client(1, &info(uuid), &mut out);
         let ids: Vec<i32> = out.to_client.iter().map(|(id, _)| *id).collect();
         assert_eq!(
             ids,
@@ -742,5 +750,59 @@ mod tests {
         t.to_client(2, &[0; 8], &mut out);
         let ids: Vec<i32> = out.to_client.iter().map(|(id, _)| *id).collect();
         assert_eq!(ids, [0, 2]);
+    }
+
+    fn info(uuid: [u8; 16]) -> Vec<u8> {
+        let mut p = vec![0x01];
+        p.put_var_int(1);
+        p.put_slice(&uuid);
+        p.put_str("Steve");
+        p.put_var_int(0);
+        p
+    }
+
+    /// Pumpkin 0.2.0 may pair a joining player with every entity of its first
+    /// chunks, and send more chunks, before the info of the players near it.
+    #[test]
+    fn a_spawn_waits_past_hundreds_of_frames() {
+        let tables = Arc::new(Tables::new(version(775), version(777)).unwrap());
+        let mut t = Translator::new(tables);
+        let mut out = Output::default();
+        t.to_client(0, &[], &mut out);
+        out.clear();
+        let uuid = [9u8; 16];
+        t.to_client(0, &add_player(uuid), &mut out);
+        for _ in 0..1000 {
+            t.to_client(3, &[0; 1024], &mut out);
+        }
+        assert!(out.to_client.is_empty(), "held until the info");
+        t.to_client(1, &info(uuid), &mut out);
+        let ids: Vec<i32> = out.to_client.iter().map(|(id, _)| *id).collect();
+        assert_eq!((ids.len(), &ids[..3]), (1002, &[1, 0, 3][..]));
+        out.clear();
+        // An info that does not come stops the hold at HOLD_LIMIT bytes.
+        t.to_client(0, &add_player([8; 16]), &mut out);
+        t.to_client(3, &vec![0; HOLD_LIMIT], &mut out);
+        assert_eq!(out.to_client.len(), 2);
+    }
+
+    /// Two players spawned before their infos, which come in two frames: each
+    /// info goes before both spawns.
+    #[test]
+    fn infos_that_come_one_by_one_go_before_the_spawns() {
+        let tables = Arc::new(Tables::new(version(775), version(777)).unwrap());
+        let mut t = Translator::new(tables);
+        let mut out = Output::default();
+        t.to_client(0, &[], &mut out);
+        out.clear();
+        let (a, b) = ([1u8; 16], [2u8; 16]);
+        t.to_client(0, &add_player(a), &mut out);
+        t.to_client(0, &add_player(b), &mut out);
+        t.to_client(1, &info(a), &mut out);
+        assert!(out.to_client.is_empty(), "b's spawn still waits");
+        t.to_client(1, &info(b), &mut out);
+        let ids: Vec<i32> = out.to_client.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, [1, 1, 0, 0], "both infos, then both spawns");
+        assert_eq!(out.to_client[0].1, info(a));
     }
 }

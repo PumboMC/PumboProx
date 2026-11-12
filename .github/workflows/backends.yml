@@ -1,0 +1,165 @@
+name: backends
+
+# The proxy with real servers and released plugins: Pumpkin release binaries,
+# the proxy plugins of the PumboMC releases and a short load benchmark. Every
+# download is checked against tools/backends.sha256. Weekly, by hand, from
+# another workflow (before a tag) and on pull requests that change the plugin
+# API. Vanilla and Paper backends stay manual (they need Java and Mojang's
+# jars); every network here runs with online-mode false.
+on:
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+  workflow_call:
+  pull_request:
+    paths:
+      - wit/**
+      - crates/pumbo-sdk/**
+      - crates/pumbo-contracts/**
+      - crates/pumbo-common/**
+      - crates/pumbo-bridge-proto/**
+      - tools/backends.sha256
+      - .github/workflows/backends.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backends-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: 0
+  # The same Rust as ci.yml.
+  # renovate: datasource=github-releases depName=rust-lang/rust
+  RUST_VERSION: 1.99.0
+  PINS: ${{ github.workspace }}/tools/backends.sha256
+  DL: ${{ github.workspace }}/target/backends
+
+jobs:
+  # Forwarding, switching and the virtual world on each Pumpkin release that
+  # speaks 777; on 0.2.0 also older clients through the translator and a
+  # network with a 776 server (Pumpkin 0.1.0-dev) next to it.
+  pumpkin:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        pumpkin: ['0.2.0', '0.2.1']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Pumpkin
+        run: |
+          get() { # <version> <release tag>
+            mkdir -p "$DL/pumpkin-$1"
+            curl -fsSL --retry 3 -o "$DL/pumpkin-$1/pumpkin" \
+              "https://github.com/Pumpkin-MC/Pumpkin/releases/download/${2//+/%2B}/pumpkin-X64-Linux"
+            (cd "$DL" && grep "  pumpkin-$1/pumpkin\$" "$PINS" | sha256sum -c -)
+            chmod +x "$DL/pumpkin-$1/pumpkin"
+            tools/pumpkin-template.sh "$DL/pumpkin-$1/pumpkin"
+          }
+          case ${{ matrix.pumpkin }} in
+            0.2.0) get 0.2.0 '0.2.0+26.3-26.51'; get 0.1.0-dev '0.1.0-dev+26.2-26.45' ;;
+            0.2.1) get 0.2.1 '0.2.1+26.3-26.51' ;;
+          esac
+          bin=$DL/pumpkin-${{ matrix.pumpkin }}/pumpkin
+          # The virtual world test wants the forwarding already on.
+          perl -0pe 's/\[networking\.proxy\]\nenabled = false/[networking.proxy]\nenabled = true/;
+                     s/\[networking\.proxy\.velocity\]\nenabled = false/[networking.proxy.velocity]\nenabled = true/' \
+            "$(dirname "$bin")/pumpkin.toml" > "$DL/pumpkin.toml.base"
+          {
+            echo "PUMBO_PUMPKIN_BIN=$bin"
+            echo "PUMBO_PUMPKIN_TEMPLATE=$(dirname "$bin")/pumpkin.toml"
+            echo "PUMBO_PUMPKIN_BASE=$DL/pumpkin.toml.base"
+            echo "PUMBO_PUMPKIN_PROTOCOL=777"
+          } >> "$GITHUB_ENV"
+      - name: Forwarding, switching and the virtual world
+        run: |
+          cargo test -p pumbo-prox --locked --test backends -- --ignored --exact pumpkin_forwarding --nocapture
+          cargo test -p pumbo-prox --locked --test backends_switching -- --ignored --exact pumpkin_switching --nocapture
+          cargo test -p pumbo-prox --locked --test backends_virtual -- --ignored --exact pumpkin_release --nocapture
+      # Its expectations (block entities, item slots) are those of a 0.2.0
+      # world; 0.2.1 builds the test world differently.
+      - name: Older clients through the translator
+        if: matrix.pumpkin == '0.2.0'
+        env:
+          PUMBO_MV_BACKENDS: pumpkin
+        run: cargo test -p pumbo-prox --locked --test translate_mv -- --ignored --nocapture --test-threads=1
+      - name: Servers on 26.3 and 26.2 at once
+        if: matrix.pumpkin == '0.2.0'
+        env:
+          PUMBO_PUMPKIN_777: ${{ env.DL }}/pumpkin-0.2.0/pumpkin
+          PUMBO_PUMPKIN_776: ${{ env.DL }}/pumpkin-0.1.0-dev/pumpkin
+        run: cargo test -p pumbo-prox --locked --test backends_switching -- --ignored --exact pumpkin_two_versions --nocapture
+
+  # The released proxy plugins on this host: they load, run and answer.
+  contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Plugins
+        run: |
+          mkdir -p "$DL/plugins"
+          for p in PumboPerms:v1.0.0:1.0.0 PumboAuth:v0.1.2-beta:0.1.2-beta \
+                   PumboBans:v0.1.2-beta:0.1.2-beta PumboFilter:v0.1.2-beta:0.1.2-beta; do
+            IFS=: read -r repo tag version <<< "$p"
+            f=$repo-Proxy-$version.wasm
+            curl -fsSL --retry 3 -o "$DL/plugins/$f" "https://github.com/PumboMC/$repo/releases/download/$tag/$f"
+            (cd "$DL" && grep "  plugins/$f\$" "$PINS" | sha256sum -c -)
+          done
+      - name: Contract tests
+        env:
+          PUMBO_CONTRACT_PLUGINS: ${{ env.DL }}/plugins
+        run: cargo test -p pumbo-prox --locked --test contracts -- --ignored --nocapture
+
+  # 200 bots through the proxy to Pumpkin 0.2.0. The numbers are recorded,
+  # not judged: shared runners differ by tens of percent between runs.
+  bench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Pumpkin
+        run: |
+          mkdir -p "$DL/pumpkin-0.2.0"
+          curl -fsSL --retry 3 -o "$DL/pumpkin-0.2.0/pumpkin" \
+            "https://github.com/Pumpkin-MC/Pumpkin/releases/download/0.2.0%2B26.3-26.51/pumpkin-X64-Linux"
+          (cd "$DL" && grep "  pumpkin-0.2.0/pumpkin\$" "$PINS" | sha256sum -c -)
+          chmod +x "$DL/pumpkin-0.2.0/pumpkin"
+      - name: Benchmark
+        env:
+          # Outside target/: the Rust cache brings target/ back without its
+          # files, and dev-network.sh refuses to delete the emptied network.
+          BENCH_OUT: ${{ runner.temp }}/bench
+        run: |
+          tools/bench.sh "$DL/pumpkin-0.2.0/pumpkin"
+          cat "$BENCH_OUT/result.md" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: bench
+          path: |
+            ${{ runner.temp }}/bench/result.md
+            ${{ runner.temp }}/bench/loadgen.txt
+            ${{ runner.temp }}/bench/joins.csv
+            ${{ runner.temp }}/bench/network/*/console.log
+            docs/test-results.md
+          if-no-files-found: ignore

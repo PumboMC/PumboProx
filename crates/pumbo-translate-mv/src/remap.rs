@@ -1,25 +1,25 @@
 //! ID remaps between the server's and the client's registries, built from the
 //! names in both versions' tables. Entries the client lacks get the stand-in
-//! of the mappings (`data/via_mappings.txt`, see NOTICE), otherwise they are dropped.
+//! of the mappings (`data/stand_ins.txt`, see NOTICE), otherwise they are dropped.
 
 use std::collections::HashMap;
 
 use crate::data::{Block, VersionData};
 
-const VIA: &str = include_str!("../data/via_mappings.txt");
+const STAND_INS: &str = include_str!("../data/stand_ins.txt");
 
 /// Stand-ins from the mappings (see NOTICE): the diffs of the steps from the
 /// server down to one client, applied in order, one protocol step at a time.
 #[derive(Debug, Default)]
-pub(crate) struct Via {
+pub(crate) struct StandIns {
     /// Per step, newest first: section → name → stand-in (`-`: none).
     steps: Vec<HashMap<&'static str, HashMap<&'static str, &'static str>>>,
 }
 
-impl Via {
+impl StandIns {
     pub(crate) fn new(client: i32) -> Self {
         let mut steps = Vec::new();
-        for line in VIA.lines() {
+        for line in STAND_INS.lines() {
             let mut f = line.split(' ');
             match (f.next(), f.next(), f.next()) {
                 (Some("step"), Some(protocol), _) => {
@@ -122,7 +122,7 @@ impl IdMap {
 }
 
 /// Server block state → client block state (air when Mappings has none).
-pub(crate) fn block_states(via: &Via, server: &VersionData, client: &VersionData) -> Vec<u32> {
+pub(crate) fn block_states(via: &StandIns, server: &VersionData, client: &VersionData) -> Vec<u32> {
     let by_name: HashMap<&str, &Block> =
         client.blocks.iter().map(|b| (b.name.as_str(), b)).collect();
     let mut out = Vec::with_capacity(server.block_state_count() as usize);
@@ -182,7 +182,12 @@ pub(crate) fn block_ids(states: &[u32], server: &VersionData, client: &VersionDa
 
 /// Server ID → client ID of a registry by name, with the stand-ins of a
 /// Mappings section.
-pub(crate) fn registry(via: &Via, section: &str, server: &[String], client: &[String]) -> IdMap {
+pub(crate) fn registry(
+    via: &StandIns,
+    section: &str,
+    server: &[String],
+    client: &[String],
+) -> IdMap {
     IdMap::by_name(server, client, &|n, has| {
         via.name(section, n).filter(|s| has(s)).map(str::to_string)
     })
@@ -231,7 +236,7 @@ mod tests {
 
     #[test]
     fn mappings_compose_down_to_the_client() {
-        let via = Via::new(775);
+        let via = StandIns::new(775);
         assert_eq!(via.steps.len(), 2);
         // 26.3 -> 26.2 -> 26.1: concrete stairs via a 26.2 block.
         assert_eq!(
@@ -249,7 +254,7 @@ mod tests {
         assert_eq!(via.name("entities", "poplar_boat"), Some("birch_boat"));
         assert_eq!(via.name("particles", "geyser_base"), None);
         // Whole states with their own stand-ins (26.1 -> 1.21.11).
-        let via = Via::new(774);
+        let via = StandIns::new(774);
         assert_eq!(
             via.state("note_block[instrument=trumpet,note=0,powered=true]".into())
                 .as_deref(),

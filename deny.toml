@@ -10,6 +10,7 @@ targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "aarch64-app
 [licenses]
 # Allowed licenses (plan §1). The project itself is GPL-3.0-only (2026-10-08). aws-lc-sys 0.45 declares ISC, Apache-2.0, MIT,
 # BSD-3-Clause and MIT-0 (no OpenSSL license), checked in E0.
+# about.toml accepts the same list (crates/pumbo-prox/tests/release_files.rs).
 allow = [
     "MIT",
     "MIT-0",

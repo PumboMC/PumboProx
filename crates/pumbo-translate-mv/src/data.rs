@@ -2,7 +2,7 @@
 //! fills it from its own tables (IDs and names from Mojang's data generator
 //! and recordings of vanilla servers); this crate carries no per-version tables
 //! except the entity data fields (`data/entity_data.txt`) and the stand-ins
-//! of the mappings (`data/via_mappings.txt`, see NOTICE).
+//! of the mappings (`data/stand_ins.txt`, see NOTICE).
 
 use std::collections::HashMap;
 

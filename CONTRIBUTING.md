@@ -46,8 +46,11 @@ PUMBO_PUMPKIN_BIN=/path/to/pumpkin PUMBO_PUMPKIN_TEMPLATE=/path/to/pumpkin.toml 
 | File in `crates/pumbo-prox/tests/` | Needs |
 | --- | --- |
 | `backends.rs`, `backends_virtual.rs` | vanilla server jars (`PUMBO_JARS`), a Pumpkin binary (`PUMBO_PUMPKIN_BIN`) |
-| `backends_switching.rs` | the same, plus a Paper jar (`PUMBO_PAPER_JAR`) |
-| `translate_mv.rs` | Pumpkin 0.2.0 and a vanilla 26.3 server |
+| `backends_switching.rs` | the same, plus a Paper jar (`PUMBO_PAPER_JAR`); `pumpkin_two_versions` needs Pumpkin 0.2.0 and 0.1.0-dev (`PUMBO_PUMPKIN_777`, `PUMBO_PUMPKIN_776`) |
+| `translate_mv.rs` | Pumpkin 0.2.0 and a vanilla 26.3 server (only Pumpkin with `PUMBO_MV_BACKENDS=pumpkin`) |
+| `contracts.rs` | the released proxy plugins in `PUMBO_CONTRACT_PLUGINS`, as pinned in `tools/backends.sha256` |
+
+`tools/pumpkin-template.sh path/to/pumpkin` writes the `pumpkin.toml` template these tests read next to the binary. `.github/workflows/backends.yml` runs the Pumpkin tests, the contract test and `tools/bench.sh` (a short load benchmark whose results go to `docs/test-results.md`) every week and on demand, with the downloads pinned in `tools/backends.sha256`.
 
 `cargo run -p pumbo-datagen --release -- tables` downloads the vanilla jars into `~/.cache/pumbo-datagen` and regenerates the tables in `crates/pumbo-data/tables`; they must not change unless you add a Minecraft version.
 
@@ -101,9 +104,9 @@ The plugin interface is [`wit/pumbo-prox.wit`](wit/pumbo-prox.wit), the Rust SDK
 
 1. Fork the repository and branch off `main`: `feat/<topic>` for something new, `fix/<topic>` for a bug, `chore/<topic>` for the rest.
 2. Keep one topic per pull request. Small pull requests get reviewed faster.
-3. Commit titles follow the rule for pull request titles below: `FEAT:`, `FIX:`, `DOCS:` or `DEPS:`, a space and a short title, at most 72 characters in all, for example `FIX: Chat formatting`. Below the title, one or two plain sentences say what changed.
+3. Commit titles follow the rule for pull request titles below: `type(scope): description`, at most 72 characters in all, for example `fix(chat): chat formatting`. Below the title, one or two plain sentences say what changed.
 4. Add or update tests for what you change, and run `tools/ci-local.sh`.
-5. Open the pull request against `main` and fill in the template: what changes, why, and how you tested it (with the client and Pumpkin versions if you tried it in the game). The title starts with `FEAT:`, `FIX:`, `DOCS:` or `DEPS:` (dependency updates) and a space and has at most 72 characters, for example `FIX: keep comments in the config on reload`.
+5. Open the pull request against `main` and fill in the template: what changes, why, and how you tested it (with the client and Pumpkin versions if you tried it in the game). The title has the form `type(scope): description` (Conventional Commits; the type is `feat`, `fix`, `docs`, `refactor`, `test`, `ci` or `chore`, with `chore(deps)` for dependency updates) and at most 72 characters, for example `fix(config): keep comments on reload`.
 
 A maintainer reviews it, may ask for changes, and merges it when CI is green.
 
