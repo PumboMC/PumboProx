@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wit-bindgen = "=0.62.0"
-wasip3 = "=0.9.0"
+wasip3 = "=0.10.0"
 
 [profile.release]
 opt-level = "s"
