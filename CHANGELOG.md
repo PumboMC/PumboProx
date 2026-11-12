@@ -41,13 +41,19 @@ All notable changes to PumboProx, one section per release. The format follows [K
 - `logging.filters`: log levels per module, for example `pumbo_host: debug`; they apply with `reload` like `logging.level`.
 - `bridge.key-env`: the bridge key from an environment variable instead of `bridge.key`. Servers created by the proxy get the key the bridge runs with.
 - `config-version` and `pumboprox migrate-config [file]`, which renames old keys in the file: comments and layout stay, the file keeps its mode and owner, and the old file is kept as `pumboprox.yml.bak` (`.bak.1` and up when that exists). Older releases do not start with a file that has `config-version: 2` (0.2.5-beta stops with "invalid type: integer `2`, expected a map"): to go back to an older PumboProx, restore `pumboprox.yml.bak`. A new install's file has no `config-version`.
+- `/health` and `/ready` next to the metrics (`logging.metrics-bind`). `/health` answers from the first moments of the start; `/ready` answers 200 once the listeners take players and the gates and plugins in `plugins.required-gates` and `plugins.required-plugins` are loaded, and 503 as soon as the proxy starts stopping. Neither needs the token.
+- `logging.metrics-allow-remote` (default `false`) and `logging.metrics-token-file` (default none): metrics on an address other hosts reach, such as `0.0.0.0:9100` in a container, and with a token file `/metrics` answers only `Authorization: Bearer <token>`. A `metrics-bind` outside loopback still stops the start without `metrics-allow-remote: true`, now with a message that names the key. A token file that others can read (a mounted secret) gives a warning; one that cannot be read fails `check-config`, and at start `/metrics` then answers 503 while `/health` and `/ready` keep working. The endpoint answers at most 64 connections at once.
+- Metric `pumboprox_translate_dropped_total{to,packet}`: packets the version translator drops for a player on another version. The first drop of each packet per server is logged at `debug`.
+- When the proxy stops with servers it runs, it logs how long a container has to wait for it (`stop_grace_period`, 60 s with the default `managed-servers.stop-timeout-secs`). The Docker image declares `STOPSIGNAL SIGTERM`, and the Docker example in the docs uses `--init --stop-timeout 60`.
+- Release archives and the Docker image (in `/usr/share/doc/pumboprox/`) carry NOTICE, the license texts of the code ported into the version translation and `THIRD-PARTY-LICENSES.txt` with the licenses of every library in the program.
+- New pages: [Running it](docs/running.md) (Paper and vanilla servers, systemd, Windows, Docker Compose, stopping, backups), [Upgrading](docs/upgrading.md) (new releases, config versions, going back, moving a network), the [plugin reference](docs/plugins.md) and the [bridge protocol](docs/bridge-protocol.md).
 
 ### Changed
 
 - A permission plugin named in `permissions.provider` that is not installed, or that provides no permissions, now stops the start instead of leaving an old `permissions.yml` in charge.
 - A `pumboprox.yml` without `login.online-mode` stays on `per-player`, now with a warning at start; set the key to keep that choice. New installs get `online-mode: true`.
 - The Docker tag `latest` moves only with stable releases; pre-releases get `beta`, and their GitHub release is marked as a pre-release.
-- A release is published only from a commit whose CI passed, and its binaries and Docker image are started once with a fresh config before they go out.
+- A release is published only from a commit whose CI and the tests with real Pumpkin servers and the released plugins passed, and its binaries and Docker image are started once with a fresh config before they go out.
 - The `/alert` help and the log hint for a server that does not ask for forwarding use neutral wording and name the setting for Pumpkin and Paper.
 - `virtual.gate-timeout-ms` and `plugins.gate-timeout-ms` default to 120000 (two minutes; they were 600000 and 300000). Values set in the file stay. The start warns when a plugin gate may take longer than `virtual.gate-timeout-ms`. A gate plugin with its own limit above two minutes (PumboAuth `auth.timeout-seconds`, PumboFilter `captcha.timeout-seconds`) now needs both keys raised; the proxy does not see that limit and does not warn.
 - A server whose logins fail three times in a row (no connection, timeout, closed before login) counts as offline: plugins see it offline, and joins and fallbacks try it last. One player tries it again after 5 s, then after a wait that doubles up to 60 s; the first successful login brings it back. Each change is logged once. A kick from the server never counts. `/server <name>` still goes to it directly.
@@ -80,6 +86,8 @@ All notable changes to PumboProx, one section per release. The format follows [K
 - Compiling a plugin at start, `reload` or `/prox plugins load` no longer holds up player sessions.
 - `pumboprox check-config` no longer creates `forwarding.secret`, plugin folders or default plugin files; a missing secret is reported as created on the first start. A `bridge.key` that other users can read and whose mode cannot be changed (a read-only mount, another owner) is a warning instead of stopping the start.
 - An unknown top-level key with a plain value (such as `limit: 5`) no longer fails the load with a wrong line number; it is reported as an unknown key.
+- The metrics listed the type of `pumboprox_dropped_packets_total` twice, so Prometheus rejected the whole scrape. Each series now has its type once.
+- `/prox route`, `/prox op` and `migrate-config` keep the owner of `pumboprox.yml` when they write it, not only its mode.
 
 ## [0.2.5-beta] - 2026-10-11
 

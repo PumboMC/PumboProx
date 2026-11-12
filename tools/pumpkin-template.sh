@@ -11,7 +11,11 @@ dir=$(dirname "$bin")
 [ -x "$bin" ] || { echo "pumpkin-template: $bin is not an executable file" >&2; exit 1; }
 port_open() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 port_open "$port" && { echo "pumpkin-template: port $port is in use" >&2; exit 1; }
+# A fixed seed: the translation test throws arrows, and on some worlds they land
+# too early, so every run uses the same world.
 cat > "$dir/pumpkin.toml" <<TOML
+seed = "1793726720637615494"
+
 [networking.java]
 address = "127.0.0.1:$port"
 online_mode = false

@@ -303,6 +303,9 @@ fn relative_paths(
         if !cfg.status.favicon.is_empty() {
             file(&cfg.status.favicon);
         }
+        if !cfg.logging.metrics_token_file.is_empty() {
+            file(&cfg.logging.metrics_token_file);
+        }
         if cfg.managed_servers.enabled {
             let m = &cfg.managed_servers;
             for d in [&m.dir, &m.versions_dir] {

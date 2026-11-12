@@ -858,6 +858,18 @@ async fn session(
                         p.extend_from_slice(&r[48..56]);
                     }
                     c.send_raw(id("accept_teleportation"), &p).await?;
+                    // Like a client: loaded (1.21.4+; the translator sends it for older clients),
+                    // then the position, on the ground. Pumpkin 0.2.1 spawns the players already
+                    // there only after the joining player's first move, and ignores moves before
+                    // `player_loaded`.
+                    if let Some(loaded) =
+                        tables.packet_id(Phase::Play, Direction::Serverbound, "player_loaded")
+                    {
+                        c.send_raw(loaded, &[]).await?;
+                    }
+                    let mut p = r[..24].to_vec();
+                    p.push(1);
+                    c.send_raw(id("move_player_pos"), &p).await?;
                 }
                 (Phase::Configuration, _) if Some(f.id) == registry_data_id => {
                     let mut r = &f.payload[..];

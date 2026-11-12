@@ -390,4 +390,21 @@ fn relative_paths_are_read_next_to_the_config() {
         elsewhere.join("forwarding.secret"),
     )
     .unwrap();
+    // The metrics token file counts too.
+    std::fs::write(
+        &file,
+        small_config(
+            "logging:\n  metrics-bind: \"127.0.0.1:0\"\n  metrics-token-file: metrics.token\n",
+        )
+        .replace("mode: none", "mode: modern"),
+    )
+    .unwrap();
+    let token = elsewhere.join("metrics.token");
+    std::fs::write(&token, "t").unwrap();
+    std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let err = check();
+    assert!(
+        err.contains("because forwarding.secret, metrics.token are there"),
+        "{err}"
+    );
 }

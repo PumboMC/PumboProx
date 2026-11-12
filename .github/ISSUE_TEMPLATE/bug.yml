@@ -40,7 +40,7 @@ body:
     id: pumpkin
     attributes:
       label: Pumpkin version
-      description: From the first line of the Pumpkin log, e.g. `0.2.1+26.3-26.51`.
+      description: From the first line of the Pumpkin log, e.g. `0.2.2+26.3-26.60`.
     validations:
       required: true
   - type: input

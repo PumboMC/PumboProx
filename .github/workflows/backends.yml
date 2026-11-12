@@ -47,7 +47,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pumpkin: ['0.2.0', '0.2.1']
+        pumpkin: ['0.2.0', '0.2.1', '0.2.2']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Rust
@@ -68,6 +68,7 @@ jobs:
           case ${{ matrix.pumpkin }} in
             0.2.0) get 0.2.0 '0.2.0+26.3-26.51'; get 0.1.0-dev '0.1.0-dev+26.2-26.45' ;;
             0.2.1) get 0.2.1 '0.2.1+26.3-26.51' ;;
+            0.2.2) get 0.2.2 '0.2.2+26.3-26.60' ;;
           esac
           bin=$DL/pumpkin-${{ matrix.pumpkin }}/pumpkin
           # The virtual world test wants the forwarding already on.
@@ -85,10 +86,7 @@ jobs:
           cargo test -p pumbo-prox --locked --test backends -- --ignored --exact pumpkin_forwarding --nocapture
           cargo test -p pumbo-prox --locked --test backends_switching -- --ignored --exact pumpkin_switching --nocapture
           cargo test -p pumbo-prox --locked --test backends_virtual -- --ignored --exact pumpkin_release --nocapture
-      # Its expectations (block entities, item slots) are those of a 0.2.0
-      # world; 0.2.1 builds the test world differently.
       - name: Older clients through the translator
-        if: matrix.pumpkin == '0.2.0'
         env:
           PUMBO_MV_BACKENDS: pumpkin
         run: cargo test -p pumbo-prox --locked --test translate_mv -- --ignored --nocapture --test-threads=1

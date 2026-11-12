@@ -1,10 +1,11 @@
 name: release
 
 # A tag v* waits for a green "check" from ci.yml on the tagged commit (so tag
-# a commit on main), builds pumboprox for every platform, publishes a GitHub
-# Release with the archives and SHA256SUMS (a tag with "-" is a pre-release)
-# and pushes the Docker image. Run by hand (Run workflow) it only builds, to
-# check the platforms before tagging.
+# a commit on main) and for the backend tests of backends.yml, builds
+# pumboprox for every platform, publishes a GitHub Release with the archives
+# and SHA256SUMS (a tag with "-" is a pre-release) and pushes the Docker
+# image. Run by hand (Run workflow) it only builds, to check the platforms
+# before tagging.
 on:
   push:
     tags: ['v*']
@@ -43,6 +44,14 @@ jobs:
             echo "CI check: $last, waiting"
             sleep 30
           done
+
+  # Real Pumpkin servers and the released plugins on the tagged commit.
+  backends:
+    if: github.event_name == 'push'
+    needs: verify
+    permissions:
+      contents: read
+    uses: ./.github/workflows/backends.yml
 
   build:
     name: build ${{ matrix.name }}
@@ -132,7 +141,7 @@ jobs:
 
   release:
     if: github.event_name == 'push'
-    needs: build
+    needs: [build, backends]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -156,7 +165,7 @@ jobs:
 
   docker:
     if: github.event_name == 'push'
-    needs: build
+    needs: [build, backends]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:

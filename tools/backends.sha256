@@ -3,6 +3,7 @@
 # proxy plugins. tests/contracts.rs checks the plugins against it too.
 68c4416ca9fbfb3f2aeb6a8ce1de0e3fb02c5a85a53c8ba59a27941d7e43d8cd  pumpkin-0.2.0/pumpkin
 bda0fcefe2f808c5d8fdf82a04326f5d77055322dfcd2900356e47e48f3dd56f  pumpkin-0.2.1/pumpkin
+3755df414cdece664223388a93421c5c674682f5b9264387416b8a9074cd8d59  pumpkin-0.2.2/pumpkin
 565db1641b229d6a311d299f7a28c7e2d27b2f572480cfed36b930b0ae89ac11  pumpkin-0.1.0-dev/pumpkin
 a8da6c8fdd6def83f100652a1ca0de7fae94f652d60dacba6285332c0c3527dd  plugins/PumboPerms-Proxy-1.0.0.wasm
 cbcc951680fe970edf85ebc3302ff70b6a3cb8930a33ea54611a60a782249839  plugins/PumboAuth-Proxy-0.1.2-beta.wasm

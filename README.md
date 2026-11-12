@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <b>PumboProx</b> is a Minecraft proxy written 100% in Rust for the best performance with low resource use: about 20 MB of RAM.<br>
+  <b>PumboProx</b> is a Minecraft proxy written 100% in Rust for the best performance with low resource use: about 20 MB of RAM with no players.<br>
   It sits in front of your <a href="https://github.com/Pumpkin-MC/Pumpkin">Pumpkin</a> servers and moves players between them.<br>
   Plugins run on the proxy as small WebAssembly files.<br>
   It also downloads and runs your Pumpkin servers; installing other server software and plugins (with PumboPM) straight from the proxy is planned.
@@ -100,7 +100,7 @@ Every change: [changelog](CHANGELOG.md).
 
 | | Feature | |
 | --- | --- | --- |
-| ⚙️ | **Written in Rust** | One small program, no Java. About 20 MB of RAM on its own; each plugin adds about 20 MB, so about 100 MB with Filter, Auth, Bans and Perms. |
+| ⚙️ | **Written in Rust** | One small program, no Java. Without plugins it used 20 MB of RAM with no players, 129 MB with 500 and 267 MB with 1000 (measured on 28 October 2026: macOS on a 14-core Mac, offline bots on loopback, one Pumpkin 26.2 server). |
 | 🧱 | **Versions 1.21 – 26.3** | Players on older clients join your 26.3 servers. The proxy translates the protocol. |
 | 👤 | **Premium and offline together** | Mojang accounts log in automatically, everyone else uses a password (with PumboAuth). Decided per player; without PumboAuth keep `online-mode: true`. |
 | ➡️ | **Modern forwarding** | The real UUID, IP and skin reach every server. Pumpkin supports it out of the box. |
@@ -139,7 +139,7 @@ Every change: [changelog](CHANGELOG.md).
 
 > Every Pumbo plugin comes in two builds: **Proxy** (network-wide functionality) and **Standalone** (individual Pumpkin servers).
 
-> ⚠️ To run Pumbo plugins on a proxy and enable network-wide functionality, you **must download the `-proxy` version** from the latest GitHub release of the plugin's repository. Inside Pumkin you can run a standalone versions from market or use any other. 
+> ⚠️ To run Pumbo plugins on a proxy and enable network-wide functionality, you **must download the `-proxy` version** from the latest GitHub release of the plugin's repository. On a plain Pumpkin server, use the standalone build from the market.
 
 | Plugin | What it does | Proxy | Pumpkin | Status |
 | :---: | --- | :---: | :---: | --- |
@@ -207,10 +207,14 @@ Every command and permission: [Commands](docs/commands.md).
 | 🚀 | [Get started](docs/getting-started.md) | Downloads, Docker, the config, setting up Pumpkin, plugins, permissions |
 | ⚙️ | [Configuration](docs/configuration.md) | Every key of `pumboprox.yml` with its default, and whether `reload` applies it |
 | 🖥️ | [Servers from the proxy](docs/servers.md) | Downloading Pumpkin, creating and running servers, the way into the network |
+| 🛠️ | [Running it](docs/running.md) | Paper and vanilla servers, a system service, Docker Compose, stopping, backups |
+| ⬆️ | [Upgrading](docs/upgrading.md) | New releases, config versions, going back, moving a network |
 | ⌨️ | [Commands](docs/commands.md) | Every command and permission of the proxy, plugin commands |
 | 🌉 | [PumboBridge](docs/bridge.md) | Setting up the bridge and what the proxy can do with it |
 | 🧭 | [How it works](docs/how-it-works.md) | The whole picture, how a player gets in, how plugins work together |
 | 🧰 | [Writing plugins](docs/writing-plugins.md) | The SDK, the interface and an example plugin |
+| 📚 | [Plugin reference](docs/plugins.md) | The manifest, events, limits, grants and the API version |
+| 🔌 | [Bridge protocol](docs/bridge-protocol.md) | The wire protocol between the proxy and PumboBridge |
 | 📝 | [Changelog](CHANGELOG.md) | What changed in each release |
 
 ## Roadmap
