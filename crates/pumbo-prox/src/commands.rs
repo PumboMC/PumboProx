@@ -10,7 +10,7 @@ use pumbo_text::Component;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::server::{Proxy, Runtime, SessionCmd};
+use crate::server::{Proxy, Runtime};
 use crate::status::parse_text;
 use pumbo_text::template::escape_mini as esc;
 
@@ -476,7 +476,7 @@ fn prox(
         )),
         "op" | "deop" => op(proxy, rt, source, sub == "op", args.get(1).copied()),
         "reload" if !allowed(proxy, rt, source, "reload") => denied(),
-        "reload" => match proxy.reload() {
+        "reload" => match crate::ops::reload(proxy) {
             Ok(restart) => {
                 let mut r = crate::servers::reply("<ok>Config reloaded.");
                 if !restart.is_empty() {
@@ -973,62 +973,32 @@ fn glist(proxy: &Proxy, rt: &Runtime) -> Reply {
 }
 
 fn send(proxy: &Proxy, rt: &Runtime, source: &Source<'_>, args: &[&str]) -> Reply {
+    use crate::ops::SendError;
     use crate::servers::{reply, usage};
     let (Some(who), Some(to)) = (args.first(), args.get(1)) else {
         return usage("/send <player|all|current> <server>");
     };
-    let Some(target) = rt.backends.iter().find(|b| b.name.eq_ignore_ascii_case(to)) else {
-        return reply(&format!(
-            "<err>There is no server named <v>{}</v>.",
-            esc(to)
-        ));
-    };
-    let players = proxy.players();
     let current = match source {
         Source::Player { server, .. } => *server,
         Source::Console => None,
     };
-    let chosen: Vec<_> = if who.eq_ignore_ascii_case("all") {
-        players
-    } else if who.eq_ignore_ascii_case("current") {
-        let Some(here) = current else {
-            return reply("<err>current needs a player on a server; <s>name the server instead.");
-        };
-        players
-            .into_iter()
-            .filter(|p| p.server.as_deref() == Some(here))
-            .collect()
-    } else if let Some(from) = rt
-        .backends
-        .iter()
-        .find(|b| b.name.eq_ignore_ascii_case(who))
-    {
-        players
-            .into_iter()
-            .filter(|p| p.server.as_deref() == Some(from.name.as_str()))
-            .collect()
-    } else {
-        match proxy.find_player(who) {
-            Some(p) => vec![p],
-            None => return reply(&format!("<err><v>{}</v> is not online.", esc(who))),
+    match crate::ops::send_players(proxy, rt, who, current, to) {
+        Ok(sent) => reply(&format!(
+            "<ok>Sending <v>{}</v> player(s) to <v>{}</v>.",
+            sent.players,
+            esc(&sent.server)
+        )),
+        Err(SendError::NoServer(to)) => reply(&format!(
+            "<err>There is no server named <v>{}</v>.",
+            esc(&to)
+        )),
+        Err(SendError::NoCurrent) => {
+            reply("<err>current needs a player on a server; <s>name the server instead.")
         }
-    };
-    let n = chosen
-        .iter()
-        .filter(|p| {
-            proxy.send_to(
-                p.id,
-                SessionCmd::Connect {
-                    server: target.name.clone(),
-                    quiet: true,
-                },
-            )
-        })
-        .count();
-    reply(&format!(
-        "<ok>Sending <v>{n}</v> player(s) to <v>{}</v>.",
-        esc(&target.name)
-    ))
+        Err(SendError::NotOnline(who)) => {
+            reply(&format!("<err><v>{}</v> is not online.", esc(&who)))
+        }
+    }
 }
 
 fn find(proxy: &Proxy, args: &[&str]) -> Reply {
@@ -1051,15 +1021,8 @@ fn alert(proxy: &Proxy, text: &str) -> Reply {
     if text.is_empty() {
         return usage("/alert <message>");
     }
-    let message = parse_text("&8[&cAlert&8] &r").append(parse_text(text));
-    let players = proxy.players();
-    for p in &players {
-        proxy.send_to(p.id, SessionCmd::Message(Box::new(message.clone())));
-    }
-    reply(&format!(
-        "<ok>Alert sent to <v>{}</v> player(s).",
-        players.len()
-    ))
+    let n = crate::ops::alert(proxy, text);
+    reply(&format!("<ok>Alert sent to <v>{n}</v> player(s)."))
 }
 
 /// Tab completion for a proxy command line (without the slash): byte offset

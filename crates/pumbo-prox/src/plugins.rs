@@ -123,7 +123,10 @@ impl ProxyBridge for SessionBridge {
                 header: Box::new(header),
                 footer: Box::new(footer),
             },
-            PlayerCommand::Kick(c) => SessionCmd::Kick(Box::new(c)),
+            PlayerCommand::Kick(c) => {
+                crate::ops::kick(&proxy, uuid, c);
+                return;
+            }
             PlayerCommand::SetProperty(p) => SessionCmd::Property {
                 name: p.name.clone(),
                 value: Some(Property {

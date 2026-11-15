@@ -16,6 +16,7 @@ pub mod metrics;
 pub mod migrate;
 pub mod modules;
 pub mod net;
+pub(crate) mod ops;
 mod play;
 pub mod plugins;
 pub mod route;
