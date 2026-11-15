@@ -3,6 +3,7 @@
 //! JSON for `pumboprox describe`, and the umbrella command `/pumbo`.
 
 use std::collections::BTreeMap;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use pumbo_common::rich::{char_width, text_width};
@@ -750,56 +751,115 @@ fn tell(host: &HostInner, sender: CommandSender, plugin: &str, text: Component) 
     }
 }
 
+/// What [`plugin_op`] does to a plugin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PluginAction {
+    Reload,
+    Load,
+    Unload,
+}
+
+impl PluginAction {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Reload => "reload",
+            Self::Load => "load",
+            Self::Unload => "unload",
+        }
+    }
+}
+
+/// Why [`plugin_op`] did nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PluginOpError {
+    /// No plugin has this id.
+    Unknown,
+    /// A load of a plugin that runs or is starting.
+    Loaded,
+}
+
+/// The end of [`plugin_op`]: the manifest changes that wait for a restart,
+/// or why the plugin did not reload, load or unload.
+type PluginDone = Pin<Box<dyn Future<Output = Result<Option<String>, String>> + Send>>;
+
+/// Reloads, loads or unloads plugin `id`; `by` is named in the log. The
+/// future ends when the instance runs or is down, with the manifest changes
+/// that apply only after a restart of the proxy. While a gate is unloaded it
+/// denies, and a player it holds is kicked, never let through (plan §4.4
+/// item 8).
+fn plugin_op(
+    host: &Arc<HostInner>,
+    id: &str,
+    action: PluginAction,
+    by: CommandSender,
+) -> Result<PluginDone, PluginOpError> {
+    let Some(slot) = host.plugins.get(id).cloned() else {
+        return Err(PluginOpError::Unknown);
+    };
+    if action == PluginAction::Load && slot.status().is_coming() {
+        return Err(PluginOpError::Loaded);
+    }
+    let name = action.name();
+    tracing::info!(plugin = %slot.id, by = %commands::sender_name(host, by), "plugin {name}");
+    let reply = slot.ask(if action == PluginAction::Unload {
+        Control::Unload
+    } else {
+        Control::Reload
+    });
+    Ok(Box::pin(async move {
+        let r = reply.await;
+        let restart = slot.restart.lock().ok().and_then(|r| r.clone());
+        r.map(|()| restart)
+    }))
+}
+
 /// `/pumbo proxy plugin reload|unload|load <id>`. The answer comes when the
-/// instance runs or is down. While a gate is unloaded it denies, and a
-/// player it holds is kicked, never let through (plan §4.4 item 8).
+/// instance runs or is down.
 fn plugin_command(host: &Arc<HostInner>, sender: CommandSender, rest: &[String]) -> CommandOutcome {
     let action = rest
         .get(1)
         .map(|s| s.to_ascii_lowercase())
         .unwrap_or_default();
-    let (Some(id), true) = (
-        rest.get(2),
-        ["reload", "unload", "load"].contains(&action.as_str()),
-    ) else {
+    let op = match action.as_str() {
+        "reload" => Some(PluginAction::Reload),
+        "unload" => Some(PluginAction::Unload),
+        "load" => Some(PluginAction::Load),
+        _ => None,
+    };
+    let (Some(id), Some(op)) = (rest.get(2), op) else {
         return reply(
             host,
             vec![escape_mini("/prox plugins reload|unload|load <id>")],
         );
     };
-    let Some(slot) = host.plugins.get(id.as_str()).cloned() else {
-        return reply(
-            host,
-            vec![format!("<red>Unknown plugin {}", escape_mini(id))],
-        );
+    let done = match plugin_op(host, id, op, sender) {
+        Ok(done) => done,
+        Err(PluginOpError::Unknown) => {
+            return reply(
+                host,
+                vec![format!("<red>Unknown plugin {}", escape_mini(id))],
+            );
+        }
+        Err(PluginOpError::Loaded) => {
+            return reply(host, vec![format!("{} is loaded", escape_mini(id))]);
+        }
     };
-    if action == "load" && slot.status().is_coming() {
-        return reply(host, vec![format!("{} is loaded", escape_mini(id))]);
-    }
-    tracing::info!(plugin = %slot.id, by = %commands::sender_name(host, sender), "plugin {action}");
-    let reply = slot.ask(if action == "unload" {
-        Control::Unload
-    } else {
-        Control::Reload
-    });
-    let h = Arc::clone(host);
+    let (h, id) = (Arc::clone(host), id.clone());
     tokio::spawn(async move {
-        let r = reply.await;
-        let restart = slot.restart.lock().ok().and_then(|r| r.clone());
-        let line = match (r, restart) {
-            (Ok(()), Some(changes)) => format!(
+        let line = match done.await {
+            Ok(Some(changes)) => format!(
                 "<p>{} {action}ed, <warn>restart the proxy to apply the new manifest ({})",
-                escape_mini(&slot.id),
+                escape_mini(&id),
                 escape_mini(&changes)
             ),
-            (Ok(()), None) => format!("<p>{} {action}ed", escape_mini(&slot.id)),
-            (Err(e), _) => format!(
+            Ok(None) => format!("<p>{} {action}ed", escape_mini(&id)),
+            Err(e) => format!(
                 "<red>{} not {action}ed: {}",
-                escape_mini(&slot.id),
+                escape_mini(&id),
                 escape_mini(&e)
             ),
         };
-        tell(&h, sender, &slot.id, h.message(&line));
+        tell(&h, sender, &id, h.message(&line));
     });
     CommandOutcome::Handled
 }

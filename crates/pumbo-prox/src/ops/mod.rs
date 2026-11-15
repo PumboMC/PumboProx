@@ -6,12 +6,14 @@
 pub(crate) mod operators;
 mod players;
 mod route;
+mod servers;
 
 pub use operators::{
     Caller, ClaimError, LOGIN_GATE, OperatorError, claim, claim_code, claim_open, operators_set,
 };
 pub use players::{SendError, alert, kick, send_players};
 pub use route::{RouteDone, RouteEdit, route_set};
+pub use servers::{Action, ServerError, managed_logs, managed_server, server_control};
 
 use crate::server::Proxy;
 

@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 use crate::commands::{Reply, Source as Who};
 use crate::config::{Config, ServerConfig, SignedChatCancel};
+use crate::ops::{Action, ServerError};
 use crate::server::{Proxy, Runtime, SessionCmd};
 use crate::world::BossbarOp;
 
@@ -835,18 +836,26 @@ fn server(
             s => format!("/prox servers {s} <name>"),
         });
     };
-    if sub != "new" && m.entry(&name).is_none() && rt.config.servers.contains_key(&name) {
-        return reply(&format!(
-            "<err><v>{}</v> is not run by the proxy; <s>it comes from servers: in pumboprox.yml, change it there.",
-            esc(&name)
-        ));
-    }
-    if sub != "new" && m.entry(&name).is_none() {
-        return reply(&format!(
-            "<err>No server named <v>{}</v>.{}",
-            esc(&name),
-            button(console, "list", "/prox servers list", true)
-        ));
+    let known = if sub == "new" {
+        Ok(())
+    } else {
+        crate::ops::managed_server(&m, rt, &name)
+    };
+    match known {
+        Ok(()) => {}
+        Err(ServerError::NotManaged(name)) => {
+            return reply(&format!(
+                "<err><v>{}</v> is not run by the proxy; <s>it comes from servers: in pumboprox.yml, change it there.",
+                esc(&name)
+            ));
+        }
+        Err(ServerError::Unknown(name)) => {
+            return reply(&format!(
+                "<err>No server named <v>{}</v>.{}",
+                esc(&name),
+                button(console, "list", "/prox servers list", true)
+            ));
+        }
     }
     let say = say(proxy, who);
     match sub.as_str() {
@@ -883,40 +892,45 @@ fn server(
             });
             reply(&format!("<s>Creating <v>{}</v>…", esc(&name)))
         }
-        "start" => match m.start(&name) {
-            Ok(()) => {
+        "start" => match crate::ops::server_control(&m, &name, Action::Start) {
+            Ok(_) => {
                 when_ready(m, name.clone(), say);
                 reply(&format!("<s>Starting <v>{name}</v>…"))
             }
             Err(e) => reply(&format!("<err>{}", esc(&e))),
         },
-        "stop" => {
-            let n = name.clone();
-            tokio::spawn(async move {
-                match m.stop(&n).await {
-                    Ok(()) => say(&format!("<ok>Stopped <v>{n}</v>.")),
-                    Err(e) => say(&format!("<err>{}", esc(&e))),
-                }
-            });
-            reply(&format!("<s>Stopping <v>{name}</v>…"))
-        }
-        "restart" => {
-            let n = name.clone();
-            tokio::spawn(async move {
-                match m.restart(&n).await {
-                    Ok(()) => when_ready(m, n, say),
-                    Err(e) => say(&format!("<err>{}", esc(&e))),
-                }
-            });
-            reply(&format!("<s>Restarting <v>{name}</v>…"))
-        }
+        "stop" => match crate::ops::server_control(&m, &name, Action::Stop) {
+            Ok(done) => {
+                let n = name.clone();
+                tokio::spawn(async move {
+                    match done.await {
+                        Ok(()) => say(&format!("<ok>Stopped <v>{n}</v>.")),
+                        Err(e) => say(&format!("<err>{}", esc(&e))),
+                    }
+                });
+                reply(&format!("<s>Stopping <v>{name}</v>…"))
+            }
+            Err(e) => reply(&format!("<err>{}", esc(&e))),
+        },
+        "restart" => match crate::ops::server_control(&m, &name, Action::Restart) {
+            Ok(done) => {
+                let n = name.clone();
+                tokio::spawn(async move {
+                    match done.await {
+                        Ok(()) => when_ready(m, n, say),
+                        Err(e) => say(&format!("<err>{}", esc(&e))),
+                    }
+                });
+                reply(&format!("<s>Restarting <v>{name}</v>…"))
+            }
+            Err(e) => reply(&format!("<err>{}", esc(&e))),
+        },
         "logs" => {
             let n = args
                 .get(2)
                 .and_then(|n| n.parse::<usize>().ok())
-                .unwrap_or(20)
-                .clamp(1, 100);
-            let lines = m.logs(&name, n).unwrap_or_default();
+                .unwrap_or(20);
+            let lines = crate::ops::managed_logs(&m, &name, n);
             let mut out = vec![line(&format!(
                 "<v>{name}</v><s>: last {} console line(s)",
                 lines.len()
