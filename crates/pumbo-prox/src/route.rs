@@ -8,7 +8,7 @@ use std::sync::Arc;
 use pumbo_text::template::escape_mini as esc;
 
 use crate::commands::{Reply, Source as Who, permitted};
-use crate::config_edit::{flow_list, save, set_key};
+use crate::ops::{RouteDone, RouteEdit};
 use crate::server::{Proxy, Runtime};
 use crate::servers::{button, line, reply, row, usage};
 
@@ -60,161 +60,49 @@ pub fn command(proxy: &Arc<Proxy>, rt: &Runtime, who: &Who<'_>, args: &[&str]) -
     let Some(target) = words.get(2).map(|s| s.to_string()) else {
         return usage(&format!("/prox route {} {} <name>", w(0), w(1)));
     };
-    let result = match w(0).as_str() {
-        "servers" => servers(proxy, rt, &w(1), &target, words.get(3)),
-        "host" => host(proxy, rt, &w(1), &target.to_ascii_lowercase(), words.get(3)),
-        _ => gate(proxy, rt, &w(1), &target),
+    let domain = target.to_ascii_lowercase();
+    let at = words.get(3).map(String::as_str);
+    let edit = match (w(0).as_str(), w(1).as_str()) {
+        ("servers", "add") => RouteEdit::ServerAdd { name: &target, at },
+        ("servers", "remove") => RouteEdit::ServerRemove { name: &target },
+        ("servers", _) => RouteEdit::ServerMove { name: &target, at },
+        ("host", "remove") => RouteEdit::HostRemove { domain: &domain },
+        ("host", _) => RouteEdit::HostSet {
+            domain: &domain,
+            server: at,
+        },
+        (_, "require") => RouteEdit::GateRequire { name: &target },
+        _ => RouteEdit::GateOptional { name: &target },
     };
-    match result {
+    match crate::ops::route_set(proxy, rt, edit) {
         Ok(done) => {
+            let done = match done {
+                RouteDone::ServerAdded { name, position } => {
+                    format!("Players now try {name} as server {position}.")
+                }
+                RouteDone::ServerRemoved { name } => format!("{name} is off the list."),
+                RouteDone::ServerMoved { name, position } => {
+                    format!("{name} is now server {position}.")
+                }
+                RouteDone::HostRemoved { domain } => {
+                    format!("{domain} uses the server list again.")
+                }
+                RouteDone::HostSet { domain, server } => {
+                    format!("Players joining with {domain} go to {server} first.")
+                }
+                RouteDone::GateRequired { name } => {
+                    format!("{name} is required: without it nobody can log in.")
+                }
+                RouteDone::GateOptional { name } => {
+                    format!("{name} is optional: logins go on when it is missing.")
+                }
+            };
             let mut r = reply(&format!("<ok>{done}"));
             r.lines.extend(show(proxy, &proxy.runtime(), console).lines);
             r
         }
-        Err(e) => reply(&format!("<err>{}", esc(&e))),
+        Err(e) => reply(&format!("<err>{}", esc(&e.to_string()))),
     }
-}
-
-fn servers(
-    proxy: &Proxy,
-    rt: &Runtime,
-    op: &str,
-    name: &str,
-    at: Option<&String>,
-) -> Result<String, String> {
-    let mut order = rt.config.try_order();
-    let known = |n: &str| rt.backends.iter().any(|b| b.name == n);
-    let pos = |order: &[String]| -> Result<usize, String> {
-        match at {
-            None => Ok(order.len()),
-            Some(p) => p
-                .parse::<usize>()
-                .ok()
-                .filter(|p| (1..=order.len() + 1).contains(p))
-                .map(|p| p - 1)
-                .ok_or_else(|| format!("position {p} is not 1 to {}", order.len() + 1)),
-        }
-    };
-    let done = match op {
-        "add" => {
-            if !known(name) {
-                return Err(format!("there is no server named {name}"));
-            }
-            if order.iter().any(|n| n == name) {
-                return Err(format!("{name} is in the list already"));
-            }
-            let p = pos(&order)?;
-            order.insert(p, name.to_string());
-            format!("Players now try {name} as server {}.", p + 1)
-        }
-        "remove" => {
-            let before = order.len();
-            order.retain(|n| n != name);
-            if order.len() == before {
-                return Err(format!("{name} is not in the list"));
-            }
-            if order.is_empty() {
-                return Err("the last server stays: players need one to join".into());
-            }
-            format!("{name} is off the list.")
-        }
-        _ => {
-            if !order.iter().any(|n| n == name) {
-                return Err(format!("{name} is not in the list"));
-            }
-            order.retain(|n| n != name);
-            let p = pos(&order)?;
-            order.insert(p, name.to_string());
-            format!("{name} is now server {}.", p + 1)
-        }
-    };
-    save(proxy, |text| {
-        set_key(text, "routing", "try", Some(&flow_list(&order)))
-    })?;
-    Ok(done)
-}
-
-fn host(
-    proxy: &Proxy,
-    rt: &Runtime,
-    op: &str,
-    domain: &str,
-    server: Option<&String>,
-) -> Result<String, String> {
-    let ok = !domain.is_empty()
-        && domain.len() <= 253
-        && domain
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'));
-    if !ok {
-        return Err(format!("{domain} is not a domain"));
-    }
-    if op == "remove" {
-        if !rt.config.forced_hosts.contains_key(domain) {
-            return Err(format!("{domain} has no servers of its own"));
-        }
-        save(proxy, |text| set_key(text, "forced-hosts", domain, None))?;
-        return Ok(format!("{domain} uses the server list again."));
-    }
-    let Some(server) = server else {
-        return Err("name the server: /prox route host set <domain> <server>".into());
-    };
-    if !rt.backends.iter().any(|b| &b.name == server) {
-        return Err(format!("there is no server named {server}"));
-    }
-    save(proxy, |text| {
-        set_key(
-            text,
-            "forced-hosts",
-            domain,
-            Some(&flow_list(std::slice::from_ref(server))),
-        )
-    })?;
-    Ok(format!(
-        "Players joining with {domain} go to {server} first."
-    ))
-}
-
-fn gate(proxy: &Proxy, _rt: &Runtime, op: &str, name: &str) -> Result<String, String> {
-    let host = proxy
-        .plugins
-        .get()
-        .map(|p| p.host.clone())
-        .ok_or("the plugin host is off")?;
-    let mut required = host.required_gates();
-    if op == "require" {
-        // A gate nobody provides would close the network for everyone.
-        let loaded = host
-            .plugins()
-            .iter()
-            .any(|s| s.manifest.gate.as_ref().is_some_and(|g| g.name == name));
-        if !loaded {
-            return Err(format!("no plugin has the gate {name}"));
-        }
-        if required.iter().any(|g| g == name) {
-            return Err(format!("{name} is required already"));
-        }
-        required.push(name.to_string());
-    } else {
-        let before = required.len();
-        required.retain(|g| g != name);
-        if required.len() == before {
-            return Err(format!("{name} is not required"));
-        }
-    }
-    save(proxy, |text| {
-        set_key(
-            text,
-            "plugins",
-            "required-gates",
-            Some(&flow_list(&required)),
-        )
-    })?;
-    Ok(if op == "require" {
-        format!("{name} is required: without it nobody can log in.")
-    } else {
-        format!("{name} is optional: logins go on when it is missing.")
-    })
 }
 
 // ------------------------------------------------------------------ view
