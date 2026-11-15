@@ -163,9 +163,9 @@ fn first_ready(proxy: &Proxy) {
     let Some(name) = m.entries().into_keys().find(|n| m.state(n) == State::Ready) else {
         return;
     };
-    let order = crate::route::flow_list(std::slice::from_ref(&name));
-    match crate::route::save(proxy, |text| {
-        crate::route::set_key(text, "routing", "try", Some(&order))
+    let order = crate::config_edit::flow_list(std::slice::from_ref(&name));
+    match crate::config_edit::save(proxy, |text| {
+        crate::config_edit::set_key(text, "routing", "try", Some(&order))
     }) {
         Ok(()) => info!("{name} is ready: added to routing.try, players join it now"),
         Err(e) => warn!("{name} not added to routing.try: {e}"),

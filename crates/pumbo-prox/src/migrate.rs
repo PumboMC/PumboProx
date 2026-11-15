@@ -7,7 +7,7 @@
 use serde_json::Value;
 
 use crate::config::{Config, Notes};
-use crate::route::{indent_of, split_key};
+use crate::config_edit::{indent_of, split_key};
 
 /// The version this build writes and reads.
 pub const CONFIG_VERSION: u64 = 2;

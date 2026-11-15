@@ -251,8 +251,8 @@ fn migrate_config(path: &str) -> ExitCode {
         let Some((new, changes)) = pumbo_prox::migrate::migrate_text(&text)? else {
             return Ok(None);
         };
-        let backup = pumbo_prox::route::backup(file, &text)?;
-        pumbo_prox::route::write(file, &new)?;
+        let backup = pumbo_prox::config_edit::backup(file, &text)?;
+        pumbo_prox::config_edit::write(file, &new)?;
         Ok(Some((changes, backup)))
     });
     match result {

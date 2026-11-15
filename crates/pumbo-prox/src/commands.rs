@@ -783,7 +783,7 @@ fn claim(proxy: &Arc<Proxy>, rt: &Runtime, source: &Source<'_>, code: Option<&st
 /// Adds `id` to or removes it from `commands.operators` (in the file,
 /// comments stay; a failed reload puts the old file back).
 fn save_operator(proxy: &Proxy, id: Uuid, add: bool) -> Result<(), String> {
-    crate::route::save(proxy, |text| {
+    crate::config_edit::save(proxy, |text| {
         // Keeps an operator someone wrote in the file without a reload.
         let mut ops = crate::config::Config::parse(text)
             .map(|c| c.commands.operators)
@@ -792,11 +792,11 @@ fn save_operator(proxy: &Proxy, id: Uuid, add: bool) -> Result<(), String> {
         if add {
             ops.push(id.to_string());
         }
-        crate::route::set_key(
+        crate::config_edit::set_key(
             text,
             "commands",
             "operators",
-            Some(&crate::route::flow_list(&ops)),
+            Some(&crate::config_edit::flow_list(&ops)),
         )
     })
 }

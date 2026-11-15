@@ -6,6 +6,7 @@ pub mod bridge;
 pub mod bungee;
 pub mod commands;
 pub mod config;
+pub mod config_edit;
 pub mod conn;
 pub mod health;
 mod keys;

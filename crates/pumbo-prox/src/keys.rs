@@ -285,7 +285,7 @@ fn distance(a: &str, b: &str) -> usize {
 /// written in block style (a key inside `{ ... }` gives the line of the
 /// mapping). `None` when not even the first key is there.
 pub fn line_of(text: &str, path: &[Seg]) -> Option<usize> {
-    use crate::route::{indent_of, split_key};
+    use crate::config_edit::{indent_of, split_key};
     // A list item `- key: v` reads as `  key: v`, one level deeper.
     let lines: Vec<(String, bool)> = text
         .lines()
