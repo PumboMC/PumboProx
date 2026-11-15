@@ -83,6 +83,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "ansi", "json"] }
 uuid = "1.27"
 pumbo-bridge-proto = { path = "crates/pumbo-bridge-proto" }
+pumbo-common = { path = "crates/pumbo-common" }
 pumbo-contracts = { path = "crates/pumbo-contracts" }
 pumbo-core = { path = "crates/pumbo-core" }
 pumbo-data = { path = "crates/pumbo-data" }

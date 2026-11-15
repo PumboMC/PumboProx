@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use pumbo_common::rich::{char_width, text_width};
 use pumbo_text::Component;
 use pumbo_text::template::escape_mini;
 use serde_json::{Value, json};
@@ -304,31 +305,13 @@ const GAP: u32 = 12;
 /// Commands wider than this never set the description column.
 const COLUMN_MAX: u32 = 180;
 
-/// Advance of a character in the default Minecraft font, with the 1 px gap
-/// after it (the table of `pumbo_common::rich::char_width`); bold adds 1 px.
-fn char_width(c: char, bold: bool) -> u32 {
-    let w = match c {
-        '!' | ',' | '.' | ':' | ';' | '|' | 'i' => 2,
-        '\'' | '`' | 'l' => 3,
-        ' ' | 'I' | '[' | ']' | 't' => 4,
-        '"' | '(' | ')' | '*' | '<' | '>' | 'f' | 'k' | '{' | '}' => 5,
-        '@' | '~' => 7,
-        _ => 6,
-    };
-    w + u32::from(bold)
-}
-
-fn text_width(text: &str) -> u32 {
-    text.chars().map(|c| char_width(c, false)).sum()
-}
-
 /// `text` cut to `px` pixels, with `...` when something was cut.
 fn cut(text: &str, px: u32) -> String {
-    if text_width(text) <= px {
+    if text_width(text, false) <= px {
         return text.to_string();
     }
     let mut out = String::new();
-    let mut used = text_width("...");
+    let mut used = text_width("...", false);
     for c in text.chars() {
         used += char_width(c, false);
         if used > px {
@@ -339,19 +322,20 @@ fn cut(text: &str, px: u32) -> String {
     format!("{}...", out.trim_end())
 }
 
-/// Spaces `px` pixels wide: normal ones are 4 px, bold ones 5 px.
-fn pad(px: u32) -> String {
-    let split = |w: u32| {
-        (0..=3u32)
-            .find(|b| 5 * b <= w && (w - 5 * b).is_multiple_of(4))
-            .map(|b| ((w - 5 * b) / 4, b))
-    };
-    let (normal, bold) = (0..=px).rev().find_map(split).unwrap_or((0, 0));
-    let mut out = " ".repeat(normal as usize);
-    if bold > 0 {
-        out.push_str(&format!("<b>{}</b>", " ".repeat(bold as usize)));
-    }
-    out
+/// Spaces `px` pixels wide as text tags: [`pumbo_common::rich::pad`], with
+/// the bold spaces in `<b>`.
+pub fn pad(px: u32) -> String {
+    pumbo_common::rich::pad(px)
+        .segments
+        .iter()
+        .map(|s| {
+            if s.style.bold {
+                format!("<b>{}</b>", s.text)
+            } else {
+                s.text.clone()
+            }
+        })
+        .collect()
 }
 
 /// `/send <player>` coloured like `pumbo_common::style::syntax`.
@@ -430,7 +414,7 @@ pub fn help_page(
     // The widest command up to COLUMN_MAX sets the description column.
     let column = shown
         .iter()
-        .map(|e| text_width(&listed(e)))
+        .map(|e| text_width(&listed(e), false))
         .filter(|w| *w <= COLUMN_MAX)
         .max()
         .unwrap_or(0)
@@ -438,7 +422,7 @@ pub fn help_page(
     for e in shown {
         let all = full(e);
         let list = listed(e);
-        let width = text_width(&list);
+        let width = text_width(&list, false);
         let gap = if width + GAP <= column {
             column - width
         } else {
@@ -1082,9 +1066,13 @@ mod width_tests {
             "{line}"
         );
         // Bold padding spaces are 5 px.
-        assert!(text_width(&line) <= CHAT_WIDTH + 4, "{line}");
+        assert!(text_width(&line, false) <= CHAT_WIDTH + 4, "{line}");
         assert_eq!(cut("abc", 100), "abc");
         assert_eq!(pad(12), "   ");
         assert_eq!(pad(13), "  <b> </b>");
+        // Widths below 12 px round down to the nearest exact one.
+        assert_eq!(pad(11), "<b>  </b>");
+        // `ł` is 4 px, as in every other column of chat.
+        assert_eq!(cut("łłłłłł", 20), "łłł...");
     }
 }

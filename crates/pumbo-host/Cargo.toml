@@ -14,6 +14,7 @@ bcrypt.workspace = true
 cap-primitives.workspace = true
 ciborium.workspace = true
 futures.workspace = true
+pumbo-common.workspace = true
 pumbo-contracts.workspace = true
 pumbo-core.workspace = true
 pumbo-text.workspace = true

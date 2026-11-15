@@ -3,7 +3,12 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use bytes::BytesMut;
 use pumbo_bridge_proto::wire::Msg;
+use pumbo_protocol::frame::{self, FrameConfig};
+use pumbo_protocol::packets::status::{Intention, StatusRequest};
+use pumbo_protocol::packets::{self, Ctx, Packet};
+use pumbo_protocol::{Direction, Phase, ProtocolVersion, VersionModule};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::Instant;
@@ -109,7 +114,12 @@ impl Bridge {
                     let nonce: String = n.iter().map(|b| format!("{b:02x}")).collect();
                     st.nonces
                         .insert(nonce.clone(), (name.clone(), Instant::now()));
-                    targets.push((s.address.clone(), nonce));
+                    // The server's own protocol; the newest for one without.
+                    let module = s
+                        .protocol
+                        .and_then(|p| proxy.versions.get(ProtocolVersion(p)).cloned())
+                        .unwrap_or_else(|| proxy.newest());
+                    targets.push((s.address.clone(), nonce, module));
                 }
                 (targets, give_up)
             };
@@ -117,9 +127,9 @@ impl Bridge {
                 self.reject(l.peer.ip(), "matches no server in servers:".into());
                 l.close("it matches no server in servers:".into());
             }
-            for (address, nonce) in targets {
+            for (address, nonce, module) in targets {
                 tokio::spawn(async move {
-                    if let Err(e) = status_ping(&address, &nonce).await {
+                    if let Err(e) = status_ping(&*module, &address, &nonce).await {
                         debug!("pairing ping to {address}: {e}");
                     }
                 });
@@ -145,42 +155,85 @@ impl Bridge {
     }
 }
 
-fn varint(out: &mut Vec<u8>, v: i32) {
-    let mut v = v as u32;
-    loop {
-        let b = (v & 0x7f) as u8;
-        v >>= 7;
-        if v == 0 {
-            out.push(b);
-            return;
-        }
-        out.push(b | 0x80);
-    }
-}
-
-/// A status ping whose host name is `pumbo-bridge.<nonce>` (spec §3.4).
-async fn status_ping(address: &str, nonce: &str) -> Result<(), String> {
+/// A status ping whose host name is `pumbo-bridge.<nonce>` (spec §3.4), in
+/// the server's protocol (`module`).
+async fn status_ping(module: &dyn VersionModule, address: &str, nonce: &str) -> Result<(), String> {
     let (host, port) =
         crate::config::split_host_port(address).ok_or_else(|| "bad address".to_string())?;
+    let name = format!("{}{nonce}", pumbo_bridge_proto::PING_PREFIX);
+    let out = ping_frames(module, &name, port)?;
     let mut sock = tokio::time::timeout(Duration::from_secs(3), TcpStream::connect((host, port)))
         .await
         .map_err(|_| "connect timed out".to_string())?
         .map_err(|e| e.to_string())?;
-    let name = format!("{}{nonce}", pumbo_bridge_proto::PING_PREFIX);
-    let mut hs = Vec::new();
-    varint(&mut hs, 0);
-    varint(&mut hs, 767);
-    varint(&mut hs, name.len() as i32);
-    hs.extend_from_slice(name.as_bytes());
-    hs.extend_from_slice(&port.to_be_bytes());
-    varint(&mut hs, 1);
-    let mut out = Vec::new();
-    varint(&mut out, hs.len() as i32);
-    out.extend(hs);
-    out.extend([1, 0]);
     sock.write_all(&out).await.map_err(|e| e.to_string())?;
     // The answer is not needed; read a little so the server is not cut off.
     let mut buf = [0u8; 512];
     let _ = tokio::time::timeout(Duration::from_secs(3), sock.read(&mut buf)).await;
     Ok(())
+}
+
+/// `intention` (status, to `host`) and `status_request` as uncompressed frames.
+fn ping_frames(module: &dyn VersionModule, host: &str, port: u16) -> Result<BytesMut, String> {
+    fn put<P: Packet>(
+        out: &mut BytesMut,
+        ctx: &Ctx<'_>,
+        phase: Phase,
+        p: &P,
+    ) -> Result<(), String> {
+        let id = packets::id_of::<P>(ctx, phase, Direction::Serverbound)
+            .ok_or_else(|| format!("{:?} has no {:?}", ctx.protocol(), P::KIND))?;
+        let payload = packets::encode(p, ctx).map_err(|e| e.to_string())?;
+        frame::encode(out, id, &payload, &FrameConfig::from_client()).map_err(|e| e.to_string())
+    }
+    let ctx = Ctx::new(module, Direction::Serverbound);
+    let intention = Intention {
+        protocol: module.protocol().0,
+        address: host.to_string(),
+        port,
+        intent: Intention::STATUS,
+    };
+    let mut out = BytesMut::new();
+    put(&mut out, &ctx, Phase::Handshake, &intention)?;
+    put(&mut out, &ctx, Phase::Status, &StatusRequest)?;
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The pairing ping of a 26.2 (776) and a 26.3 (777) server is a status
+    /// handshake in that server's protocol, then `status_request`.
+    #[test]
+    fn pairing_ping_speaks_the_server_protocol() {
+        let versions = crate::modules::versions().unwrap();
+        for protocol in [776, 777] {
+            let module = versions.get(ProtocolVersion(protocol)).unwrap();
+            let mut buf = ping_frames(&**module, "pumbo-bridge.ab12", 25701).unwrap();
+            let cfg = FrameConfig::from_client();
+            let ctx = Ctx::new(&**module, Direction::Serverbound);
+            let hs = frame::decode(&mut buf, &cfg).unwrap().unwrap();
+            assert_eq!(
+                Some(hs.id),
+                packets::id_of::<Intention>(&ctx, Phase::Handshake, Direction::Serverbound)
+            );
+            let intention: Intention = packets::decode(&hs.payload, &ctx).unwrap();
+            assert_eq!(
+                intention,
+                Intention {
+                    protocol,
+                    address: "pumbo-bridge.ab12".into(),
+                    port: 25701,
+                    intent: Intention::STATUS,
+                }
+            );
+            let req = frame::decode(&mut buf, &cfg).unwrap().unwrap();
+            assert_eq!(
+                Some(req.id),
+                packets::id_of::<StatusRequest>(&ctx, Phase::Status, Direction::Serverbound)
+            );
+            assert!(req.payload.is_empty() && buf.is_empty(), "{protocol}");
+        }
+    }
 }

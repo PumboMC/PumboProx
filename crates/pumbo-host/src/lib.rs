@@ -74,7 +74,7 @@ use pumbo_text::{Component, StyleSheet};
 use tokio::sync::{Semaphore, oneshot};
 
 pub use actor::{CallError, PluginSlot, Status};
-pub use admin::{HELP_PER_PAGE, HelpEntry, HelpHeader, help_page};
+pub use admin::{HELP_PER_PAGE, HelpEntry, HelpHeader, help_page, pad};
 pub use bridge::{BossbarCommand, NoProxy, PlayerCommand, ProxyBridge};
 pub use commands::{CommandOutcome, CommandSender, VisibleCommand};
 pub use config::HostConfig;

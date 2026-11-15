@@ -175,33 +175,6 @@ fn ago(d: Duration) -> String {
     }
 }
 
-/// Width in the default Minecraft font (as `pumbo_common::rich`).
-fn px(text: &str) -> u32 {
-    text.chars()
-        .map(|c| match c {
-            '!' | ',' | '.' | ':' | ';' | '|' | 'i' => 2,
-            '\'' | '`' | 'l' => 3,
-            ' ' | 'I' | '[' | ']' | 't' => 4,
-            '"' | '(' | ')' | '*' | '<' | '>' | 'f' | 'k' | '{' | '}' => 5,
-            '@' | '~' => 7,
-            _ => 6,
-        })
-        .sum()
-}
-
-/// Spaces `w` pixels wide: 4 px normal and 5 px bold ones.
-fn pad(w: u32) -> String {
-    let bold = (0..=3u32)
-        .find(|b| 5 * b <= w && (w - 5 * b).is_multiple_of(4))
-        .unwrap_or(0);
-    let normal = (w.saturating_sub(5 * bold)) / 4;
-    let mut out = " ".repeat(normal as usize);
-    if bold > 0 {
-        out.push_str(&format!("<b>{}</b>", " ".repeat(bold as usize)));
-    }
-    out
-}
-
 /// Rows of styled cells as aligned lines: pixels in chat, characters in the
 /// console (styles are tags of the host style sheet).
 fn columns<const N: usize>(rows: &[[(String, &str); N]], console: bool) -> Vec<String> {
@@ -209,7 +182,7 @@ fn columns<const N: usize>(rows: &[[(String, &str); N]], console: bool) -> Vec<S
         if console {
             t.chars().count() as u32
         } else {
-            px(t)
+            pumbo_common::rich::text_width(t, false)
         }
     };
     let mut widths = [0u32; N];
@@ -229,11 +202,34 @@ fn columns<const N: usize>(rows: &[[(String, &str); N]], console: bool) -> Vec<S
                     if console {
                         line.push_str(&" ".repeat(gap as usize + 2));
                     } else {
-                        line.push_str(&pad(gap + 8));
+                        line.push_str(&pumbo_host::pad(gap + 8));
                     }
                 }
             }
             line
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::columns;
+
+    /// Chat columns measure with the shared font table, `ł` included.
+    #[test]
+    fn chat_columns_line_up_in_pixels() {
+        let rows = [
+            [("łódź".to_string(), "p"), ("on".to_string(), "ok")],
+            [("lobby".to_string(), "p"), ("off".to_string(), "err")],
+        ];
+        // "łódź" is 4 + 6 + 6 + 6 = 22 px, "lobby" 3 + 6 + 6 + 6 + 6 = 27 px:
+        // 5 px more before the second column, so one of its spaces is bold.
+        assert_eq!(
+            columns(&rows, false),
+            [
+                "<p>łódź</p>  <b> </b><ok>on</ok>",
+                "<p>lobby</p>  <err>off</err>"
+            ]
+        );
+    }
 }
