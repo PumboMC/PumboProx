@@ -3,8 +3,12 @@
 //! results into text; anything else that drives the proxy calls the same
 //! functions.
 
+pub(crate) mod operators;
 mod players;
 
+pub use operators::{
+    Caller, ClaimError, LOGIN_GATE, OperatorError, claim, claim_code, claim_open, operators_set,
+};
 pub use players::{SendError, alert, kick, send_players};
 
 use crate::server::Proxy;

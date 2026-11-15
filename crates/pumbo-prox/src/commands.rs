@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use pumbo_host::HelpEntry;
 use pumbo_text::Component;
-use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::server::{Proxy, Runtime};
@@ -597,55 +596,8 @@ fn denied() -> Reply {
     crate::servers::reply("<err>You do not have permission to do that.")
 }
 
-/// Wrong codes for `/prox claim` before the code stops working.
-const CLAIM_TRIES: u8 = 5;
-
-/// A new one-time code for `/prox claim` on a fresh network: no operator
-/// and no server yet. Kept in memory only, so every start has its own; the
-/// first server ends it (`Proxy::replace`).
-pub fn claim_code(proxy: &Proxy) -> Option<String> {
-    let rt = proxy.runtime();
-    if !rt.operators.is_empty() || !rt.backends.is_empty() {
-        return None;
-    }
-    let n = u32::from_be_bytes(crate::session::random_bytes::<4>().ok()?) % 1_000_000;
-    let code = format!("{n:06}");
-    *proxy.claim.lock().ok()? = Some((code.clone(), 0));
-    Some(code)
-}
-
-/// The login gate that proves who a player without a premium account is:
-/// PumboAuth's. Other gates (the bot filter) do not count.
-pub const LOGIN_GATE: &str = "auth";
-
-/// Whether `plugins.required-gates` names [`LOGIN_GATE`].
-fn login_gate_required(proxy: &Proxy) -> bool {
-    proxy
-        .plugins
-        .get()
-        .is_some_and(|p| p.host.required_gates().iter().any(|g| g == LOGIN_GATE))
-}
-
-/// [`LOGIN_GATE`] is required and its plugin runs: an offline UUID then
-/// belongs to whoever passed the login.
-fn login_gate_up(proxy: &Proxy) -> bool {
-    login_gate_required(proxy)
-        && proxy.plugins.get().is_some_and(|p| {
-            p.host.plugins().iter().any(|s| {
-                s.manifest
-                    .gate
-                    .as_ref()
-                    .is_some_and(|g| g.name == LOGIN_GATE)
-                    && s.status() == pumbo_host::Status::Running
-            })
-        })
-}
-
-/// Whether a player may become an operator: an offline UUID (version 3)
-/// names anyone who joins under that name, unless the login gate checks it.
-fn offline_without_login(proxy: &Proxy, id: Uuid) -> bool {
-    id.get_version_num() == 3 && !login_gate_up(proxy)
-}
+use crate::ops::operators::login_gate_required;
+pub use crate::ops::{LOGIN_GATE, claim_code, claim_open};
 
 const OFFLINE_OP: &str = "<s>Anyone who joins under that name would get it. Install PumboAuth and add auth to plugins.required-gates first, or type prox op \\<uuid> in the console.";
 
@@ -714,95 +666,32 @@ pub fn claim_hint(proxy: &Proxy, code: &str) -> String {
     )
 }
 
-/// Whether `/prox claim` takes a code now.
-pub fn claim_open(proxy: &Proxy, rt: &Runtime) -> bool {
-    rt.operators.is_empty()
-        && proxy
-            .claim
-            .lock()
-            .is_ok_and(|c| c.as_ref().is_some_and(|(_, wrong)| *wrong < CLAIM_TRIES))
-}
-
 /// `/prox claim <code>`: the right code puts the player in
 /// `commands.operators` (in the file, comments stay) and is used up.
 fn claim(proxy: &Arc<Proxy>, rt: &Runtime, source: &Source<'_>, code: Option<&str>) -> Reply {
+    use crate::ops::ClaimError;
     use crate::servers::{reply, usage};
     let Source::Player { id, .. } = source else {
         return reply("<err>Only players can claim. <s>Put a UUID in commands.operators instead.");
     };
-    if offline_without_login(proxy, *id) && claim_open(proxy, rt) {
-        return reply(&format!(
+    match crate::ops::claim(proxy, rt, *id, code) {
+        Ok(()) => reply("<ok>You are now an operator of this proxy."),
+        Err(ClaimError::NotPremium) => reply(&format!(
             "<err>Your account is not premium, so you cannot claim the proxy. {OFFLINE_OP}"
-        ));
-    }
-    let mut claim = proxy
-        .claim
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let Some((right, wrong)) = claim.as_mut().filter(|_| rt.operators.is_empty()) else {
-        return reply("<s>There is nothing to claim.");
-    };
-    if *wrong >= CLAIM_TRIES {
-        return reply(
+        )),
+        Err(ClaimError::Nothing) => reply("<s>There is nothing to claim."),
+        Err(ClaimError::Exhausted) => reply(
             "<err>The code no longer works after too many wrong tries. <s>A restart of the proxy makes a new one.",
-        );
+        ),
+        Err(ClaimError::NoCode) => usage("/prox claim <code>"),
+        Err(ClaimError::Wrong) => reply("<err>Wrong code."),
+        Err(ClaimError::Save(e)) => reply(&format!("<err>Not saved: <s>{}", esc(&e))),
     }
-    let Some(code) = code else {
-        return usage("/prox claim <code>");
-    };
-    if code != right.as_str() {
-        *wrong += 1;
-        if *wrong >= CLAIM_TRIES {
-            warn!(
-                "the operator code no longer works after {CLAIM_TRIES} wrong tries; restart the proxy for a new one"
-            );
-        }
-        return reply("<err>Wrong code.");
-    }
-    // Out of the lock: the save reloads, and a reload may end the code.
-    let taken = claim.take();
-    drop(claim);
-    if let Err(e) = save_operator(proxy, *id, true) {
-        if proxy.runtime().backends.is_empty()
-            && let Ok(mut c) = proxy.claim.lock()
-        {
-            *c = taken;
-        }
-        return reply(&format!("<err>Not saved: <s>{}", esc(&e)));
-    }
-    let (name, ip) = proxy
-        .players()
-        .into_iter()
-        .find(|p| p.id == *id)
-        .map(|p| (p.name, proxy.ip(p.address)))
-        .unwrap_or_default();
-    info!("{name} ({id}, {ip}) is now an operator");
-    reply("<ok>You are now an operator of this proxy.")
-}
-
-/// Adds `id` to or removes it from `commands.operators` (in the file,
-/// comments stay; a failed reload puts the old file back).
-fn save_operator(proxy: &Proxy, id: Uuid, add: bool) -> Result<(), String> {
-    crate::config_edit::save(proxy, |text| {
-        // Keeps an operator someone wrote in the file without a reload.
-        let mut ops = crate::config::Config::parse(text)
-            .map(|c| c.commands.operators)
-            .unwrap_or_default();
-        ops.retain(|o| Uuid::parse_str(o).ok() != Some(id));
-        if add {
-            ops.push(id.to_string());
-        }
-        crate::config_edit::set_key(
-            text,
-            "commands",
-            "operators",
-            Some(&crate::config_edit::flow_list(&ops)),
-        )
-    })
 }
 
 /// `/prox op|deop <player|uuid>`: an online player's name or a UUID.
 fn op(proxy: &Proxy, rt: &Runtime, source: &Source<'_>, add: bool, who: Option<&str>) -> Reply {
+    use crate::ops::{Caller, OperatorError};
     use crate::servers::{reply, usage};
     if !permitted(proxy, rt, source, OP) {
         return reply(&exact_denied(OP));
@@ -829,36 +718,25 @@ fn op(proxy: &Proxy, rt: &Runtime, source: &Source<'_>, add: bool, who: Option<&
             }
         },
     };
-    if add && matches!(source, Source::Player { .. }) && offline_without_login(proxy, id) {
-        return reply(&format!(
-            "<err><v>{}</v> has no premium account. {OFFLINE_OP}",
-            esc(&name)
-        ));
-    }
-    if rt.operators.contains(&id) == add {
-        let state = if add { "already" } else { "not" };
-        return reply(&format!("<s><v>{}</v> is {state} an operator.", esc(&name)));
-    }
-    if let Err(e) = save_operator(proxy, id, add) {
-        return reply(&format!("<err>Not saved: <s>{}", esc(&e)));
-    }
     let by = match source {
-        Source::Console => "the console".to_string(),
-        Source::Player { id, .. } => proxy
-            .players()
-            .into_iter()
-            .find(|p| p.id == *id)
-            .map_or_else(|| id.to_string(), |p| format!("{} ({id})", p.name)),
+        Source::Console => Caller::Console,
+        Source::Player { id, .. } => Caller::Player(*id),
     };
-    if add {
-        info!("{name} ({id}) is now an operator, by {by}");
-        reply(&format!("<ok><v>{}</v> is now an operator.", esc(&name)))
-    } else {
-        info!("{name} ({id}) is no longer an operator, by {by}");
-        reply(&format!(
+    match crate::ops::operators_set(proxy, rt, id, &name, add, by) {
+        Ok(()) if add => reply(&format!("<ok><v>{}</v> is now an operator.", esc(&name))),
+        Ok(()) => reply(&format!(
             "<ok><v>{}</v> is no longer an operator.",
             esc(&name)
-        ))
+        )),
+        Err(OperatorError::NotPremium) => reply(&format!(
+            "<err><v>{}</v> has no premium account. {OFFLINE_OP}",
+            esc(&name)
+        )),
+        Err(OperatorError::Unchanged) => {
+            let state = if add { "already" } else { "not" };
+            reply(&format!("<s><v>{}</v> is {state} an operator.", esc(&name)))
+        }
+        Err(OperatorError::Save(e)) => reply(&format!("<err>Not saved: <s>{}", esc(&e))),
     }
 }
 
