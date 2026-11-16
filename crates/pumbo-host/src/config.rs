@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use pumbo_core::section::{SectionInfo, keys_schema};
 use serde::Deserialize;
+use serde_json::json;
 
 use crate::manifest::{EventKind, OnFailure};
 
@@ -30,6 +32,25 @@ pub struct HostConfig {
     /// Opening tags (plan §6.6.1).
     #[serde(default = "default_style")]
     pub style: BTreeMap<String, String>,
+}
+
+/// The sections of `pumboprox.yml` the host reads, with the schema of their
+/// keys. `servers` is the proxy's; the host only takes the names from it.
+pub fn sections() -> Vec<SectionInfo> {
+    // Under `plugins` are plugin ids too, under `style` tag names.
+    let any_key = json!({ "type": "object" });
+    let section = |key, schema| SectionInfo { key, schema };
+    vec![
+        section("plugins", any_key.clone()),
+        section("services", keys_schema::<ServicesConfig>()),
+        section("permissions", keys_schema::<PermissionsConfig>()),
+        section("placeholders", keys_schema::<PlaceholdersConfig>()),
+        section(
+            "server-group",
+            json!({ "type": "array", "items": keys_schema::<ServerGroup>() }),
+        ),
+        section("style", any_key),
+    ]
 }
 
 impl HostConfig {
@@ -394,6 +415,19 @@ placeholders:
         assert_eq!(cfg.groups_of("survival"), ["survivals", "all"]);
         assert_eq!(cfg.placeholders.aliases["rank"], "pumboperms_rank");
         assert!(cfg.style.contains_key("err"));
+    }
+
+    #[test]
+    fn the_host_registers_its_fields_but_servers() {
+        let mut keys: Vec<&str> = sections().iter().map(|s| s.key).collect();
+        keys.sort_unstable();
+        let mut fields: Vec<&str> = pumbo_core::section::fields::<HostConfig>()
+            .iter()
+            .copied()
+            .filter(|k| *k != "servers")
+            .collect();
+        fields.sort_unstable();
+        assert_eq!(keys, fields);
     }
 
     #[test]

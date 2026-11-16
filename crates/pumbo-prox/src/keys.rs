@@ -91,7 +91,7 @@ fn plain_sections() -> Vec<(&'static str, &'static [&'static str])> {
 
 /// The typed keys of the sections that pass the rest to a module; only for
 /// the hint, the check itself uses what the struct left over.
-const LISTENER: &[&str] = &[
+pub(crate) const LISTENER: &[&str] = &[
     "bind",
     "transport",
     "proxy-protocol",

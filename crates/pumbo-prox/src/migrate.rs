@@ -12,7 +12,8 @@ use crate::config_edit::{indent_of, split_key};
 /// The version this build writes and reads.
 pub const CONFIG_VERSION: u64 = 2;
 
-const OLD_CHANNEL: &str = "bungeecord-channel";
+/// The name of `messaging-channel` before `config-version` 2.
+pub(crate) const OLD_CHANNEL: &str = "bungeecord-channel";
 const CHANNEL: &str = "messaging-channel";
 
 /// The line of a top-level key written in block style.

@@ -180,3 +180,44 @@ fn the_dev_network_config_loads() {
     let bench = format!("{text}managed-servers:\n  enabled: false\n");
     assert_eq!(problems(&bench), None, "{bench}");
 }
+
+/// The top-level keys of a config text.
+fn top_keys(text: &str) -> Vec<String> {
+    match pumbo_core::yaml::from_str::<serde_json::Value>(text) {
+        Ok(serde_json::Value::Object(map)) => map.keys().cloned().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Every section `Config` reads in the first-start file, the examples in
+/// docs/ and the dev network is registered.
+#[test]
+fn every_section_the_examples_use_is_registered() {
+    let registered: Vec<&str> = pumbo_prox::modules::sections()
+        .iter()
+        .map(|s| s.key)
+        .collect();
+    let mut texts = vec![
+        pumbo_prox::config::DEFAULT_FILE.to_string(),
+        dev_network_config(),
+    ];
+    texts.extend(
+        docs_blocks()
+            .into_iter()
+            .map(|(_, block)| block)
+            .filter(|block| !names_another_file(block)),
+    );
+    for key in texts.iter().flat_map(|text| top_keys(text)) {
+        // Config takes or refuses a value under a key of its own; any other
+        // key lands in `sections`.
+        let read = match serde_json::from_value::<Config>(serde_json::json!({ key.as_str(): "x" }))
+        {
+            Ok(cfg) => !cfg.sections.contains_key(&key),
+            Err(_) => true,
+        };
+        assert!(
+            !read || registered.contains(&key.as_str()),
+            "Config reads {key}, but no section is registered for it"
+        );
+    }
+}

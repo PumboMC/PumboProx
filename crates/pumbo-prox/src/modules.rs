@@ -6,6 +6,7 @@ use pumbo_core::forwarding::ForwardingMode;
 use pumbo_core::identity::Authenticator;
 use pumbo_core::registry::{ModuleConfig, ModuleError, ModuleRegistry};
 use pumbo_core::routing::BackendSelector;
+use pumbo_core::section::SectionInfo;
 use pumbo_core::storage::KeyValueStore;
 use pumbo_core::translate::TranslatorProvider;
 use pumbo_protocol::VersionRegistry;
@@ -98,4 +99,12 @@ pub fn listener_config(l: &crate::config::ListenerConfig) -> ModuleConfig {
     let mut t = l.rest.clone();
     t.insert("bind".into(), l.bind.clone().into());
     t
+}
+
+/// Every section of `pumboprox.yml` with the schema of its keys: the
+/// proxy's and the plugin host's.
+pub fn sections() -> Vec<SectionInfo> {
+    let mut all = crate::config::sections();
+    all.extend(pumbo_host::config::sections());
+    all
 }

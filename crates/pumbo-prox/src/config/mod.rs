@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 
 use pumbo_core::registry::ModuleConfig;
+use pumbo_core::section::{SectionInfo, keys_schema};
 use serde::Deserialize;
+use serde_json::json;
 
 pub use crate::keys::Seg;
 use crate::net::Cidr;
@@ -128,6 +130,9 @@ pub fn read(path: &std::path::Path) -> Result<String, String> {
     })
 }
 
+/// The proxy's sections of `pumboprox.yml`. Every field but `check_only`
+/// and `sections` is a section registered in [`sections()`] (`server-group`
+/// by the plugin host): a new field is a new entry there.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
@@ -196,6 +201,55 @@ pub struct Config {
     /// name; any value, so an unknown key is a warning, not a parse error.
     #[serde(flatten)]
     pub sections: BTreeMap<String, serde_json::Value>,
+}
+
+/// The sections the proxy reads, with the schema of their keys.
+pub fn sections() -> Vec<SectionInfo> {
+    // The typed keys of a section whose other keys go to its module.
+    let module = |typed: &[&str]| {
+        let properties: serde_json::Map<String, serde_json::Value> = typed
+            .iter()
+            .map(|k| ((*k).to_string(), json!({})))
+            .collect();
+        json!({ "type": "object", "properties": properties, "additionalProperties": true })
+    };
+    let section = |key, schema| SectionInfo { key, schema };
+    vec![
+        section(
+            "listener",
+            json!({ "type": "array", "items": module(crate::keys::LISTENER) }),
+        ),
+        section("status", keys_schema::<StatusConfig>()),
+        section("login", keys_schema::<LoginConfig>()),
+        section("authentication", module(&["service"])),
+        section("forwarding", module(&["mode"])),
+        section(
+            "servers",
+            json!({ "type": "object", "additionalProperties": keys_schema::<ServerConfig>() }),
+        ),
+        section("routing", module(&["selector"])),
+        section("translation", keys_schema::<TranslationConfig>()),
+        section("storage", module(&["backend"])),
+        section("limits", keys_schema::<LimitsConfig>()),
+        section("logging", keys_schema::<LoggingConfig>()),
+        // Host names.
+        section("forced-hosts", json!({ "type": "object" })),
+        section("switching", keys_schema::<SwitchingConfig>()),
+        section("commands", keys_schema::<CommandsConfig>()),
+        section("plugin-messages", keys_schema::<PluginMessagesConfig>()),
+        section("config-version", json!({})),
+        section("messaging-channel", keys_schema::<MessagingChannelConfig>()),
+        section(
+            crate::migrate::OLD_CHANNEL,
+            keys_schema::<MessagingChannelConfig>(),
+        ),
+        section("messages", keys_schema::<MessagesConfig>()),
+        section("virtual", keys_schema::<VirtualConfig>()),
+        section("tab", keys_schema::<TabConfig>()),
+        section("pumbox", keys_schema::<PumboxConfig>()),
+        section("bridge", keys_schema::<crate::bridge::BridgeConfig>()),
+        section("managed-servers", keys_schema::<pumbo_servers::Config>()),
+    ]
 }
 
 impl Config {
