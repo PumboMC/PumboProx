@@ -197,6 +197,7 @@ With `metrics-bind` set, the proxy answers plain HTTP on that address, at most 6
 `/health` and `/ready` carry no data and never need the token. Scraping with a token:
 
 ```yaml
+# prometheus.yml
 scrape_configs:
   - job_name: pumboprox
     authorization:
@@ -232,6 +233,7 @@ services:
 The image has no shell and no HTTP client, so it has no `HEALTHCHECK`; let the orchestrator ask instead. In Kubernetes, with metrics on:
 
 ```yaml
+# deployment.yml (the proxy's container)
 livenessProbe:
   httpGet: { path: /health, port: 9100 }
 readinessProbe:

@@ -19,6 +19,7 @@ See [Your own Pumpkin servers](getting-started.md#your-own-pumpkin-servers). Ser
 You run Paper yourself; the proxy cannot download it yet. In `config/paper-global.yml`:
 
 ```yaml
+# config/paper-global.yml
 proxies:
   velocity:
     enabled: true
@@ -84,6 +85,7 @@ Under systemd the proxy has no console: its standard input is closed, and it kee
 The image keeps its config and data in `/data` and runs as uid 65532, so that directory has to belong to that user:
 
 ```yaml
+# compose.yml
 services:
   proxy:
     image: ghcr.io/pumbomc/pumboprox:beta

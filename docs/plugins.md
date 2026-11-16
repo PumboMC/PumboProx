@@ -33,6 +33,7 @@ When a new version of the plugin brings a new default `config.yml` or language f
 ## Manifest
 
 ```yaml
+# pumbo-example.yml
 id: pumbo-example
 version: 0.1.0
 api: "0.1"

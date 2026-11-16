@@ -121,6 +121,7 @@ More in [Servers from the proxy](servers.md).
 Operators (`commands.operators`, edited by `/prox op` and `/prox deop`) have every proxy permission. For anyone else, permissions live in `permissions.yml` next to the config, with server, group and global contexts. With PumboPerms you manage them from the game instead.
 
 ```yaml
+# permissions.yml
 groups:
   default:
     permissions: [pumbo.proxy.server]
