@@ -408,3 +408,78 @@ fn relative_paths_are_read_next_to_the_config() {
         "{err}"
     );
 }
+
+/// A plugin host section that does not parse fails check-config and describe
+/// with the file's name, and stops the start once the bridge is made.
+#[test]
+fn a_bad_plugin_host_section_is_an_error_everywhere() {
+    use std::io::Write as _;
+    use std::time::{Duration, Instant};
+    let dir = empty_dir("bad-host");
+    let bridge = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let config = small_config("plugins:\n  memory-mb: lots\n").replace(
+        "bridge:\n  enabled: false\n",
+        &format!("bridge:\n  listen: \"{bridge}\"\n"),
+    );
+    let file = dir.join("pumboprox.yml");
+    std::fs::write(&file, &config).unwrap();
+    let error = pumbo_host::HostConfig::parse(&config).unwrap_err();
+    let path = file.to_str().unwrap();
+
+    let out = pumboprox(&["check-config", path]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).starts_with("listener: "),
+        "{err}"
+    );
+    assert!(
+        err.contains(&format!("config error: {path}: {error}")),
+        "{err}"
+    );
+
+    let out = pumboprox(&["describe", "x", path]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{err}");
+    assert!(err.contains(&format!("describe: {path}: {error}")), "{err}");
+
+    let log = std::fs::File::create(dir.join("stderr.log")).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pumboprox"))
+        .current_dir(&dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(log)
+        .spawn()
+        .unwrap();
+    // A proxy that started anyway stops; one that did not has no console,
+    // so the write may fail.
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(b"stop\n");
+    }
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("the proxy did not end within 60 s");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let err = std::fs::read_to_string(dir.join("stderr.log")).unwrap();
+    assert!(!status.success(), "{err}");
+    assert!(
+        err.contains(&format!("cannot start plugins: {error}")),
+        "{err}"
+    );
+    assert!(!err.contains("cannot start the bridge"), "{err}");
+    assert!(
+        dir.join("bridge.key").is_file(),
+        "the bridge comes first: {err}"
+    );
+}

@@ -486,3 +486,54 @@ fn remote_metrics_need_allow_remote() {
         .to_string();
     assert!(err.contains("must be an address with a port"), "{err}");
 }
+
+/// A plugin host section that does not parse fails `reload` with the name of
+/// the config file, and the old config stays.
+#[tokio::test]
+async fn a_bad_host_section_fails_reload_with_the_file_name() {
+    let path = std::env::temp_dir().join(format!("pumbo-bad-host-{}.yml", std::process::id()));
+    std::fs::write(&path, SAMPLE).unwrap();
+    let proxy =
+        pumbo_prox::server::Proxy::new(Config::parse(SAMPLE).unwrap(), Some(path.clone())).unwrap();
+    let bad = format!("{SAMPLE}plugins:\n  memory-mb: lots\n");
+    std::fs::write(&path, &bad).unwrap();
+    let error = pumbo_host::HostConfig::parse(&bad).unwrap_err();
+    assert_eq!(
+        proxy.reload().unwrap_err(),
+        format!("{}: {error}", path.display())
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Unknown keys of the plugin host's sections are named like the proxy's.
+#[test]
+fn host_sections_name_unknown_keys() {
+    let text = format!(
+        "{SAMPLE}services:\n  max-dept: 4\nserver-group:\n  - name: all\n    servers: [lobby]\n    server: x\n"
+    );
+    pumbo_host::HostConfig::parse(&text).unwrap();
+    let found: Vec<String> = Config::parse_checked(&text)
+        .unwrap()
+        .1
+        .unknown
+        .into_iter()
+        .map(|(_, m)| m)
+        .collect();
+    assert_eq!(
+        found,
+        [
+            "unknown key services.max-dept (did you mean max-depth?); it is ignored",
+            "unknown key server-group[0].server (did you mean servers?); it is ignored",
+        ]
+    );
+}
+
+/// A number where a setting is text is read as that text, in the proxy's
+/// and the plugin host's sections alike.
+#[test]
+fn numbers_load_where_text_is_expected() {
+    let text = format!("{SAMPLE}status:\n  motd: 2024\nplaceholders:\n  aliases: {{ rank: 5 }}\n");
+    assert_eq!(Config::parse(&text).unwrap().status.motd, "2024");
+    let host = pumbo_host::HostConfig::parse(&text).unwrap();
+    assert_eq!(host.placeholders.aliases["rank"], "5");
+}
