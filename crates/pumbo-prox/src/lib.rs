@@ -24,4 +24,5 @@ pub mod server;
 pub mod servers;
 pub mod session;
 pub mod status;
+mod ui;
 pub mod world;
