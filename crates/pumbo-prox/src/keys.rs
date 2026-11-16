@@ -2,13 +2,13 @@
 //! a key in the text. Serde skips an unknown key without a word, so a typo
 //! (`limits.max-player`) would keep the default; these checks name it.
 //!
-//! The known keys come from the structs that read the file (the proxy's
-//! [`Config`], the host's [`pumbo_host::HostConfig`]), so a new field counts
-//! without an edit here. Maps whose keys the owner names (`servers.<name>`,
+//! The known keys come from the registered sections
+//! ([`crate::modules::sections`]): where the schema of a section closes a
+//! mapping (`additionalProperties: false`), a key it does not have is
+//! unknown. Maps whose keys the owner names (`servers.<name>`,
 //! `forced-hosts`, `plugins.<id>`, `style`, ...) are never checked, and a
 //! module without a key list here is never flagged.
 
-use pumbo_core::section::fields;
 use serde_json::Value;
 
 use crate::config::Config;
@@ -63,32 +63,6 @@ impl Unknown {
     }
 }
 
-/// Sections read by a plain struct (no flattened field), by their key.
-fn plain_sections() -> Vec<(&'static str, &'static [&'static str])> {
-    use crate::config::*;
-    use pumbo_host::config as host;
-    vec![
-        ("status", fields::<StatusConfig>()),
-        ("login", fields::<LoginConfig>()),
-        ("translation", fields::<TranslationConfig>()),
-        ("limits", fields::<LimitsConfig>()),
-        ("logging", fields::<LoggingConfig>()),
-        ("switching", fields::<SwitchingConfig>()),
-        ("commands", fields::<CommandsConfig>()),
-        ("plugin-messages", fields::<PluginMessagesConfig>()),
-        ("messaging-channel", fields::<MessagingChannelConfig>()),
-        ("bungeecord-channel", fields::<MessagingChannelConfig>()),
-        ("messages", fields::<MessagesConfig>()),
-        ("virtual", fields::<VirtualConfig>()),
-        ("tab", fields::<TabConfig>()),
-        ("pumbox", fields::<PumboxConfig>()),
-        ("managed-servers", fields::<pumbo_servers::Config>()),
-        ("services", fields::<host::ServicesConfig>()),
-        ("permissions", fields::<host::PermissionsConfig>()),
-        ("placeholders", fields::<host::PlaceholdersConfig>()),
-    ]
-}
-
 /// The typed keys of the sections that pass the rest to a module; only for
 /// the hint, the check itself uses what the struct left over.
 pub(crate) const LISTENER: &[&str] = &[
@@ -113,34 +87,35 @@ fn module_keys(section: &str, module: &str) -> Option<&'static [&'static str]> {
     })
 }
 
-/// Keys of `value` (the whole file) that neither the proxy nor the plugin
-/// host reads; `cfg` is the same file, typed.
+/// Keys of `value` (the whole file) that no registered section has; `cfg`
+/// is the same file, typed.
 pub fn unknown(value: &Value, cfg: &Config) -> Vec<Unknown> {
     let mut out = Vec::new();
     let Some(top) = value.as_object() else {
         return out;
     };
-    let plain = plain_sections();
-    let host = fields::<pumbo_host::HostConfig>();
+    let sections = crate::modules::sections();
+    // A translation provider's section is known while the chain names it.
     let chain = &cfg.translation.chain;
-    // Top level: what `Config` left over, minus the host's and the
-    // translation providers' sections.
-    let mut known_top: Vec<String> = top
-        .keys()
-        .filter(|k| !cfg.sections.contains_key(*k))
-        .cloned()
-        .chain(plain.iter().map(|(k, _)| k.to_string()))
-        .chain(host.iter().map(|k| k.to_string()))
+    let mut known_top: Vec<String> = sections
+        .iter()
+        .map(|s| s.key.to_string())
         .chain(chain.iter().cloned())
         .collect();
     known_top.sort();
     known_top.dedup();
+    // Top level: what `Config` left over.
     for k in cfg.sections.keys() {
-        if !host.contains(&k.as_str()) && !chain.contains(k) {
+        if !known_top.contains(k) {
             out.push(Unknown {
                 path: vec![k.as_str().into()],
                 known: known_top.clone(),
             });
+        }
+    }
+    for s in &sections {
+        if let Some(v) = top.get(s.key) {
+            walk(&mut out, vec![s.key.into()], v, &s.schema);
         }
     }
     let mut check = |path: Vec<Seg>, map: Option<&Value>, known: &[&str]| {
@@ -159,21 +134,6 @@ pub fn unknown(value: &Value, cfg: &Config) -> Vec<Unknown> {
             }
         }
     };
-    for (name, known) in &plain {
-        check(vec![(*name).into()], top.get(*name), known);
-    }
-    if let Some(Value::Object(servers)) = top.get("servers") {
-        let known = fields::<crate::config::ServerConfig>();
-        for (name, s) in servers {
-            check(vec!["servers".into(), name.as_str().into()], Some(s), known);
-        }
-    }
-    if let Some(Value::Array(groups)) = top.get("server-group") {
-        let known = fields::<pumbo_host::config::ServerGroup>();
-        for (i, g) in groups.iter().enumerate() {
-            check(vec!["server-group".into(), Seg::Index(i)], Some(g), known);
-        }
-    }
     // Sections that pass their rest to a module: what the struct left over
     // against the module's list.
     let mut rest = |path: Vec<Seg>, typed: &[&str], left: &serde_json::Map<String, Value>, keys| {
@@ -216,6 +176,39 @@ pub fn unknown(value: &Value, cfg: &Config) -> Vec<Unknown> {
         module_keys("storage", &s.backend),
     );
     out
+}
+
+/// The keys of `value` that `schema` does not have: a mapping with
+/// `additionalProperties: false` names its keys, and a schema under
+/// `additionalProperties` or `items` applies to every entry or item.
+fn walk(out: &mut Vec<Unknown>, path: Vec<Seg>, value: &Value, schema: &Value) {
+    let properties = schema.get("properties").and_then(Value::as_object);
+    for (k, v) in value.as_object().into_iter().flatten() {
+        let mut p = path.clone();
+        p.push(k.as_str().into());
+        match (
+            properties.and_then(|ps| ps.get(k)),
+            schema.get("additionalProperties"),
+        ) {
+            (Some(s), _) => walk(out, p, v, s),
+            (None, Some(Value::Bool(false))) => out.push(Unknown {
+                path: p,
+                known: properties
+                    .into_iter()
+                    .flat_map(|ps| ps.keys().cloned())
+                    .collect(),
+            }),
+            (None, Some(entry)) if entry.is_object() => walk(out, p, v, entry),
+            _ => {}
+        }
+    }
+    if let (Some(items), Some(list)) = (schema.get("items"), value.as_array()) {
+        for (i, item) in list.iter().enumerate() {
+            let mut p = path.clone();
+            p.push(Seg::Index(i));
+            walk(out, p, item, items);
+        }
+    }
 }
 
 /// The closest of `known` to `key` when it is a likely typo.
@@ -317,6 +310,7 @@ pub fn line_of(text: &str, path: &[Seg]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pumbo_core::section::fields;
 
     fn path(p: &[&str]) -> Vec<Seg> {
         p.iter()

@@ -556,3 +556,17 @@ fn the_loader_gives_the_host_its_sections() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+/// A typo of a section the file does not have still gets the closest name.
+#[test]
+fn a_typo_of_a_section_the_file_lacks_gets_a_hint() {
+    let text = format!("{SAMPLE}brige:\n  enabled: false\n");
+    let line = text.lines().count() - 1;
+    assert_eq!(
+        Config::parse_checked(&text).unwrap().1.unknown,
+        [(
+            Some(line),
+            "unknown key brige (did you mean bridge?); it is ignored".to_string()
+        )]
+    );
+}
