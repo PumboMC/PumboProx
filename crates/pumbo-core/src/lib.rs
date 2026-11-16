@@ -18,6 +18,7 @@ pub mod permissions;
 pub mod profile;
 pub mod registry;
 pub mod routing;
+pub mod section;
 pub mod storage;
 pub mod translate;
 pub mod yaml;

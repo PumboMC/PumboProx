@@ -8,7 +8,7 @@
 //! `forced-hosts`, `plugins.<id>`, `style`, ...) are never checked, and a
 //! module without a key list here is never flagged.
 
-use serde::de::{self, DeserializeOwned, Deserializer, Visitor};
+use pumbo_core::section::fields;
 use serde_json::Value;
 
 use crate::config::Config;
@@ -61,35 +61,6 @@ impl Unknown {
             .unwrap_or_default();
         format!("unknown key {}{hint}; it is ignored", show(&self.path))
     }
-}
-
-/// The field names a struct's `Deserialize` asks for, renames applied. A
-/// struct with a flattened field asks for a map and gives none.
-fn fields<T: DeserializeOwned>() -> &'static [&'static str] {
-    struct Probe<'a>(&'a mut &'static [&'static str]);
-    impl<'de> Deserializer<'de> for Probe<'_> {
-        type Error = de::value::Error;
-        fn deserialize_any<V: Visitor<'de>>(self, _: V) -> Result<V::Value, Self::Error> {
-            Err(de::Error::custom("not a struct"))
-        }
-        fn deserialize_struct<V: Visitor<'de>>(
-            self,
-            _: &'static str,
-            fields: &'static [&'static str],
-            _: V,
-        ) -> Result<V::Value, Self::Error> {
-            *self.0 = fields;
-            Err(de::Error::custom("fields read"))
-        }
-        serde::forward_to_deserialize_any! {
-            bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
-            bytes byte_buf option unit unit_struct newtype_struct seq tuple
-            tuple_struct map enum identifier ignored_any
-        }
-    }
-    let mut out: &'static [&'static str] = &[];
-    let _ = T::deserialize(Probe(&mut out));
-    out
 }
 
 /// Sections read by a plain struct (no flattened field), by their key.
