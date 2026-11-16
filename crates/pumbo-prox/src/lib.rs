@@ -3,7 +3,6 @@
 //! traits from `pumbo-core`.
 
 pub mod bridge;
-pub mod bungee;
 pub mod commands;
 pub mod config;
 pub mod config_edit;
@@ -12,6 +11,7 @@ pub mod health;
 mod keys;
 pub mod limits;
 pub mod logging;
+pub mod messaging;
 pub mod metrics;
 pub mod migrate;
 pub mod modules;

@@ -40,8 +40,8 @@ use pumbo_protocol::packets::world::{Sound, SoundRef};
 use pumbo_protocol::packets::{self, Ctx, Packet};
 use pumbo_protocol::types::{Reader, WriteExt};
 use pumbo_protocol::{Direction, PacketKind, Phase, VersionModule};
-use pumbo_prox::bungee;
 use pumbo_prox::conn::Conn;
+use pumbo_prox::messaging;
 use pumbo_prox::server::ChatInput;
 use pumbo_testclient::player::saw;
 use pumbo_testclient::{JoinOptions, Player};
@@ -1059,12 +1059,12 @@ async fn messaging_channel_and_client_brand() {
     let mut p = join(addr, "Courier").await;
     // From a client the channel is dropped.
     p.c.send(&ServerboundCustomPayload {
-        channel: bungee::CHANNEL.into(),
-        data: bungee::request(&["Connect", "games"]),
+        channel: messaging::CHANNEL.into(),
+        data: messaging::request(&["Connect", "games"]),
     })
     .await
     .unwrap();
-    let ask = |parts: &[&str]| Ctl::Payload(bungee::CHANNEL, bungee::request(parts));
+    let ask = |parts: &[&str]| Ctl::Payload(messaging::CHANNEL, messaging::request(parts));
     for parts in [
         vec!["GetServers"],
         vec!["GetServer"],
@@ -1077,14 +1077,14 @@ async fn messaging_channel_and_client_brand() {
     }
     assert!(until(&mut p, &lobby, |l| l.payloads.len() >= 5).await);
     let replies = lobby.with(|l| l.payloads.clone());
-    let parse = |i: usize, n: usize| bungee::parse_reply(&replies[i].1, n).unwrap();
-    assert!(replies.iter().all(|(c, _)| c == bungee::CHANNEL));
+    let parse = |i: usize, n: usize| messaging::parse_reply(&replies[i].1, n).unwrap();
+    assert!(replies.iter().all(|(c, _)| c == messaging::CHANNEL));
     assert_eq!(parse(0, 2).0, ["GetServers", "games, lobby"]);
     // The client's own request never reached the backend.
     assert!(
         replies
             .iter()
-            .all(|(_, d)| bungee::parse_reply(d, 1).unwrap().0[0] != "Connect")
+            .all(|(_, d)| messaging::parse_reply(d, 1).unwrap().0[0] != "Connect")
     );
     assert_eq!(parse(1, 2).0, ["GetServer", "lobby"]);
     assert_eq!(

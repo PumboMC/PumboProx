@@ -15,8 +15,8 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tracing::{debug, info, warn};
 
-use crate::bungee;
 use crate::commands::{self, Source};
+use crate::messaging;
 use crate::metrics::{GaugeGuard, Metrics};
 use crate::session::{Fail, ctx, queue_out};
 use crate::status::parse_text;
@@ -334,7 +334,7 @@ impl Play<'_> {
             }
             Some(PacketKind::CustomPayload) => {
                 let p: ServerboundCustomPayload = packets::decode(&f.payload, &sb)?;
-                if bungee::is_channel(&p.channel) {
+                if messaging::is_channel(&p.channel) {
                     Metrics::inc(&self.proxy.metrics.dropped_payloads);
                 } else if p.channel == "minecraft:brand" {
                     self.tracked.brand = Some(f.payload.clone());

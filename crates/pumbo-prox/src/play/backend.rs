@@ -18,9 +18,9 @@ use pumbo_text::Component;
 use tokio::time::Instant;
 use tracing::{debug, info, warn};
 
-use crate::bungee;
 use crate::commands::{self, Source};
 use crate::config::{PacksOnSwitch, split_host_port};
+use crate::messaging;
 use crate::metrics::Metrics;
 use crate::session::{Fail, ctx, forward, queue, queue_out};
 use crate::status::parse_text;
@@ -470,9 +470,9 @@ impl Play<'_> {
             queue_out(&mut self.client, self.module, phase, &p)?;
             return Ok(Step::Drop);
         }
-        if bungee::is_channel(&channel) {
+        if messaging::is_channel(&channel) {
             if phase == Phase::Play {
-                self.bungee(r.rest());
+                self.messaging_channel(r.rest());
             }
             return Ok(Step::Drop);
         }
@@ -492,17 +492,17 @@ impl Play<'_> {
         Ok(Step::Forward)
     }
 
-    fn bungee(&mut self, data: &[u8]) {
+    fn messaging_channel(&mut self, data: &[u8]) {
         let current = self.current();
-        let sender = bungee::Sender {
+        let sender = messaging::Sender {
             id: self.player.profile.id,
             address: self.peer,
             server: current.as_deref(),
         };
-        match bungee::handle(self.proxy, &self.rt, &sender, data) {
-            bungee::Action::Reply(data) => {
+        match messaging::handle(self.proxy, &self.rt, &sender, data) {
+            messaging::Action::Reply(data) => {
                 let p = ServerboundCustomPayload {
-                    channel: bungee::CHANNEL.into(),
+                    channel: messaging::CHANNEL.into(),
                     data,
                 };
                 if let Some(b) = self.backend.as_mut()
@@ -514,15 +514,15 @@ impl Play<'_> {
                         &p,
                     )
                 {
-                    debug!("bungeecord reply: {e:?}");
+                    debug!("messaging channel reply: {e:?}");
                 }
             }
-            bungee::Action::Connect(server) => {
+            messaging::Action::Connect(server) => {
                 if let Err(msg) = self.switch_to(&server, true) {
-                    debug!("bungeecord Connect {server}: {msg}");
+                    debug!("messaging channel Connect {server}: {msg}");
                 }
             }
-            bungee::Action::None => {}
+            messaging::Action::None => {}
         }
     }
 

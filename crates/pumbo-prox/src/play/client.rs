@@ -12,9 +12,9 @@ use pumbo_protocol::{Direction, PacketKind, Phase, RawFrame};
 use tokio::time::Instant;
 use tracing::info;
 
-use crate::bungee;
 use crate::commands::{self, Source};
 use crate::config::SignedChatCancel;
+use crate::messaging;
 use crate::metrics::Metrics;
 use crate::server::{ChatInput, SessionCmd};
 use crate::session::{Fail, ctx, forward, queue, queue_out};
@@ -119,7 +119,7 @@ impl Play<'_> {
             (_, Some(PacketKind::CustomPayload)) => {
                 // Decoding enforces the 32 KiB limit for clients.
                 let p: ServerboundCustomPayload = packets::decode(&f.payload, &sb)?;
-                if bungee::is_channel(&p.channel) || crate::bridge::is_channel(&p.channel) {
+                if messaging::is_channel(&p.channel) || crate::bridge::is_channel(&p.channel) {
                     // A client must not speak for its backend (§2.8) or as
                     // a bridge (PumboBridge spec §6.4).
                     Metrics::inc(&m.dropped_payloads);

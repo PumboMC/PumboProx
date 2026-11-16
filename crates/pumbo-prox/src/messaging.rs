@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::server::{Proxy, Runtime, SessionCmd};
 
 pub const CHANNEL: &str = "bungeecord:main";
-/// Name used before namespaced channels; Paper still maps it.
+/// Name used before namespaced channels; some servers still map it.
 pub const LEGACY_CHANNEL: &str = "BungeeCord";
 
 pub fn is_channel(channel: &str) -> bool {
