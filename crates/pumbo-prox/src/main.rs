@@ -127,10 +127,11 @@ fn describe(args: &[String]) -> ExitCode {
     };
     let result = read(path)
         .and_then(|text| {
-            if let (_, Some(w)) = settle(path, None, &text) {
+            let host = pumbo_host::HostConfig::parse(&text);
+            if let (_, Some(w)) = settle(path, None, host.as_ref().ok()) {
                 eprintln!("{w}");
             }
-            pumbo_host::HostConfig::parse(&text).map_err(|e| format!("{path}: {e}"))
+            host.map_err(|e| format!("{path}: {e}"))
         })
         .and_then(|cfg| block_on(pumbo_host::describe_offline(cfg, id)).and_then(|r| r));
     match result {
@@ -151,10 +152,10 @@ fn describe(args: &[String]) -> ExitCode {
     }
 }
 
-/// Plugin configs against the schemas of their descriptions.
-fn check_plugins(path: &str) -> Result<(), String> {
-    let text = read(path)?;
-    let cfg = pumbo_host::HostConfig::parse(&text).map_err(|e| format!("{path}: {e}"))?;
+/// Plugin configs against the schemas of their descriptions; `path` names
+/// the config file in an error of the host's sections.
+fn check_plugins(path: &str, host: Result<pumbo_host::HostConfig, String>) -> Result<(), String> {
+    let cfg = host.map_err(|e| format!("{path}: {e}"))?;
     if !cfg.plugins.dir.is_dir() {
         return Ok(());
     }
@@ -185,7 +186,7 @@ fn check_config(path: &str) -> ExitCode {
         unknown = loaded.unknown;
         // Warnings of the checks (e.g. a backend outside private networks) go to stderr.
         pumbo_prox::logging::init(&cfg.logging);
-        let (absolute, moved) = settle(path, Some(&cfg), &loaded.text);
+        let (absolute, moved) = settle(path, Some(&cfg), loaded.host.as_ref().ok());
         file = absolute;
         moved
             .iter()
@@ -201,10 +202,10 @@ fn check_config(path: &str) -> ExitCode {
             pumbo_prox::metrics::read_token(&cfg.logging.metrics_token_file)
                 .map_err(|e| format!("logging.metrics-token-file {e}"))?;
         }
-        Runtime::build(cfg, &(String::new(), String::new()))
+        Runtime::build(cfg, &(String::new(), String::new())).map(|rt| (rt, loaded.host))
     });
     match result {
-        Ok(rt) => {
+        Ok((rt, host)) => {
             let cfg = &rt.config;
             for l in &cfg.listener {
                 let pp = match l.proxy_protocol {
@@ -230,7 +231,7 @@ fn check_config(path: &str) -> ExitCode {
                 eprintln!("config error: {u}");
                 code = ExitCode::FAILURE;
             }
-            if let Err(e) = check_plugins(&file) {
+            if let Err(e) = check_plugins(&file, host) {
                 eprintln!("config error: {e}");
                 code = ExitCode::FAILURE;
             }
@@ -346,7 +347,11 @@ fn only_in_cwd(paths: &[(String, PathBuf)], config_dir: &Path, cwd: &Path) -> Ve
 /// a warning, so a secret is never created anew next to the config while
 /// the plugins still come from the old place. Returns the config path as
 /// an absolute path (`reload` opens it again) and the warning.
-fn settle(path: &str, cfg: Option<&Config>, text: &str) -> (String, Option<String>) {
+fn settle(
+    path: &str,
+    cfg: Option<&Config>,
+    host: Option<&pumbo_host::HostConfig>,
+) -> (String, Option<String>) {
     let Ok(absolute) = std::path::absolute(path) else {
         return (path.to_string(), None);
     };
@@ -357,8 +362,7 @@ fn settle(path: &str, cfg: Option<&Config>, text: &str) -> (String, Option<Strin
     if same_dir(dir, &cwd) {
         return (file, None);
     }
-    let host = pumbo_host::HostConfig::parse(text).ok();
-    let stay = only_in_cwd(&relative_paths(cfg, host.as_ref()), dir, &cwd);
+    let stay = only_in_cwd(&relative_paths(cfg, host), dir, &cwd);
     if !stay.is_empty() {
         let w = format!(
             "relative paths are read from the working directory {} because {} {} there and missing or empty next to {file}; move them next to the config",
@@ -410,8 +414,8 @@ fn run(path: &str) -> ExitCode {
         }
     };
     let Loaded {
-        text,
         config: cfg,
+        host,
         unknown,
         warnings,
     } = match load(path) {
@@ -422,7 +426,7 @@ fn run(path: &str) -> ExitCode {
         }
     };
     pumbo_prox::logging::init(&cfg.logging);
-    let (file, moved) = settle(path, Some(&cfg), &text);
+    let (file, moved) = settle(path, Some(&cfg), host.as_ref().ok());
     unknown
         .iter()
         .chain(&warnings)
@@ -461,7 +465,7 @@ fn run(path: &str) -> ExitCode {
         // Before the start, which can take minutes (a server download): `/health` answers meanwhile.
         proxy.start_metrics().await;
         let listeners = tokio::select! {
-            r = start(&proxy, &text) => match r {
+            r = start(&proxy, host) => match r {
                 Some(l) => l,
                 None => return ExitCode::FAILURE,
             },
@@ -603,7 +607,7 @@ async fn console(proxy: std::sync::Arc<Proxy>) {
 /// (logged).
 async fn start(
     proxy: &std::sync::Arc<Proxy>,
-    text: &str,
+    host: Result<pumbo_host::HostConfig, String>,
 ) -> Option<Vec<(Box<dyn Listener>, std::sync::Arc<ListenerSettings>)>> {
     // PumboBridge (before the plugin host: it provides pumbo:bridge).
     let bridge_cfg = proxy.runtime().config.bridge.clone();
@@ -621,7 +625,11 @@ async fn start(
         }
     }
     // Plugin host (E5), from the same file; a missing plugin directory is created.
-    let started = match pumbo_prox::plugins::Plugins::launch(text, proxy, natives).await {
+    let launched = match host {
+        Ok(cfg) => pumbo_prox::plugins::Plugins::launch(cfg, proxy, natives).await,
+        Err(e) => Err(e),
+    };
+    let started = match launched {
         Ok(Some(p)) => {
             let _ = proxy.plugins.set(p.clone());
             p.wait_started().await

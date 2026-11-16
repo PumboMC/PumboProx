@@ -505,10 +505,10 @@ impl Proxy {
             .as_ref()
             .ok_or("no config file to reload")?;
         let loaded = crate::config::load(path)?;
-        let (text, config) = (loaded.text, loaded.config);
+        let config = loaded.config;
         let at = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
         let unresolved = config.check_backend_names().map_err(|e| at(&e))?;
-        let host = pumbo_host::HostConfig::parse(&text).map_err(|e| at(&e))?;
+        let host = loaded.host.map_err(|e| at(&e))?;
         let old = self.runtime();
         let mut restart = restart_needed(&old.config, &config);
         let logging = config.logging.clone();

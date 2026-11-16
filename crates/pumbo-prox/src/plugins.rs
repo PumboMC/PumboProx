@@ -284,29 +284,30 @@ impl Drop for LeftOnCancel {
 }
 
 impl Plugins {
-    /// Starts the host and waits for its plugins to load, creating the plugin
-    /// directory if it is missing (so `prox plugins load` has a place);
-    /// `None` if it cannot be created.
+    /// Starts the host from the text of a whole `pumboprox.yml` and waits for
+    /// its plugins to load, creating the plugin directory if it is missing
+    /// (so `prox plugins load` has a place); `None` if it cannot be created.
     pub async fn start(
         config_text: &str,
         proxy: &Arc<Proxy>,
         natives: Vec<pumbo_host::Native>,
     ) -> Result<Option<Arc<Plugins>>, String> {
-        let Some(plugins) = Self::launch(config_text, proxy, natives).await? else {
+        let cfg = HostConfig::parse(config_text)?;
+        let Some(plugins) = Self::launch(cfg, proxy, natives).await? else {
             return Ok(None);
         };
         plugins.wait_started().await?;
         Ok(Some(plugins))
     }
 
-    /// `start` without the wait: the plugins load in the background, so the
-    /// caller can stop them while they do.
+    /// `start` from the host's sections as the config loader parsed them,
+    /// without the wait: the plugins load in the background, so the caller
+    /// can stop them while they do.
     pub async fn launch(
-        config_text: &str,
+        cfg: HostConfig,
         proxy: &Arc<Proxy>,
         natives: Vec<pumbo_host::Native>,
     ) -> Result<Option<Arc<Plugins>>, String> {
-        let cfg = HostConfig::parse(config_text).map_err(|e| e.to_string())?;
         if let Err(e) = std::fs::create_dir_all(&cfg.plugins.dir) {
             tracing::warn!("{}: {e}", cfg.plugins.dir.display());
             return Ok(None);

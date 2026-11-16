@@ -61,12 +61,15 @@ pub struct Remarks {
 }
 
 /// The config file as the start, `reload` and `check-config` read it: the
-/// text (the plugin host reads its sections from it too), the typed config
-/// and what the owner should hear about the file.
+/// typed config of the proxy and of the plugin host, and what the owner
+/// should hear about the file.
 #[derive(Debug)]
 pub struct Loaded {
-    pub text: String,
     pub config: Config,
+    /// The plugin host's sections, parsed from the same text. An error here
+    /// is reported where they are used: at the start, on `reload` and in
+    /// `check-config`.
+    pub host: Result<pumbo_host::HostConfig, String>,
     /// Keys nothing reads: a warning at start and reload, an error in
     /// `check-config`. Each starts with the file and line.
     pub unknown: Vec<String>,
@@ -74,12 +77,15 @@ pub struct Loaded {
     pub warnings: Vec<String>,
 }
 
-/// Reads and checks the config file; every reader of the file goes through
-/// here, so the proxy and the plugin host see the same text.
+/// Reads and checks the config file for the start, `reload` and
+/// `check-config`, which give the proxy and the plugin host their sections
+/// from this one read; `describe`, `migrate-config` and the config edits of
+/// commands read the file on their own.
 pub fn load(path: &std::path::Path) -> Result<Loaded, String> {
     let text = read(path)?;
     let file = file_label(path);
     let (config, remarks) = Config::parse_checked(&text).map_err(|e| e.in_file(&file))?;
+    let host = pumbo_host::HostConfig::parse(&text);
     let lines = |notes: &Notes| -> Vec<String> {
         notes
             .iter()
@@ -92,8 +98,8 @@ pub fn load(path: &std::path::Path) -> Result<Loaded, String> {
     Ok(Loaded {
         unknown: lines(&remarks.unknown),
         warnings: lines(&remarks.warnings),
-        text,
         config,
+        host,
     })
 }
 

@@ -537,3 +537,22 @@ fn numbers_load_where_text_is_expected() {
     let host = pumbo_host::HostConfig::parse(&text).unwrap();
     assert_eq!(host.placeholders.aliases["rank"], "5");
 }
+
+/// The config loader gives the plugin host its sections from the one read
+/// of the file; an error in them is left for the host to report.
+#[test]
+fn the_loader_gives_the_host_its_sections() {
+    let path = std::env::temp_dir().join(format!("pumbo-loader-host-{}.yml", std::process::id()));
+    std::fs::write(&path, format!("{SAMPLE}plugins:\n  dir: p\n")).unwrap();
+    let loaded = pumbo_prox::config::load(&path).unwrap();
+    assert_eq!(loaded.host.unwrap().plugins.dir, std::path::Path::new("p"));
+    let bad = format!("{SAMPLE}plugins:\n  memory-mb: lots\n");
+    std::fs::write(&path, &bad).unwrap();
+    let loaded = pumbo_prox::config::load(&path).unwrap();
+    assert!(loaded.config.servers.contains_key("lobby"));
+    assert_eq!(
+        loaded.host.unwrap_err(),
+        pumbo_host::HostConfig::parse(&bad).unwrap_err()
+    );
+    let _ = std::fs::remove_file(&path);
+}
