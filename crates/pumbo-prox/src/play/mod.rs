@@ -47,6 +47,10 @@ mod channels;
 mod client;
 mod event_loop;
 mod switching;
+#[cfg(test)]
+mod teleport_tests;
+#[cfg(test)]
+mod test_rig;
 mod virtual_world;
 
 use backend::pumpkin_trail;
