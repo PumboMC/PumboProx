@@ -344,6 +344,77 @@ struct Enter {
     inputs: mpsc::Sender<PlayerInput>,
 }
 
+impl<'a> Play<'a> {
+    /// A new session of `profile` on `client`: in configuration, without a
+    /// server yet.
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        proxy: &'a Arc<Proxy>,
+        rt: &Arc<Runtime>,
+        client: Conn,
+        module: &'a Arc<dyn VersionModule>,
+        profile: GameProfile,
+        cmds: mpsc::Receiver<SessionCmd>,
+        urgent: Arc<Urgent>,
+        peer: SocketAddr,
+        host: &str,
+    ) -> Self {
+        let limits = &rt.config.limits;
+        let now = Instant::now();
+        let commands_changed = proxy.commands_signal(profile.id).unwrap_or_default();
+        Play {
+            proxy,
+            rt: rt.clone(),
+            trail: pumpkin_trail(module.protocol()),
+            module: &**module,
+            module_arc: module.clone(),
+            player: ForwardedPlayer {
+                profile,
+                address: peer.ip(),
+            },
+            peer,
+            host: host.to_string(),
+            client,
+            client_phase: Phase::Configuration,
+            out_phase: Phase::Configuration,
+            backend: None,
+            request: None,
+            next: Next::Idle,
+            ack_deadline: None,
+            reconnect_on_ack: None,
+            epoch: 0,
+            tracked: Tracked::default(),
+            own_keep_alive: None,
+            next_own_keep_alive: now + OWN_KEEP_ALIVE,
+            notices: Vec::new(),
+            deferred: Vec::new(),
+            last_reconnect: None,
+            commands_changed,
+            cmds,
+            urgent,
+            packets: TokenBucket::new(limits.client_packets_per_second),
+            bytes: TokenBucket::new(limits.client_bytes_per_second),
+            decoded: {
+                let rate = f64::from(limits.client_bytes_per_second) * DECODED_PER_CLIENT_BYTE;
+                TokenBucket::with_burst(rate, rate)
+            },
+            suggestions: TokenBucket::new(limits.command_suggestions_per_second),
+            last_client: now,
+            vworld: None,
+            holding: false,
+            gate_deadline: None,
+            in_gate: None,
+            enter_on_ack: None,
+            return_to: None,
+            pumbox: None,
+            pumbox_health: 0,
+            own_keep_alive_at: now,
+            next_tab: now,
+            pending_kick: None,
+        }
+    }
+}
+
 /// Picks a server, logs in there and relays until the session ends.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run(
@@ -359,59 +430,10 @@ pub(crate) async fn run(
 ) {
     let _online = GaugeGuard::new(proxy.metrics.clone(), |m| &m.players_online);
     let _guard = guard;
-    let limits = &rt.config.limits;
-    let now = Instant::now();
-    let commands_changed = proxy.commands_signal(profile.id).unwrap_or_default();
-    let mut play = Play {
-        proxy,
-        rt: rt.clone(),
-        trail: pumpkin_trail(module.protocol()),
-        module: &*module,
-        module_arc: module.clone(),
-        player: ForwardedPlayer {
-            profile,
-            address: peer.ip(),
-        },
-        peer,
-        host: host.to_string(),
-        client,
-        client_phase: Phase::Configuration,
-        out_phase: Phase::Configuration,
-        backend: None,
-        request: None,
-        next: Next::Idle,
-        ack_deadline: None,
-        reconnect_on_ack: None,
-        epoch: 0,
-        tracked: Tracked::default(),
-        own_keep_alive: None,
-        next_own_keep_alive: now + OWN_KEEP_ALIVE,
-        notices: Vec::new(),
-        deferred: Vec::new(),
-        last_reconnect: None,
-        commands_changed,
-        cmds,
-        urgent: _guard.urgent.clone(),
-        packets: TokenBucket::new(limits.client_packets_per_second),
-        bytes: TokenBucket::new(limits.client_bytes_per_second),
-        decoded: {
-            let rate = f64::from(limits.client_bytes_per_second) * DECODED_PER_CLIENT_BYTE;
-            TokenBucket::with_burst(rate, rate)
-        },
-        suggestions: TokenBucket::new(limits.command_suggestions_per_second),
-        last_client: now,
-        vworld: None,
-        holding: false,
-        gate_deadline: None,
-        in_gate: None,
-        enter_on_ack: None,
-        return_to: None,
-        pumbox: None,
-        pumbox_health: 0,
-        own_keep_alive_at: now,
-        next_tab: now,
-        pending_kick: None,
-    };
+    let urgent = _guard.urgent.clone();
+    let mut play = Play::new(
+        proxy, rt, client, &module, profile, cmds, urgent, peer, host,
+    );
     // The client sends its settings and brand with `login_acknowledged`; they
     // wait in the read buffer until it sends more. Read now, so the gates and
     // the first server see them (`player-info.settings`, §5.2).
