@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use pumbo_core::profile::GameProfile;
 use pumbo_protocol::frame::FrameConfig;
+use pumbo_protocol::packets::common::{ClientboundCustomPayload, ServerboundCustomPayload};
 use pumbo_protocol::packets::configuration::FinishConfiguration;
 use pumbo_protocol::packets::play::{ConfigurationAcknowledged, Login};
 use pumbo_protocol::packets::world::{AcceptTeleportation, PlayerPosition};
@@ -348,6 +349,29 @@ pub(super) fn of_kind<'f>(
     frames
         .iter()
         .filter(|f| m.packet_kind(phase, d, f.id) == Some(kind))
+        .collect()
+}
+
+/// Plugin messages among frames sent in `phase` towards `d`: channel, data.
+pub(super) fn messages(
+    m: &dyn VersionModule,
+    phase: Phase,
+    d: Direction,
+    frames: &[RawFrame],
+) -> Vec<(String, Vec<u8>)> {
+    let ctx = Ctx::new(m, d);
+    of_kind(m, phase, d, PacketKind::CustomPayload, frames)
+        .into_iter()
+        .map(|f| match d {
+            Direction::Serverbound => {
+                let p: ServerboundCustomPayload = packets::decode(&f.payload, &ctx).unwrap();
+                (p.channel, p.data)
+            }
+            Direction::Clientbound => {
+                let p: ClientboundCustomPayload = packets::decode(&f.payload, &ctx).unwrap();
+                (p.channel, p.data)
+            }
+        })
         .collect()
 }
 
