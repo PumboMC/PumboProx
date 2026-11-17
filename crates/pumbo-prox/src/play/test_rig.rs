@@ -9,7 +9,7 @@ use std::sync::Arc;
 use pumbo_core::profile::GameProfile;
 use pumbo_protocol::frame::FrameConfig;
 use pumbo_protocol::packets::configuration::FinishConfiguration;
-use pumbo_protocol::packets::play::Login;
+use pumbo_protocol::packets::play::{ConfigurationAcknowledged, Login};
 use pumbo_protocol::packets::world::{AcceptTeleportation, PlayerPosition};
 use pumbo_protocol::packets::{self, Ctx, Packet};
 use pumbo_protocol::{Direction, PacketKind, Phase, ProtocolVersion, RawFrame, VersionModule};
@@ -22,7 +22,7 @@ use crate::config::Config;
 use crate::conn::Conn;
 use crate::server::{PlayerGuard, Proxy, SessionCmd};
 
-use super::{End, Next, Play, Purpose, Request};
+use super::{End, InVirtual, Next, Play, Purpose, Request};
 
 /// Bytes a pipe holds before a write waits for its reader: room for a frame
 /// over the 1 MiB plugin message limit.
@@ -164,6 +164,16 @@ pub(super) fn attach(play: &mut Play<'_>, name: &str) -> Peer {
     server
 }
 
+/// The session switches to `name`: the client leaves its server through
+/// configuration and the new one takes it.
+pub(super) async fn switch(play: &mut Play<'_>, client: &mut Peer, name: &str) -> Peer {
+    let server = ready(play, name, Purpose::Switch { quiet: true });
+    assert!(play.progress().is_ok());
+    from_client(play, client, Phase::Play, &ConfigurationAcknowledged).await;
+    assert!(play.progress().is_ok());
+    server
+}
+
 fn ready(play: &mut Play<'_>, name: &str, purpose: Purpose) -> Peer {
     let (ours, theirs) = tokio::io::duplex(PIPE);
     let conn = Conn::new(
@@ -258,6 +268,13 @@ pub(super) async fn finish_configuration(
     let _ = to_backend(play, server).await;
 }
 
+/// The configuration ends and the server's play `login` reaches the client.
+pub(super) async fn join(play: &mut Play<'_>, client: &mut Peer, server: &mut Peer) {
+    finish_configuration(play, client, server).await;
+    from_backend(play, server, Phase::Play, &login()).await;
+    let _ = to_client(play, client).await;
+}
+
 pub(super) fn login() -> Login {
     Login {
         entity_id: 1,
@@ -301,6 +318,22 @@ pub(super) fn accept(id: i32) -> AcceptTeleportation {
     AcceptTeleportation {
         id,
         at: Some((0.5, 65.0, 0.5, 0.0, 0.0)),
+    }
+}
+
+/// The player in the Pumbox's world, as a virtual world holds it.
+pub(super) fn in_virtual(rig: &Rig) -> InVirtual {
+    let (x, y, z) = crate::world::PUMBOX_SPAWN;
+    InVirtual {
+        player: pumbo_virtual::VirtualPlayer::new(
+            rig.module.clone(),
+            crate::session::to_wire(&rig.profile),
+            crate::world::pumbox_world(),
+            pumbo_virtual::Position::at(x, y, z),
+            Vec::new(),
+        ),
+        tag: 0,
+        inputs: mpsc::channel(1).0,
     }
 }
 
