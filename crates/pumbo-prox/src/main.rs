@@ -24,8 +24,8 @@ usage: pumboprox [command]
                                      file is written with the defaults
   check-config [file]                check the file and the plugin configs
                                      without starting the proxy
-  migrate-config [file]              rename old keys in the file (a copy of
-                                     it stays as <file>.bak)
+  migrate-config [file]              rename or remove old keys in the file
+                                     (a copy of it stays as <file>.bak)
   describe <plugin> [--json] [file]  a plugin's description as JSON
   version, --version, -V             versions of PumboProx and the protocols
   help, --help, -h                   this text
@@ -244,8 +244,8 @@ fn check_config(path: &str) -> ExitCode {
     }
 }
 
-/// `migrate-config [file]`: old keys renamed in the file, a copy of the
-/// old file first (never over an older copy).
+/// `migrate-config [file]`: old keys renamed or removed in the file, a
+/// copy of the old file first (never over an older copy).
 fn migrate_config(path: &str) -> ExitCode {
     let file = std::path::Path::new(path);
     let result = read(path).and_then(|text| {

@@ -77,7 +77,7 @@ pub struct Loaded {
     /// `check-config`. Each starts with the file and line.
     pub unknown: Vec<String>,
     /// Old keys still read or skipped and an empty translation chain
-    /// (`pumboprox migrate-config` renames the old channel key).
+    /// (`pumboprox migrate-config` renames or removes the old keys).
     pub warnings: Vec<String>,
 }
 

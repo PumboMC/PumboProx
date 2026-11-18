@@ -183,14 +183,14 @@ pub(crate) fn split_key(line: &str) -> Option<(String, &str, &str)> {
 }
 
 /// ` # comment` at the end of a value outside quotes, with its spaces.
-fn trailing_comment(rest: &str) -> &str {
+pub(crate) fn trailing_comment(rest: &str) -> &str {
     let mut quote = None;
     let bytes = rest.as_bytes();
     for (i, c) in rest.char_indices() {
         match (quote, c) {
             (None, '"' | '\'') => quote = Some(c),
             (Some(q), c) if c == q => quote = None,
-            (None, '#') if i > 0 && bytes.get(i - 1).is_some_and(|b| *b == b' ') => {
+            (None, '#') if i > 0 && bytes.get(i - 1).is_some_and(|b| matches!(b, b' ' | b'\t')) => {
                 let start = rest[..i].trim_end().len();
                 return rest.get(start..).unwrap_or_default();
             }

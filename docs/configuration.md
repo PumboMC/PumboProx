@@ -14,11 +14,11 @@ Everything the proxy reads from `pumboprox.yml`. The file written on the first s
 
 ## config-version
 
-`config-version: 2` says which version of the file layout the file follows; a file without it is version 1. When a key gets a new name, the proxy still reads the old one and warns with its line, and `pumboprox migrate-config [file]` renames it in the file: comments and layout stay, the file keeps its mode and owner, and the old file is kept as `pumboprox.yml.bak` (or `.bak.1` and up when that exists). Older versions of PumboProx do not start with a file that has `config-version: 2`; to go back to one, restore the `.bak` copy.
+`config-version: 2` says which version of the file layout the file follows; a file without it is version 1. When a key gets a new name, the proxy still reads the old one; a removed key it skips. Either way it warns with the line, and `pumboprox migrate-config [file]` renames or removes the key in the file: comments and layout stay, the file keeps its mode and owner, and the old file is kept as `pumboprox.yml.bak` (or `.bak.1` and up when that exists). Older versions of PumboProx do not start with a file that has `config-version: 2`; to go back to one, restore the `.bak` copy.
 
 | Version | Change |
 | --- | --- |
-| 2 | `bungeecord-channel` is `messaging-channel` |
+| 2 | `bungeecord-channel` is `messaging-channel`; the external translation provider is gone from `translation.chain` and the top level |
 
 Times are in milliseconds unless the key says otherwise (`-secs`, `-seconds`). Texts take `&` colour codes (`&a`, `&#39FF88`) or text tags (`<green>`).
 

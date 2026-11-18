@@ -109,10 +109,13 @@ fn an_old_config_with_the_external_provider_loads_with_warnings() {
                 (
                     Some(at + 2),
                     format!(
-                        "translation.chain: {p} is no longer a provider; it is skipped; remove it"
+                        "translation.chain: {p} is no longer a provider; it is skipped, and `pumboprox migrate-config` removes it"
                     )
                 ),
-                (Some(at + 3), format!("{p} is no longer read; remove it")),
+                (
+                    Some(at + 3),
+                    format!("{p} is no longer read; `pumboprox migrate-config` removes it")
+                ),
             ],
             "{chain}"
         );
