@@ -47,6 +47,8 @@ mod channels;
 mod client;
 mod event_loop;
 #[cfg(test)]
+mod forward_bench;
+#[cfg(test)]
 mod messaging_tests;
 mod switching;
 #[cfg(test)]
