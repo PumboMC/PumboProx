@@ -63,6 +63,7 @@ All notable changes to PumboProx, one section per release. The format follows [K
 - Relative paths in `pumboprox.yml` (secrets, `plugins/`, `servers/`, `versions/`, `permissions.yml`, the server icon) are read next to the config file, wherever the proxy starts. When one of them exists only in the directory the proxy starts in, or next to the config only as an empty folder (the `plugins/` that 0.2.5-beta created there), the proxy keeps reading all of them from there and warns. Docker, which starts in `/data`, is not affected.
 - A `logging.level` that is not a level stops the start (and `reload` keeps the old config) instead of running at `info`; `warning` is read as `warn`, and `info,pumbo_host=debug` still works. Replies to console commands go to stderr directly instead of through the log, so they show at every level and are plain text with `format: json`.
 - The file written on the first start shows the bridge, status, limits and logging settings with their defaults as comments, and has the `bridge` section written out.
+- A top-level section named after a translation provider (`multiversion:`, `passthrough:`) is an unknown key: providers have no settings of their own.
 
 ### Removed
 

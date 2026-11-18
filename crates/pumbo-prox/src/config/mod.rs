@@ -134,7 +134,8 @@ pub fn read(path: &std::path::Path) -> Result<String, String> {
 
 /// The proxy's sections of `pumboprox.yml`. Every field but `check_only`
 /// and `sections` is a section registered in [`sections()`] (`server-group`
-/// by the plugin host): a new field is a new entry there.
+/// by the plugin host, `translation` by the translation module): a new field
+/// is a new entry there.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
@@ -153,7 +154,7 @@ pub struct Config {
     #[serde(default)]
     pub routing: RoutingConfig,
     #[serde(default)]
-    pub translation: TranslationConfig,
+    pub translation: pumbo_translate::TranslationConfig,
     #[serde(default)]
     pub storage: StorageConfig,
     #[serde(default)]
@@ -230,7 +231,6 @@ pub fn sections() -> Vec<SectionInfo> {
             json!({ "type": "object", "additionalProperties": keys_schema::<ServerConfig>() }),
         ),
         section("routing", module(&["selector"])),
-        section("translation", keys_schema::<TranslationConfig>()),
         section("storage", module(&["backend"])),
         section("limits", keys_schema::<LimitsConfig>()),
         section("logging", keys_schema::<LoggingConfig>()),

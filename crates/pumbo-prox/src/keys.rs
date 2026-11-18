@@ -95,13 +95,7 @@ pub fn unknown(value: &Value, cfg: &Config) -> Vec<Unknown> {
         return out;
     };
     let sections = crate::modules::sections();
-    // A translation provider's section is known while the chain names it.
-    let chain = &cfg.translation.chain;
-    let mut known_top: Vec<String> = sections
-        .iter()
-        .map(|s| s.key.to_string())
-        .chain(chain.iter().cloned())
-        .collect();
+    let mut known_top: Vec<String> = sections.iter().map(|s| s.key.to_string()).collect();
     known_top.sort();
     known_top.dedup();
     // Top level: what `Config` left over.

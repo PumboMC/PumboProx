@@ -1862,7 +1862,7 @@ dependencies = [
  "pumbo-protocol",
  "pumbo-testclient",
  "pumbo-translate-mv",
- "serde_json",
+ "serde",
 ]
 
 [[package]]

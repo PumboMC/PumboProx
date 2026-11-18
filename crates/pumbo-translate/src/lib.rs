@@ -6,10 +6,43 @@ pub mod multiversion;
 use std::sync::Arc;
 
 use pumbo_core::registry::{ModuleConfig, ModuleError, ModuleRegistry};
+use pumbo_core::section::{SectionInfo, keys_schema};
 use pumbo_core::translate::{TranslationPlan, TranslatorProvider};
 use pumbo_protocol::ProtocolVersion;
+use serde::Deserialize;
 
 pub const PASSTHROUGH: &str = "passthrough";
+
+/// The `translation` section of `pumboprox.yml`. Providers have no settings
+/// of their own.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TranslationConfig {
+    /// Provider order; the first with a decision wins.
+    #[serde(default = "default_chain")]
+    pub chain: Vec<String>,
+}
+
+fn default_chain() -> Vec<String> {
+    vec![multiversion::MULTIVERSION.into(), PASSTHROUGH.into()]
+}
+
+impl Default for TranslationConfig {
+    fn default() -> Self {
+        Self {
+            chain: default_chain(),
+        }
+    }
+}
+
+/// The section of this module, with the schema of its keys. The proxy
+/// parses it with its own sections (it is a field of the proxy's config), so
+/// for the rules on unknown keys it counts as one of the proxy's.
+pub fn sections() -> Vec<SectionInfo> {
+    vec![SectionInfo {
+        key: "translation",
+        schema: keys_schema::<TranslationConfig>(),
+    }]
+}
 
 /// Equal versions (or the backend not known yet): no translation.
 #[derive(Debug)]
@@ -42,4 +75,25 @@ pub fn register(reg: &mut ModuleRegistry) -> Result<(), ModuleError> {
     reg.translators
         .register(multiversion::MULTIVERSION, multiversion::factory)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumbo_core::section::fields;
+
+    /// The registered section is closed and has the fields of its struct.
+    #[test]
+    fn the_section_has_the_fields_of_its_struct() {
+        let s = sections();
+        assert_eq!(s.iter().map(|s| s.key).collect::<Vec<_>>(), ["translation"]);
+        let keys: Vec<&str> = s[0].schema["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, fields::<TranslationConfig>());
+        assert_eq!(s[0].schema["additionalProperties"], false);
+    }
 }

@@ -76,23 +76,13 @@ pub fn build(reg: &ModuleRegistry, cfg: &Config) -> Result<Modules, ModuleError>
         routing.insert("forced-hosts".into(), forced.into());
     }
     let selector = (reg.selectors.get(&cfg.routing.selector)?)(&routing)?;
+    // Translation providers have no section of their own.
+    let none = ModuleConfig::new();
     let translators = cfg
         .translation
         .chain
         .iter()
-        .map(|name| {
-            let section = match cfg.sections.get(name) {
-                None => ModuleConfig::new(),
-                Some(serde_json::Value::Object(m)) => m.clone(),
-                Some(_) => {
-                    return Err(ModuleError::Config {
-                        name: name.clone(),
-                        message: format!("{name} must be a mapping"),
-                    });
-                }
-            };
-            (reg.translators.get(name)?)(&section)
-        })
+        .map(|name| (reg.translators.get(name)?)(&none))
         .collect::<Result<Vec<_>, _>>()?;
     let store = (reg.stores.get(&cfg.storage.backend)?)(&cfg.storage.rest)?;
     let authenticator =
@@ -114,9 +104,12 @@ pub fn listener_config(l: &crate::config::ListenerConfig) -> ModuleConfig {
 }
 
 /// Every section of `pumboprox.yml` with the schema of its keys: the
-/// proxy's and the plugin host's.
+/// proxy's, the plugin host's and the translation module's. The proxy reads
+/// `translation` itself (a field of [`Config`]), so for the rules on unknown
+/// keys it is one of the proxy's sections.
 pub fn sections() -> Vec<SectionInfo> {
     let mut all = crate::config::sections();
     all.extend(pumbo_host::config::sections());
+    all.extend(pumbo_translate::sections());
     all
 }

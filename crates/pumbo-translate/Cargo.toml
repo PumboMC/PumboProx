@@ -13,7 +13,7 @@ pumbo-core.workspace = true
 pumbo-data.workspace = true
 pumbo-protocol.workspace = true
 pumbo-translate-mv.workspace = true
-serde_json.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
 pumbo-nbt.workspace = true

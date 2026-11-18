@@ -467,25 +467,6 @@ impl Default for RoutingConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct TranslationConfig {
-    /// Provider order; the first with a decision wins.
-    #[serde(default = "default_chain")]
-    pub chain: Vec<String>,
-}
-
-fn default_chain() -> Vec<String> {
-    vec!["multiversion".into(), "passthrough".into()]
-}
-
-impl Default for TranslationConfig {
-    fn default() -> Self {
-        Self {
-            chain: default_chain(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
 pub struct StorageConfig {
     #[serde(default = "default_store")]
     pub backend: String,

@@ -153,3 +153,16 @@ fn a_chain_of_only_the_external_provider_lets_nobody_in() {
     assert_eq!(route(&m, 777, None), "none");
     assert_eq!(route(&m, 777, Some(777)), "none");
 }
+
+/// Providers have no settings: a section named after one is a typo.
+#[test]
+fn a_section_named_after_a_provider_is_unknown() {
+    let text = format!("{PLAIN}multiversion:\n  x: 1\n");
+    let (_, remarks) = Config::parse_checked(&text).unwrap();
+    assert_eq!(remarks.unknown.len(), 1, "{:?}", remarks.unknown);
+    assert!(
+        remarks.unknown[0].1.starts_with("unknown key multiversion"),
+        "{:?}",
+        remarks.unknown
+    );
+}
