@@ -48,6 +48,8 @@ mod client;
 mod event_loop;
 #[cfg(test)]
 mod forward_bench;
+#[cfg(test)]
+mod hook_tests;
 mod hooks;
 #[cfg(test)]
 mod messaging_tests;
