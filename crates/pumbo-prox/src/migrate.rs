@@ -2,12 +2,14 @@
 //! between versions. Every read applies them in memory, with a warning for
 //! each old key; only `pumboprox migrate-config` changes the file.
 //!
-//! Version 2: `bungeecord-channel` is `messaging-channel`.
+//! Version 2: `bungeecord-channel` is `messaging-channel`, and
+//! [`OLD_PROVIDER`] is gone from `translation.chain` and the top level.
 
 use serde_json::Value;
 
 use crate::config::{Config, Notes};
 use crate::config_edit::{indent_of, split_key};
+use crate::keys::{Seg, line_of};
 
 /// The version this build writes and reads.
 pub const CONFIG_VERSION: u64 = 2;
@@ -16,10 +18,20 @@ pub const CONFIG_VERSION: u64 = 2;
 pub(crate) const OLD_CHANNEL: &str = "bungeecord-channel";
 const CHANNEL: &str = "messaging-channel";
 
+/// The translation provider that sent players to an external translation
+/// service: gone from `translation.chain` and the top level since
+/// `config-version` 2.
+pub const OLD_PROVIDER: &str = "viaproxy";
+
 /// The line of a top-level key written in block style.
 fn top_line(text: &str, key: &str) -> Option<usize> {
     text.lines()
         .position(|l| indent_of(l) == 0 && split_key(l).is_some_and(|(k, _, _)| k == key))
+}
+
+/// The line of `translation.chain` in the file.
+fn chain_line(text: &str) -> Option<usize> {
+    line_of(text, &[Seg::from("translation"), Seg::from("chain")])
 }
 
 /// The steps on a freshly read config; `value` and `text` are the same file.
@@ -52,6 +64,22 @@ pub(crate) fn apply(cfg: &mut Config, value: &Value, text: &str) -> Notes {
                 ),
             ));
         }
+    }
+    let chain = &mut cfg.translation.chain;
+    if chain.iter().any(|p| p == OLD_PROVIDER) {
+        chain.retain(|p| p != OLD_PROVIDER);
+        notes.push((
+            chain_line(text),
+            format!(
+                "translation.chain: {OLD_PROVIDER} is no longer a provider; it is skipped; remove it"
+            ),
+        ));
+    }
+    if cfg.sections.remove(OLD_PROVIDER).is_some() {
+        notes.push((
+            line(OLD_PROVIDER),
+            format!("{OLD_PROVIDER} is no longer read; remove it"),
+        ));
     }
     notes
 }

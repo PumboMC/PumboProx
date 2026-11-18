@@ -58,7 +58,8 @@ pub type Notes = Vec<(Option<usize>, String)>;
 pub struct Remarks {
     /// Keys nothing reads.
     pub unknown: Notes,
-    /// Old keys still read, a newer `config-version`.
+    /// Old keys still read or skipped, a newer `config-version`, an empty
+    /// translation chain.
     pub warnings: Notes,
 }
 
@@ -75,7 +76,8 @@ pub struct Loaded {
     /// Keys nothing reads: a warning at start and reload, an error in
     /// `check-config`. Each starts with the file and line.
     pub unknown: Vec<String>,
-    /// Old keys still read (`pumboprox migrate-config` renames them).
+    /// Old keys still read or skipped and an empty translation chain
+    /// (`pumboprox migrate-config` renames the old channel key).
     pub warnings: Vec<String>,
 }
 
@@ -265,7 +267,13 @@ impl Config {
         let mut cfg: Config = pumbo_core::yaml::from_str(text).map_err(ConfigError::Yaml)?;
         let value: serde_json::Value =
             pumbo_core::yaml::from_str(text).map_err(ConfigError::Yaml)?;
-        let warnings = crate::migrate::apply(&mut cfg, &value, text);
+        let mut warnings = crate::migrate::apply(&mut cfg, &value, text);
+        if cfg.translation.chain.is_empty() {
+            warnings.push((
+                crate::keys::line_of(text, &["translation".into(), "chain".into()]),
+                "translation.chain is empty, so no player can join: add passthrough".into(),
+            ));
+        }
         cfg.validate().map_err(|e| match e {
             ConfigError::Key { key, message } => match crate::keys::line_of(text, &key) {
                 Some(line) => ConfigError::At { line, message },

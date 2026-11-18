@@ -64,6 +64,10 @@ All notable changes to PumboProx, one section per release. The format follows [K
 - A `logging.level` that is not a level stops the start (and `reload` keeps the old config) instead of running at `info`; `warning` is read as `warn`, and `info,pumbo_host=debug` still works. Replies to console commands go to stderr directly instead of through the log, so they show at every level and are plain text with `format: json`.
 - The file written on the first start shows the bridge, status, limits and logging settings with their defaults as comments, and has the `bridge` section written out.
 
+### Removed
+
+- The translation provider that sent players to an external translation service. It never let anyone in: every player it picked was refused. The default `translation.chain` is `[multiversion, passthrough]`. A config that still names the provider in `translation.chain` or has its section loads with a warning for each, with the line. Where the provider stood before `multiversion` in the chain, or its `min-native-protocol` was above 767, the players it refused now join: translated on a 26.3 server or on a server of their own version.
+
 ### Fixed
 
 - `reload`, `/prox op`, `/prox route` changes and the server list updates of servers run by the proxy happen one at a time, so two changes at once no longer lose one of them. `pumboprox.yml` is written through a new temporary file that is never more open than the old one and is synced to disk before it replaces it.

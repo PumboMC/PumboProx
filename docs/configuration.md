@@ -136,15 +136,7 @@ forced-hosts:
 
 | Key | Default | Description | Applies |
 | --- | --- | --- | --- |
-| `chain` | `[multiversion, viaproxy, passthrough]` | Translation providers in order; the first one with a decision for a client and a server wins. `multiversion`: clients from 1.21 on a 26.3 server, inside the proxy. `passthrough`: the client and the server speak the same version | reload |
-
-A provider named in `chain` reads its options from a top-level section of the same name. The `viaproxy` provider sends clients to an external translation service:
-
-| Key (section `viaproxy`) | Default | Description | Applies |
-| --- | --- | --- | --- |
-| `address` | `127.0.0.1:25568` | `ip:port` of the service | reload |
-| `route` | `backend-mismatch` | `below-native`: only clients older than `min-native-protocol`. `backend-mismatch`: also clients whose version the chosen server does not speak | reload |
-| `min-native-protocol` | `767` | Oldest protocol the proxy serves itself | reload |
+| `chain` | `[multiversion, passthrough]` | Translation providers in order; the first one with a decision for a client and a server wins. `multiversion`: clients from 1.21 on a 26.3 server, inside the proxy. `passthrough`: the client and the server speak the same version | reload |
 
 ## storage
 

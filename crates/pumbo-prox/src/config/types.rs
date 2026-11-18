@@ -474,11 +474,7 @@ pub struct TranslationConfig {
 }
 
 fn default_chain() -> Vec<String> {
-    vec![
-        "multiversion".into(),
-        "viaproxy".into(),
-        "passthrough".into(),
-    ]
+    vec!["multiversion".into(), "passthrough".into()]
 }
 
 impl Default for TranslationConfig {

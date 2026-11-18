@@ -1,10 +1,16 @@
 //! The translation chain the config builds: which pairs of client and
 //! server versions it passes through, translates or refuses.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 use pumbo_core::translate::TranslationPlan;
 use pumbo_protocol::ProtocolVersion;
 use pumbo_prox::config::Config;
+use pumbo_prox::migrate::OLD_PROVIDER;
 use pumbo_prox::modules::{self, Modules};
 
 /// A config without a `translation` section: the default chain.
@@ -62,4 +68,85 @@ fn a_typo_in_the_translation_section_is_named() {
             "unknown key translation.chains (did you mean chain?); it is ignored".to_string()
         )]
     );
+}
+
+fn names(m: &Modules) -> Vec<&str> {
+    m.translators.iter().map(|t| t.name()).collect()
+}
+
+#[test]
+fn the_default_chain_is_multiversion_then_passthrough() {
+    // A client older than every table passes the chain, as no provider
+    // refuses it any more; the login turns it away for want of a version.
+    let m = build(PLAIN);
+    assert_eq!(route(&m, 766, None), "same");
+    assert_eq!(route(&m, 766, Some(766)), "same");
+    assert_eq!(names(&build(PLAIN)), ["multiversion", "passthrough"]);
+}
+
+/// The keys of the first-start file of 25e6a3f, with the old default chain
+/// written out and the old provider's section.
+#[test]
+fn an_old_config_with_the_external_provider_loads_with_warnings() {
+    let p = OLD_PROVIDER;
+    let old = "listener:\n  - bind: \"127.0.0.1:0\"\nlogin:\n  online-mode: true\nservers: {}\n\
+               managed-servers:\n  enabled: true\n  download-from-game: true\nforwarding:\n  mode: modern\n  \
+               secret-file: forwarding.secret\nplugins:\n  dir: plugins\npumbox:\n  enabled: true\n\
+               commands:\n  operators: []\n";
+    let at = old.lines().count();
+    for chain in [
+        format!("[multiversion, {p}, passthrough]"),
+        format!("[{p}, multiversion, passthrough]"),
+    ] {
+        let text = format!(
+            "{old}translation:\n  chain: {chain}\n{p}:\n  address: \"127.0.0.1:25568\"\n  route: backend-mismatch\n  min-native-protocol: 767\n"
+        );
+        let (mut cfg, remarks) = Config::parse_checked(&text).unwrap();
+        assert_eq!(remarks.unknown, [], "{chain}");
+        assert_eq!(
+            remarks.warnings,
+            [
+                (
+                    Some(at + 2),
+                    format!(
+                        "translation.chain: {p} is no longer a provider; it is skipped; remove it"
+                    )
+                ),
+                (Some(at + 3), format!("{p} is no longer read; remove it")),
+            ],
+            "{chain}"
+        );
+        assert_eq!(cfg.translation.chain, ["multiversion", "passthrough"]);
+        // As check-config builds them: no forwarding secret is created.
+        cfg.check_only = true;
+        let m = modules::build(&modules::builtin().unwrap(), &cfg).unwrap();
+        assert_eq!(names(&m), ["multiversion", "passthrough"]);
+    }
+}
+
+#[test]
+fn a_chain_of_only_the_external_provider_lets_nobody_in() {
+    let text = format!("{PLAIN}translation:\n  chain: [{OLD_PROVIDER}]\n");
+    let (cfg, remarks) = Config::parse_checked(&text).unwrap();
+    assert!(cfg.translation.chain.is_empty());
+    let empty = (
+        Some(text.lines().count()),
+        "translation.chain is empty, so no player can join: add passthrough".to_string(),
+    );
+    assert_eq!(remarks.warnings.len(), 2, "{:?}", remarks.warnings);
+    assert!(
+        remarks.warnings[0].1.starts_with(&format!(
+            "translation.chain: {OLD_PROVIDER} is no longer a provider"
+        )),
+        "{:?}",
+        remarks.warnings
+    );
+    assert_eq!(remarks.warnings[1], empty);
+    // An empty chain written as such gets the same warning.
+    let (_, remarks) =
+        Config::parse_checked(&format!("{PLAIN}translation:\n  chain: []\n")).unwrap();
+    assert_eq!(remarks.warnings, [empty]);
+    let m = modules::build(&modules::builtin().unwrap(), &cfg).unwrap();
+    assert_eq!(route(&m, 777, None), "none");
+    assert_eq!(route(&m, 777, Some(777)), "none");
 }
