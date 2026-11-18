@@ -9,3 +9,123 @@ fn release_ranges() {
     );
     assert_eq!(releases(&[]), "?");
 }
+
+fn v(protocols: &[i32]) -> Vec<ProtocolVersion> {
+    protocols.iter().copied().map(ProtocolVersion).collect()
+}
+
+fn parse(items: &[&str]) -> ClientVersions {
+    let items: Vec<String> = items.iter().map(|s| s.to_string()).collect();
+    ClientVersions::parse(&items).unwrap()
+}
+
+#[test]
+fn releases_and_ranges_let_in_their_protocols() {
+    let all: Vec<ProtocolVersion> = pumbo_data::protocols().collect();
+    assert_eq!(parse(&["all"]).protocols(), all);
+    assert_eq!(parse(&["All"]).protocols(), all);
+    assert_eq!(ClientVersions::default().protocols(), all);
+    assert_eq!(parse(&["1.21.4", "26.3"]).protocols(), v(&[769, 777]));
+    // 1.21.7 and 1.21.8 share a protocol.
+    assert_eq!(parse(&["1.21.7"]).protocols(), v(&[772]));
+    assert_eq!(parse(&["26.1-26.1.2"]).protocols(), v(&[775]));
+    // As `messages.no-server-for-version` writes a range.
+    assert_eq!(parse(&["26.1–26.1.2"]).protocols(), v(&[775]));
+    assert_eq!(parse(&["1.21.8-1.21.9"]).protocols(), v(&[772, 773]));
+    // Numbers, not text: 1.21.10 comes after 1.21.9.
+    assert_eq!(parse(&["1.21.9-1.21.10"]).protocols(), v(&[773]));
+    assert_eq!(
+        parse(&["1.21.4 - 1.21.6", "1.21.5", "26.3"]).protocols(),
+        v(&[769, 770, 771, 777])
+    );
+    let mut c = parse(&["1.21.4", "26.3"]);
+    assert!(c.admits(ProtocolVersion(769)) && !c.admits(ProtocolVersion(770)));
+    assert_eq!(c.newest(), ProtocolVersion(777));
+    assert!(c.take_notes().is_empty());
+}
+
+/// What this build does not know is left out or cut with a note, so a list
+/// written for a newer build still loads.
+#[test]
+fn unknown_releases_are_left_out_with_a_note() {
+    let mut c = parse(&[
+        "26.3",
+        "1.21.12",
+        "777",
+        "1.21.4-26.4",
+        "26.3-1.21.4",
+        "1.8-1.12",
+    ]);
+    assert_eq!(
+        c.protocols(),
+        v(&[769, 770, 771, 772, 773, 774, 775, 776, 777])
+    );
+    assert_eq!(
+        c.take_notes(),
+        [
+            "versions.clients: unknown Minecraft release 1.21.12, left out; this build knows 1.21 to 26.3 (pumboprox version lists every release)",
+            "versions.clients: 777 is a protocol number, left out; write the release name (26.3)",
+            "versions.clients: this build does not know 26.4, so 1.21.4-26.4 lets in 1.21.4 to 26.3",
+            "versions.clients: 26.3-1.21.4 runs from a newer release to an older one, left out; write 1.21.4-26.3",
+            "versions.clients: 1.8-1.12 lets in no release this build knows, left out",
+        ]
+    );
+    assert!(c.take_notes().is_empty());
+}
+
+#[test]
+fn an_empty_list_or_one_without_a_known_release_is_an_error() {
+    let err = |items: &[&str]| {
+        let items: Vec<String> = items.iter().map(|s| s.to_string()).collect();
+        ClientVersions::parse(&items).unwrap_err()
+    };
+    assert_eq!(
+        err(&[]),
+        "versions.clients is empty: no player could join; write all or name releases"
+    );
+    assert_eq!(
+        err(&["26.4", "777x"]),
+        "versions.clients names no release this build knows (1.21 to 26.3): no player could join"
+    );
+}
+
+/// Elements are read as written, also unquoted; a bare number is refused.
+#[test]
+fn yaml_elements_are_text() {
+    let read = |text: &str| pumbo_core::yaml::from_str::<ClientVersions>(text);
+    assert_eq!(read("[26.2, 26.3]").unwrap().protocols(), v(&[776, 777]));
+    assert_eq!(read("1.21.4-26.3").unwrap().protocols().len(), 9);
+    let mut c = read("[26.3, 26.10]").unwrap();
+    assert_eq!(c.protocols(), v(&[777]));
+    let notes = c.take_notes();
+    assert!(
+        notes[0].contains("unknown Minecraft release 26.10,"),
+        "{notes:?}"
+    );
+    let e = read("26.3").unwrap_err();
+    assert!(e.contains("expected all, a release in quotes"), "{e}");
+}
+
+#[test]
+fn names_come_in_runs() {
+    let all: Vec<ProtocolVersion> = pumbo_data::protocols().collect();
+    assert_eq!(names(&all, " to "), "1.21 to 26.3");
+    assert_eq!(names(&all, "-"), "1.21-26.3");
+    assert_eq!(
+        names(&v(&[769, 770, 771, 777]), " to "),
+        "1.21.4 to 1.21.6, 26.3"
+    );
+    assert_eq!(names(&v(&[775]), " to "), "26.1 to 26.1.2");
+    assert_eq!(names(&v(&[777]), " to "), "26.3");
+    assert_eq!(names(&v(&[767, 777]), "-"), "1.21-1.21.1, 26.3");
+}
+
+/// Ranges split at the first `-`: no release name of this build has one.
+#[test]
+fn no_release_name_has_a_dash() {
+    for p in pumbo_data::protocols() {
+        for r in pumbo_data::releases(p) {
+            assert!(!r.contains('-'), "{p}: {r}");
+        }
+    }
+}
