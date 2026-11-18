@@ -12,6 +12,7 @@
 //!   the core has none of their logic.
 
 pub mod forwarding;
+pub mod hook;
 pub mod identity;
 pub mod listener;
 pub mod permissions;
