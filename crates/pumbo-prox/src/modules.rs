@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use pumbo_core::forwarding::ForwardingMode;
+use pumbo_core::hook::{SessionHook, SessionHookFactory, SessionInfo};
 use pumbo_core::identity::Authenticator;
 use pumbo_core::registry::{ModuleConfig, ModuleError, ModuleRegistry};
 use pumbo_core::routing::BackendSelector;
@@ -12,6 +13,7 @@ use pumbo_core::translate::TranslatorProvider;
 use pumbo_protocol::VersionRegistry;
 
 use crate::config::Config;
+use crate::server::Proxy;
 
 /// Registry with every module compiled into the binary. A new module (e.g. a
 /// Bedrock listener, another forwarding mode) is a new crate and one line here.
@@ -24,6 +26,13 @@ pub fn builtin() -> Result<ModuleRegistry, ModuleError> {
     pumbo_store::register(&mut reg)?;
     pumbo_identity::register(&mut reg)?;
     Ok(reg)
+}
+
+/// The session hooks of the built-in modules, in calling order; a new hook
+/// is one line here.
+pub(crate) fn session_hooks(proxy: &Arc<Proxy>, s: &SessionInfo<'_>) -> Vec<Box<dyn SessionHook>> {
+    let factories: [&dyn SessionHookFactory; 1] = [&crate::bridge::gate::Factory(proxy)];
+    factories.iter().filter_map(|f| f.for_session(s)).collect()
 }
 
 /// Supported protocol versions: one module per generated table set

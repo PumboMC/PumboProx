@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
+use pumbo_core::hook::SessionInfo;
 use pumbo_core::profile::{ForwardedPlayer, GameProfile};
 use pumbo_core::routing::SelectReason;
 use pumbo_protocol::packets::commands::{
@@ -376,16 +377,22 @@ impl<'a> Play<'a> {
         let limits = &rt.config.limits;
         let now = Instant::now();
         let commands_changed = proxy.commands_signal(profile.id).unwrap_or_default();
+        let player = ForwardedPlayer {
+            profile,
+            address: peer.ip(),
+        };
+        let info = SessionInfo {
+            player: &player,
+            peer,
+        };
+        let hooks = Hooks::new(crate::modules::session_hooks(proxy, &info));
         Play {
             proxy,
             rt: rt.clone(),
             trail: pumpkin_trail(module.protocol()),
             module: &**module,
             module_arc: module.clone(),
-            player: ForwardedPlayer {
-                profile,
-                address: peer.ip(),
-            },
+            player,
             peer,
             host: host.to_string(),
             client,
@@ -425,7 +432,7 @@ impl<'a> Play<'a> {
             own_keep_alive_at: now,
             next_tab: now,
             pending_kick: None,
-            hooks: Hooks::new(Vec::new()),
+            hooks,
         }
     }
 }

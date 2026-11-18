@@ -162,16 +162,6 @@ impl Play<'_> {
                 }
                 Step::Drop
             }
-            (Phase::Play, Some(PacketKind::PlayerPosition)) => {
-                // A teleport the client must confirm: PumboBridge holds the
-                // next one until then ("Wrong teleport id" otherwise).
-                let p: pumbo_protocol::packets::world::PlayerPosition =
-                    packets::decode(&f.payload, &cb)?;
-                if let Some(g) = self.proxy.teleport_gate(self.player.profile.id) {
-                    g.send_replace(crate::bridge::Tp::Awaiting(p.teleport_id));
-                }
-                Step::Forward
-            }
             (Phase::Play, Some(PacketKind::Commands)) => {
                 if let Some(b) = self.backend.as_mut() {
                     b.tree = Some(f.clone());
@@ -600,11 +590,8 @@ impl Play<'_> {
         b.joined = true;
         let server = b.name.clone();
         let player = self.player.profile.name.clone();
-        // The spawn teleport is due; set before the server changes, so
-        // PumboBridge's `send-to` never sees the new server with a free gate.
-        if let Some(g) = self.proxy.teleport_gate(self.player.profile.id) {
-            g.send_replace(crate::bridge::Tp::Sent(Instant::now()));
-        }
+        // Before the server changes: PumboBridge's `send-to` must never see
+        // the new server with a free teleport gate.
         self.joined_hooks();
         self.proxy.set_server(self.player.profile.id, Some(&server));
         if login.enforces_secure_chat && self.proxy.first_report("secure_chat", &server) {

@@ -33,6 +33,7 @@ use uuid::Uuid;
 use crate::server::Proxy;
 
 mod admin;
+pub(crate) mod gate;
 mod pairing;
 mod perms;
 mod service;

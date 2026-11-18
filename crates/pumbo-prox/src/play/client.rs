@@ -9,7 +9,6 @@ use pumbo_protocol::packets::play::{
     Suggestion,
 };
 use pumbo_protocol::{Direction, PacketKind, Phase, RawFrame};
-use tokio::time::Instant;
 use tracing::info;
 
 use crate::commands::{self, Source};
@@ -136,20 +135,6 @@ impl Play<'_> {
                         .await
                 {
                     return Ok(Step::Drop);
-                }
-                Step::Forward
-            }
-            (Phase::Play, Some(PacketKind::AcceptTeleportation)) => {
-                let a: pumbo_protocol::packets::world::AcceptTeleportation =
-                    packets::decode(&f.payload, &sb)?;
-                if let Some(g) = self.proxy.teleport_gate(self.player.profile.id) {
-                    g.send_if_modified(|t| {
-                        let done = *t == crate::bridge::Tp::Awaiting(a.id);
-                        if done {
-                            *t = crate::bridge::Tp::Confirmed(Instant::now());
-                        }
-                        done
-                    });
                 }
                 Step::Forward
             }
