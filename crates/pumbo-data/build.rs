@@ -49,6 +49,13 @@ fn main() {
         } else {
             "None".into()
         };
+        // The release names, so they are known without parsing the tables.
+        let releases: Vec<String> = std::fs::read_to_string(dir.join("meta.txt"))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| l.strip_prefix("release ")?.split_whitespace().next())
+            .map(str::to_string)
+            .collect();
         let full_path = full_root.join(p.to_string()).join("registries-full.rec");
         println!("cargo:rerun-if-changed={}", full_path.display());
         let full = if full_path.is_file() {
@@ -61,7 +68,7 @@ fn main() {
         };
         let _ = writeln!(
             out,
-            "    Embedded {{ protocol: {p}, meta: {}, packets: {}, registries: {}, blocks: {}, synced: {synced}, full: {full} }},",
+            "    Embedded {{ protocol: {p}, releases: &{releases:?}, meta: {}, packets: {}, registries: {}, blocks: {}, synced: {synced}, full: {full} }},",
             file("meta.txt"),
             file("packets.txt"),
             file("registries.txt"),

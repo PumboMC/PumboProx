@@ -68,6 +68,8 @@ pub enum DataError {
 
 pub(crate) struct Embedded {
     pub protocol: i32,
+    /// The release names from `meta.txt`, oldest first, read at build time.
+    pub releases: &'static [&'static str],
     pub meta: &'static str,
     pub packets: &'static str,
     pub registries: &'static str,
@@ -84,6 +86,15 @@ include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
 /// Protocols with embedded tables, oldest first.
 pub fn protocols() -> impl Iterator<Item = ProtocolVersion> {
     EMBEDDED.iter().map(|e| ProtocolVersion(e.protocol))
+}
+
+/// The releases with an embedded protocol, oldest first, without parsing its
+/// tables; empty for a protocol this build does not have.
+pub fn releases(v: ProtocolVersion) -> &'static [&'static str] {
+    EMBEDDED
+        .iter()
+        .find(|e| e.protocol == v.0)
+        .map_or(&[], |e| e.releases)
 }
 
 /// Tables of one protocol, parsed on first use.
