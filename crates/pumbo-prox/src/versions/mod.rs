@@ -103,6 +103,57 @@ fn unsupported(rt: &Runtime, protocol: ProtocolVersion) -> Fail {
     Fail::Kick(Box::new(Component::text(text)))
 }
 
+/// What `check-config` prints about client versions: the listed ones and,
+/// for each server, which of them reach it, directly or translated.
+pub fn ways(rt: &Runtime) -> Vec<String> {
+    let clients = &rt.config.versions.clients;
+    let mut lines = vec![format!("clients: {}", clients.names(" to "))];
+    for b in &rt.backends {
+        let reach: Vec<ProtocolVersion> = clients
+            .protocols()
+            .iter()
+            .copied()
+            .filter(|c| reaches(rt, *c, b))
+            .collect();
+        let reach = if reach.is_empty() {
+            "none".to_string()
+        } else {
+            names(&reach, " to ")
+        };
+        lines.push(format!("  {} ({}): {reach}", b.name, server_version(b)));
+    }
+    lines
+}
+
+/// When the network has servers and no listed version reaches any of them,
+/// so every player is refused: a warning at start and `reload`, an error in
+/// `check-config`.
+pub fn unreachable(rt: &Runtime) -> Option<String> {
+    let clients = &rt.config.versions.clients;
+    // Newest first: a server of the newest version needs no translation.
+    if rt.backends.is_empty() || clients.protocols().iter().rev().any(|c| has_way(rt, *c)) {
+        return None;
+    }
+    let servers: Vec<String> = rt
+        .backends
+        .iter()
+        .map(|b| format!("{} {}", b.name, server_version(b)))
+        .collect();
+    Some(format!(
+        "versions.clients: no listed version reaches any server ({}); every player is refused",
+        servers.join(", ")
+    ))
+}
+
+/// A server's version for messages.
+fn server_version(b: &BackendInfo) -> String {
+    match b.protocol {
+        None => "any version".into(),
+        Some(p) if pumbo_data::releases(p).is_empty() => format!("protocol {p}"),
+        Some(p) => names(&[p], " to "),
+    }
+}
+
 /// `messages.no-server-for-version` for a client no server takes: its
 /// release and the releases of the servers that `versions.clients` lets in.
 pub(crate) fn no_way_text(proxy: &Proxy, rt: &Runtime, client: &dyn VersionModule) -> Component {

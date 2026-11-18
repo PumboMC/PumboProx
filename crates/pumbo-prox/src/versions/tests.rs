@@ -183,3 +183,30 @@ fn a_server_off_the_list_keeps_its_version() {
             .is_some()
     );
 }
+
+#[test]
+fn unreachable_only_when_no_listed_version_reaches_a_server() {
+    use crate::config::Config;
+    use crate::server::Runtime;
+    let rt = |servers: &str| {
+        let text = format!(
+            "forwarding:\n  mode: none\nversions:\n  clients: [\"26.3\"]\nservers: {servers}\n"
+        );
+        Runtime::build(Config::parse(&text).unwrap()).unwrap()
+    };
+    assert_eq!(
+        unreachable(&rt("{ old: { address: \"127.0.0.1:2\", protocol: 776 } }")).as_deref(),
+        Some(
+            "versions.clients: no listed version reaches any server (old 26.2); every player is refused"
+        )
+    );
+    assert_eq!(
+        unreachable(&rt("{ new: { address: \"127.0.0.1:2\", protocol: 777 } }")),
+        None
+    );
+    assert_eq!(
+        unreachable(&rt("{ any: { address: \"127.0.0.1:2\" } }")),
+        None
+    );
+    assert_eq!(unreachable(&rt("{}")), None);
+}

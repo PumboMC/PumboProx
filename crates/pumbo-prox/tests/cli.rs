@@ -483,3 +483,74 @@ fn a_bad_plugin_host_section_is_an_error_everywhere() {
         "the bridge comes first: {err}"
     );
 }
+
+/// A config file in a fresh directory of this test.
+fn config_file(tag: &str, text: &str) -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("pumbo-cli-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("pumboprox.yml");
+    std::fs::write(&file, text).unwrap();
+    file
+}
+
+#[test]
+fn check_config_shows_the_versions_each_server_takes() {
+    let file = config_file(
+        "ways",
+        &small_config(
+            "versions:\n  clients: [\"1.21.4\", \"26.3\"]\nservers:\n\
+             \x20 lobby: { address: \"127.0.0.1:1\", protocol: 777 }\n\
+             \x20 old: { address: \"127.0.0.1:2\", protocol: 776 }\n\
+             \x20 any: { address: \"127.0.0.1:3\" }\n",
+        ),
+    );
+    let out = pumboprox(&["check-config", file.to_str().unwrap()]);
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        out.status.success(),
+        "{text}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // The 1.21.4 client reaches 26.3 only through the translation.
+    let lobby = if cfg!(feature = "translate") {
+        "  lobby (26.3): 1.21.4, 26.3\n"
+    } else {
+        "  lobby (26.3): 26.3\n"
+    };
+    let want = format!(
+        "clients: 1.21.4, 26.3\n  any (any version): 1.21.4, 26.3\n{lobby}  old (26.2): none\n"
+    );
+    assert!(text.contains(&want), "{text}");
+    // Only a running proxy knows the servers of `managed-servers`.
+    let unchecked = "(servers of managed-servers are not checked here)";
+    assert!(!text.contains(unchecked), "{text}");
+    let on = std::fs::read_to_string(&file).unwrap().replace(
+        "managed-servers:\n  enabled: false",
+        "managed-servers:\n  enabled: true",
+    );
+    let file = config_file("ways-managed", &on);
+    let out = pumboprox(&["check-config", file.to_str().unwrap()]);
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains(&want) && text.contains(unchecked), "{text}");
+}
+
+#[test]
+fn check_config_fails_when_no_listed_version_reaches_a_server() {
+    let file = config_file(
+        "unreachable",
+        &small_config(
+            "versions:\n  clients: [\"26.3\"]\nservers:\n\
+             \x20 old: { address: \"127.0.0.1:2\", protocol: 776 }\n",
+        ),
+    );
+    let out = pumboprox(&["check-config", file.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        err.contains(
+            "config error: versions.clients: no listed version reaches any server (old 26.2); every player is refused"
+        ),
+        "{err}"
+    );
+}

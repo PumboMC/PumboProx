@@ -502,12 +502,14 @@ impl Proxy {
             p.host.reload_permissions()?;
             p.host.set_required_gates(host.plugins.required_gates);
         }
+        let unreachable = crate::versions::unreachable(&runtime);
         self.commit(runtime);
         for w in loaded
             .unknown
             .iter()
             .chain(&loaded.warnings)
             .chain(&unresolved)
+            .chain(&unreachable)
         {
             warn!("{w}");
         }
@@ -541,6 +543,13 @@ impl Proxy {
     /// letter case).
     fn replace(&self, config: Config) -> Result<(), String> {
         let runtime = self.prepare(config)?;
+        // A server of the proxy can be the one that leaves no listed version
+        // a way: said when it happens, not at every later change.
+        if let Some(w) = crate::versions::unreachable(&runtime)
+            && crate::versions::unreachable(&self.runtime()).is_none()
+        {
+            warn!("{w}");
+        }
         self.commit(runtime);
         Ok(())
     }
@@ -1052,6 +1061,43 @@ mod tests {
         drop(held);
         assert!(ran, "the only worker is stuck waiting for the lock");
         rt.block_on(refresh).unwrap().unwrap();
+    }
+
+    /// A new list of the proxy's own servers that no listed version reaches
+    /// warns when that happens, not at every later change of the list.
+    #[test]
+    fn a_server_list_no_listed_version_reaches_warns_once() {
+        #[derive(Clone, Default)]
+        struct Log(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Log {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let log = Log::default();
+        let out = log.clone();
+        let sub = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || out.clone())
+            .finish();
+        let _logs = tracing::subscriber::set_default(sub);
+        let cfg = |servers: &str| {
+            Config::parse(&format!(
+                "forwarding:\n  mode: none\nversions:\n  clients: [\"26.3\"]\nservers: {servers}\n"
+            ))
+            .unwrap()
+        };
+        let proxy = Proxy::new(cfg("{}"), None).unwrap();
+        let old = "{ old: { address: \"127.0.0.1:2\", protocol: 776 } }";
+        proxy.replace(cfg(old)).unwrap();
+        proxy.replace(cfg(old)).unwrap();
+        let text = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+        let warned = text.matches("no listed version reaches any server");
+        assert_eq!(warned.count(), 1, "{text}");
     }
 
     /// A stop that comes before anything waits for it (a `stop` typed right

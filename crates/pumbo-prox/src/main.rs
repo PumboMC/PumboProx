@@ -225,7 +225,17 @@ fn check_config(path: &str) -> ExitCode {
                 "servers: {}",
                 cfg.servers.keys().cloned().collect::<Vec<_>>().join(", ")
             );
+            for line in pumbo_prox::versions::ways(&rt) {
+                println!("{line}");
+            }
+            if cfg.managed_servers.enabled {
+                println!("  (servers of managed-servers are not checked here)");
+            }
             let mut code = ExitCode::SUCCESS;
+            if let Some(e) = pumbo_prox::versions::unreachable(&rt) {
+                eprintln!("config error: {e}");
+                code = ExitCode::FAILURE;
+            }
             // A key nothing reads is only a warning at start; here it fails.
             for u in &unknown {
                 eprintln!("config error: {u}");
@@ -482,6 +492,9 @@ fn run(path: &str) -> ExitCode {
         };
         info!("PumboProx {} started", env!("CARGO_PKG_VERSION"));
         for w in pumbo_prox::commands::login_warnings(&proxy) {
+            warn!("{w}");
+        }
+        if let Some(w) = pumbo_prox::versions::unreachable(&proxy.runtime()) {
             warn!("{w}");
         }
         if let Some(p) = proxy.plugins.get() {
