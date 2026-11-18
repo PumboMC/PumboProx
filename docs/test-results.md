@@ -38,3 +38,15 @@ The bridge's teleport gate and the answers on the old backend plugin channel mov
 The setup costs 0.8 to 2.0 G instructions (a new RSA key in every run), so a single run can be off by about 9 instructions per frame either way: the 2% bound sits at the noise floor of this method, and changes under about 2% are within the noise. The two columns' setup medians differ by 0.06 G, about 1 instruction per frame.
 
 A session's hook table takes 112 bytes in the session and 72 bytes per hook on the heap, and the two built-in hooks 40 and 8 bytes (48 and 16 as allocated): about 320 bytes per player.
+
+## Version translation as a cargo feature
+
+The translator is behind the `translate` feature, on by default; `--no-default-features` leaves it out. Size of `target/release/pumboprox` from `cargo build --release --locked -p pumbo-prox`, aarch64-apple-darwin, Mac16,8, macOS 27, 2026-11-10.
+
+| build | bytes | change |
+|---|---|---|
+| development build of 2026-11-08, before the feature | 33,667,920 | |
+| development build of 2026-11-10, default features | 33,690,336 | +0.07% |
+| development build of 2026-11-10, `--no-default-features` | 33,096,704 | -1.76% against the default build |
+
+Without the feature the binary still holds the protocol tables of every version, which the proxy reads itself, and the one function of the translator crate that repairs a malformed particle from Pumpkin.
