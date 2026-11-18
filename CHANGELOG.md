@@ -52,6 +52,9 @@ All notable changes to PumboProx, one section per release. The format follows [K
 ### Changed
 
 - A client version that no server of the network takes, directly or translated, is refused before the login with `messages.no-server-for-version`, instead of after it. Such a player no longer reaches the account service, plugin login events or gates, and counts as `pumboprox_logins_total{result="denied"}`. A network without servers still lets every version into the Pumbox.
+- A player whose servers all fail to take the login when they join waits in the Pumbox and joins one once it works, instead of being disconnected. This includes a server without modern forwarding set up: the joining player waits while the proxy retries, and the log has the warning. A server that refuses the player, or fails after taking the login, still disconnects them, and with `pumbox.enabled: false` nothing changes. Waiting players count as online.
+- An offline server's wait doubles once each time it runs out, not with every player whose login fails meanwhile, so players waiting in the Pumbox get to a server that is back sooner.
+- Retries of players waiting in the Pumbox are logged at `debug`; the first failure of a join stays a warning.
 - A permission plugin named in `permissions.provider` that is not installed, or that provides no permissions, now stops the start instead of leaving an old `permissions.yml` in charge.
 - A `pumboprox.yml` without `login.online-mode` stays on `per-player`, now with a warning at start; set the key to keep that choice. New installs get `online-mode: true`.
 - The Docker tag `latest` moves only with stable releases; pre-releases get `beta`, and their GitHub release is marked as a pre-release.

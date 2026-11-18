@@ -252,8 +252,8 @@ Series (counters end in `_total`, the rest are gauges):
 | `pumboprox_dropped_packets_total` | `kind`: `command_suggestion`, `keep_alive`, `custom_payload`, `session_command`, `virtual_input` | Packets the proxy dropped: command completions over the limit, keep-alive answers to nothing the proxy sent, plugin messages from clients on the channel servers use to message the proxy, commands for a session whose queue was full, input a virtual world had no room for |
 | `pumboprox_fixed_packets_total` | `kind`: `trail_particle` | Packets from a server repaired before they reach the client |
 | `pumboprox_bytes_total` | `from`: `client`, `backend` | Bytes relayed |
-| `pumboprox_backend_connects_total` | `result`: `ok`, `failed` | Connections to servers |
-| `pumboprox_switches_total` | `result`: `ok`, `failed` | Server switches |
+| `pumboprox_backend_connects_total` | `result`: `ok`, `failed` | Connections to servers; every attempt counts, also the retries of players waiting in the Pumbox |
+| `pumboprox_switches_total` | `result`: `ok`, `failed` | Server switches; a join or a retry from the Pumbox whose servers all failed counts as `failed` |
 | `pumboprox_fallbacks_total` | | Players moved to another server after theirs closed |
 | `pumboprox_reconnects_total` | | Reconnects of a player to the server they are on (a plugin asked for one) |
 | `pumboprox_proxy_commands_total` | | Proxy commands run |

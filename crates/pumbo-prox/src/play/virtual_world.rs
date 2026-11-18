@@ -212,6 +212,7 @@ impl Play<'_> {
             target: String::new(),
             refusal: None,
             redirects: 0,
+            decided: false,
         });
         self.try_next()
     }

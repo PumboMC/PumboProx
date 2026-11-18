@@ -32,6 +32,7 @@ An older release may refuse a newer config. 0.2.5-beta refuses any file with `co
 ## Notes for the next release
 
 - A client version that no server of the network takes is refused before the login, with the same text as before. Such a player no longer reaches plugins, so a banned player on such a version sees the version text.
+- A player whose servers all fail when they join, for example a server without modern forwarding set up, waits in the Pumbox while the proxy retries instead of being disconnected. Waiting players count as online: in the server list and towards `limits.max-players`. Set `pumbox.enabled: false` for the old kick.
 - Keys the proxy does not know now give a warning with the line at start and on `reload`, and fail `check-config`. Fix or remove them.
 - Relative paths in the config (secrets, `plugins/`, `servers/`, the icon) are read next to the config file, not in the folder the proxy starts in. When only the old place exists, the proxy uses it and warns: move the files next to the config.
 - A misspelled `logging.level` stops the start. `warning` still works.

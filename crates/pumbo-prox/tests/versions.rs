@@ -251,3 +251,124 @@ async fn a_version_no_server_takes_is_refused_before_the_login() {
     p.close().await;
     proxy.stop();
 }
+
+// ------------------------------------------------------- the Pumbox at join
+
+/// The config file in a fresh directory of this test.
+fn file(tag: &str, text: &str) -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("prox-versions-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("pumboprox.yml");
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+/// The 26.3 server is down and the other speaks 26.2: the player waits in
+/// the Pumbox and joins the 26.3 server once a reload brings it back.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_join_whose_servers_all_fail_waits_in_the_pumbox() {
+    let (old, _) = common::backend().await;
+    let dead = down().await;
+    let servers = |new| {
+        config(
+            &[("old", old, Some(776)), ("new", new, Some(777))],
+            &["old", "new"],
+            "",
+        )
+    };
+    let path = file("join", &servers(dead));
+    let (proxy, addr) = common::start_proxy_at(&servers(dead), Some(path.clone())).await;
+    let mut p = Player::join(addr, module(777), JoinOptions::new("Patient"))
+        .await
+        .unwrap();
+    assert_eq!(p.logins[0].dimension, "pumbo:virtual");
+    assert!(message(&mut p, NO_SERVER).await, "{:?}", p.messages);
+    let (live, log) = common::backend().await;
+    std::fs::write(&path, servers(live)).unwrap();
+    proxy.reload().unwrap();
+    assert!(
+        p.pump(WAIT, |p| p.logins.len() == 2).await.unwrap(),
+        "{:?}",
+        p.disconnect
+    );
+    assert_eq!(p.logins[1].dimension, "minecraft:overworld");
+    p.command("server").await.unwrap();
+    assert!(message(&mut p, "You are on new.").await, "{:?}", p.messages);
+    assert_eq!(log.joins.load(Ordering::SeqCst), 1);
+    p.close().await;
+    proxy.stop();
+}
+
+/// The server was down when the player joined and refuses them once it is
+/// back: the player leaves the Pumbox with the server's reason.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_server_that_refuses_a_waiting_player_disconnects_with_its_reason() {
+    let dead = down().await;
+    let servers = |lobby| config(&[("lobby", lobby, Some(777))], &["lobby"], "");
+    let path = file("refused", &servers(dead));
+    let (proxy, addr) = common::start_proxy_at(&servers(dead), Some(path.clone())).await;
+    let mut p = Player::join(addr, module(777), JoinOptions::new("Waiting"))
+        .await
+        .unwrap();
+    assert_eq!(p.logins[0].dimension, "pumbo:virtual");
+    assert!(message(&mut p, NO_SERVER).await, "{:?}", p.messages);
+    let strict = scripted(Some("You are banned here.")).await;
+    std::fs::write(&path, servers(strict)).unwrap();
+    proxy.reload().unwrap();
+    assert!(
+        p.pump(WAIT, |p| p.disconnect.is_some()).await.unwrap(),
+        "{:?}",
+        p.messages
+    );
+    assert_eq!(p.disconnect.as_deref(), Some("You are banned here."));
+    proxy.stop();
+}
+
+/// The same for a server that takes the login of a waiting player and then
+/// closes: the player is disconnected, not sent back to wait.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_server_that_drops_a_waiting_player_after_the_login_is_a_kick() {
+    let dead = down().await;
+    let servers = |lobby| config(&[("lobby", lobby, Some(777))], &["lobby"], "");
+    let path = file("dropped", &servers(dead));
+    let (proxy, addr) = common::start_proxy_at(&servers(dead), Some(path.clone())).await;
+    let mut p = Player::join(addr, module(777), JoinOptions::new("Dropped"))
+        .await
+        .unwrap();
+    assert!(message(&mut p, NO_SERVER).await, "{:?}", p.messages);
+    let closing = scripted(None).await;
+    std::fs::write(&path, servers(closing)).unwrap();
+    proxy.reload().unwrap();
+    assert!(
+        p.pump(WAIT, |p| p.disconnect.is_some()).await.unwrap(),
+        "{:?}",
+        p.messages
+    );
+    assert_eq!(p.disconnect.as_deref(), Some(NO_SERVER));
+    proxy.stop();
+}
+
+/// A server without modern forwarding set up refuses nobody, but the proxy
+/// cannot hand it the player: the player waits while the proxy retries.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_server_without_forwarding_set_up_keeps_the_player_waiting() {
+    let (lobby, log) = common::backend().await;
+    let secret = common::secret_file("versions-forwarding", "a-forwarding-secret-of-32-chars!");
+    let cfg = config(&[("lobby", lobby, Some(777))], &["lobby"], "").replace(
+        "  mode: none\n",
+        &format!(
+            "  mode: modern\n  secret-file: \"{}\"\n",
+            common::toml_path(&secret)
+        ),
+    );
+    let (proxy, addr) = common::start_proxy(&cfg).await;
+    let mut p = Player::join(addr, module(777), JoinOptions::new("Unforwarded"))
+        .await
+        .unwrap();
+    assert_eq!(p.logins[0].dimension, "pumbo:virtual");
+    assert!(message(&mut p, NO_SERVER).await, "{:?}", p.messages);
+    assert_eq!(log.joins.load(Ordering::SeqCst), 0);
+    p.close().await;
+    proxy.stop();
+}

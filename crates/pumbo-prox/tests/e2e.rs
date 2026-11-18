@@ -570,7 +570,12 @@ async fn backend_login_timeout_is_configurable() {
             held.push(s);
         }
     });
-    let (_p, addr) = start_proxy(&config(backend, "  backend-login-timeout-ms: 300")).await;
+    // With the Pumbox on, the player would wait there for the server.
+    let (_p, addr) = start_proxy(&config(
+        backend,
+        "  backend-login-timeout-ms: 300\npumbox:\n  enabled: false",
+    ))
+    .await;
     let out = tokio::time::timeout(
         Duration::from_secs(5),
         pumbo_testclient::run(addr, module(777), &opts("Steve")),
@@ -591,7 +596,8 @@ async fn backend_without_forwarding_or_with_other_secret_is_refused() {
         ..BackendOpts::default()
     })
     .await;
-    let (_p, addr) = start_proxy(&config(backend, "")).await;
+    // With the Pumbox on, the player would wait there for the server.
+    let (_p, addr) = start_proxy(&config(backend, "pumbox:\n  enabled: false")).await;
     let out = pumbo_testclient::run(addr, module(777), &opts("Steve"))
         .await
         .unwrap();

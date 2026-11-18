@@ -158,6 +158,10 @@ struct Request {
     target: String,
     refusal: Option<Component>,
     redirects: u8,
+    /// A server took the login, or a plugin kept redirecting past
+    /// [`MAX_REDIRECTS`]: a join that ends without a server is not tried
+    /// again from the Pumbox.
+    decided: bool,
 }
 
 /// The next server, before it gets the client. One per session, so the
@@ -505,6 +509,7 @@ pub(crate) async fn run(
                 target: String::new(),
                 refusal: None,
                 redirects: 0,
+                decided: false,
             });
             match play.try_next() {
                 Some(end) => end,

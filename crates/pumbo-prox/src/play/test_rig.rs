@@ -188,6 +188,7 @@ fn ready(play: &mut Play<'_>, name: &str, purpose: Purpose) -> Peer {
         target: name.into(),
         refusal: None,
         redirects: 0,
+        decided: false,
     });
     play.next = Next::Ready {
         conn,

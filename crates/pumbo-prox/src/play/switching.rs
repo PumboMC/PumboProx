@@ -50,6 +50,7 @@ impl Play<'_> {
                     target: String::new(),
                     refusal: None,
                     redirects: 0,
+                    decided: false,
                 });
                 if let Some(end) = self.try_next() {
                     return Err(end);
@@ -140,6 +141,7 @@ impl Play<'_> {
                 target: String::new(),
                 refusal: None,
                 redirects: 0,
+                decided: false,
             });
             return self.try_next();
         }
@@ -342,6 +344,9 @@ impl Play<'_> {
     /// No candidate left.
     fn exhausted(&mut self) -> Option<End> {
         let req = self.request.take()?;
+        // No server took the login or refused the player: the servers may
+        // just be down, so a joining player waits for them.
+        let wait = req.refusal.is_none() && !req.decided;
         let text = req.refusal.unwrap_or_else(|| self.no_server_text());
         Metrics::inc(&self.proxy.metrics.switches_failed);
         match req.purpose {
@@ -354,11 +359,14 @@ impl Play<'_> {
                 }
                 None
             }
+            // A server decided about the player: also one who waited in the
+            // Pumbox is disconnected with its reason.
+            Purpose::Join if !wait => Some(End::Kick(Box::new(text))),
             // A player from the Pumbox goes back there.
             _ if self.pumbox.is_some() => self.wait_in_pumbox(text),
             // The client already left its server.
             Purpose::Switch { .. } | Purpose::Reconnect => self.fallback(Some(req.target), text),
-            Purpose::Join => Some(End::Kick(Box::new(text))),
+            Purpose::Join => self.wait_in_pumbox(text),
             Purpose::Fallback { reason } => Some(End::Kick(reason)),
         }
     }
@@ -378,6 +386,7 @@ impl Play<'_> {
             target: String::new(),
             refusal: None,
             redirects: 0,
+            decided: false,
         });
         self.try_next()
     }
@@ -391,7 +400,13 @@ impl Play<'_> {
             .as_ref()
             .map(|r| r.target.as_str())
             .unwrap_or("");
-        warn!("{}: backend {target}: {why}", self.player.profile.name);
+        // A player in the Pumbox tries again at every change of the server
+        // list or health; its first try was logged as a warning.
+        if self.pumbox.is_some() {
+            debug!("{}: backend {target}: {why}", self.player.profile.name);
+        } else {
+            warn!("{}: backend {target}: {why}", self.player.profile.name);
+        }
     }
 
     /// The login to the request's server got through or failed before the
@@ -418,6 +433,9 @@ impl Play<'_> {
             NextEvent::Login(Ok(mut conn)) => {
                 Metrics::inc(&self.proxy.metrics.backend_connects);
                 self.login_result(true);
+                if let Some(req) = self.request.as_mut() {
+                    req.decided = true;
+                }
                 // Like a client right after login_acknowledged (§3.3 step 5).
                 let (s, b) = (
                     self.tracked.client_information.is_some(),
@@ -452,11 +470,13 @@ impl Play<'_> {
             }
             NextEvent::Login(Err(BackendFail::Redirect(to))) => {
                 self.next = Next::Idle;
-                if let Some(req) = self.request.as_mut()
-                    && req.redirects < MAX_REDIRECTS
-                {
-                    req.redirects += 1;
-                    req.candidates.push_front(to);
+                if let Some(req) = self.request.as_mut() {
+                    if req.redirects < MAX_REDIRECTS {
+                        req.redirects += 1;
+                        req.candidates.push_front(to);
+                    } else {
+                        req.decided = true;
+                    }
                 }
                 self.try_next()
             }
@@ -587,6 +607,7 @@ impl Play<'_> {
             target: String::new(),
             refusal: None,
             redirects: 0,
+            decided: false,
         });
         let _ = self.try_next();
         Ok(())
@@ -627,6 +648,7 @@ impl Play<'_> {
                     target: from.unwrap_or_default(),
                     refusal: None,
                     redirects: 0,
+                    decided: false,
                 });
                 self.try_next()
             }

@@ -34,7 +34,7 @@ Then `/server arena` in the game, and you are on it. The first server that is re
 
 ## The Pumbox
 
-While no server is available, a player who joins waits in the Pumbox: an empty world on the proxy, standing on an invisible floor, with "Waiting for a server…" on screen. No fall, no damage. Commands work there, so an operator can download Pumpkin and create a server from inside it. As soon as a server is ready, everyone in the Pumbox moves there. A player whose server goes down with no fallback left waits there too.
+While no server is available, a player who joins waits in the Pumbox: an empty world on the proxy, standing on an invisible floor, with "Waiting for a server…" on screen. No fall, no damage. Commands work there, so an operator can download Pumpkin and create a server from inside it. As soon as a server is ready, everyone in the Pumbox moves there. A player whose server goes down with no fallback left waits there too, and so does a player whose servers all fail to take the login when they join (none running, or forwarding not set up on them). A server that refuses the player (a ban, a whitelist) or fails after taking the login still disconnects them.
 
 ```yaml
 pumbox:

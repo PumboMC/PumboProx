@@ -68,18 +68,19 @@ impl Health {
         });
         e.failures = e.failures.saturating_add(1);
         let went = e.failures >= FAILURES && !e.offline;
+        // The players who try together when a wait ends are one failed try.
+        let wake = e.wake_at <= now;
+        if went {
+            e.wait = FIRST_WAIT;
+        } else if e.offline && wake {
+            e.wait = (e.wait * 2).min(MAX_WAIT);
+        }
         if e.failures >= FAILURES {
-            e.wait = if went {
-                FIRST_WAIT
-            } else {
-                (e.wait * 2).min(MAX_WAIT)
-            };
             e.offline = true;
             e.retry_at = now + e.wait;
         }
         // Players in the Pumbox try again once the wait is over.
         let wait = e.wait;
-        let wake = e.wake_at <= now;
         if wake {
             e.wake_at = now + wait;
         }
@@ -140,8 +141,8 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
     use super::*;
 
-    #[test]
-    fn offline_after_failures_in_a_row_until_a_login_gets_through() {
+    #[tokio::test(start_paused = true)]
+    async fn offline_after_failures_in_a_row_until_a_login_gets_through() {
         let h = Health::default();
         assert_eq!(h.failed("lobby"), None);
         assert!(!h.succeeded("lobby") && h.online("lobby"));
@@ -153,10 +154,17 @@ mod tests {
         assert!(!h.online("lobby") && !h.usable("lobby"));
         assert!(h.usable("survival") && h.online("survival"));
         assert_ne!(h.version(), v);
-        // Failed tries while offline double the wait, without a new message.
+        // A failed try while offline doubles the wait, without a new
+        // message; the players who fail together count once.
         assert_eq!(h.failed("lobby"), None);
+        assert_eq!(h.servers.lock().unwrap()["lobby"].wait, FIRST_WAIT);
+        tokio::time::sleep(FIRST_WAIT).await;
+        for _ in 0..10 {
+            assert_eq!(h.failed("lobby"), None);
+        }
         assert_eq!(h.servers.lock().unwrap()["lobby"].wait, FIRST_WAIT * 2);
         for _ in 0..10 {
+            tokio::time::sleep(MAX_WAIT).await;
             h.failed("lobby");
         }
         assert_eq!(h.servers.lock().unwrap()["lobby"].wait, MAX_WAIT);
