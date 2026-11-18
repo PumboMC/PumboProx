@@ -190,7 +190,7 @@ async fn run(proxy: Arc<Proxy>, listener: Arc<ListenerSettings>, incoming: Incom
         First::Intention(i) => i,
     };
     let protocol = ProtocolVersion(intention.protocol);
-    let module = proxy.versions.get(protocol).cloned();
+    let module = crate::versions::module(&proxy, &rt, protocol);
     match intention.intent {
         Intention::STATUS => {
             if !proxy.ips.status(peer.ip(), limits) {
@@ -238,7 +238,8 @@ async fn run(proxy: Arc<Proxy>, listener: Arc<ListenerSettings>, incoming: Incom
                 Ok(ok) => ok,
                 Err(Fail::Kick(text)) => {
                     Metrics::inc(&m.logins_denied);
-                    let _ = send_login_kick(&mut client, &*login_module, &text).await;
+                    let format = TextFormat::for_protocol(intention.protocol);
+                    let _ = send_login_kick(&mut client, &*login_module, format, &text).await;
                     client.shutdown().await;
                     return;
                 }
@@ -387,10 +388,13 @@ async fn answer_status(
     peer: SocketAddr,
     intention: &Intention,
 ) -> Result<(), Fail> {
-    let shown = if proxy.versions.get(protocol).is_some() {
+    // Another version sees the newest listed one, so its client shows the
+    // server as incompatible.
+    let clients = &rt.config.versions.clients;
+    let shown = if clients.admits(protocol) {
         protocol
     } else {
-        module.protocol()
+        clients.newest()
     };
     let mut answered = false;
     loop {
@@ -455,12 +459,15 @@ async fn answer_status(
     }
 }
 
+/// `format`: the client's own, also when the kick goes out in the frames of
+/// another version.
 async fn send_login_kick(
     client: &mut Conn,
     module: &dyn VersionModule,
+    format: TextFormat,
     text: &Component,
 ) -> Result<(), Fail> {
-    let reason_json = text.to_json(TextFormat::for_protocol(module.protocol().0));
+    let reason_json = text.to_json(format);
     queue_out(
         client,
         module,

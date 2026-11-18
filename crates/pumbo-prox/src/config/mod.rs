@@ -144,6 +144,8 @@ pub struct Config {
     #[serde(default)]
     pub status: StatusConfig,
     #[serde(default)]
+    pub versions: VersionsConfig,
+    #[serde(default)]
     pub login: LoginConfig,
     #[serde(default)]
     pub authentication: AuthenticationConfig,
@@ -223,6 +225,7 @@ pub fn sections() -> Vec<SectionInfo> {
             json!({ "type": "array", "items": module(crate::keys::LISTENER) }),
         ),
         section("status", keys_schema::<StatusConfig>()),
+        section("versions", keys_schema::<VersionsConfig>()),
         section("login", keys_schema::<LoginConfig>()),
         section("authentication", module(&["service"])),
         section("forwarding", module(&["mode"])),
@@ -285,6 +288,15 @@ impl Config {
             .iter()
             .map(|u| (crate::keys::line_of(text, &u.path), u.message()))
             .collect();
+        // Releases this build does not know, like keys it does not know.
+        let clients = crate::keys::line_of(text, &[Seg::from("versions"), Seg::from("clients")]);
+        unknown.extend(
+            cfg.versions
+                .clients
+                .take_notes()
+                .into_iter()
+                .map(|n| (clients, n)),
+        );
         unknown.sort_by_key(|(line, _)| line.unwrap_or(usize::MAX));
         Ok((cfg, Remarks { unknown, warnings }))
     }

@@ -372,3 +372,152 @@ async fn a_server_without_forwarding_set_up_keeps_the_player_waiting() {
     p.close().await;
     proxy.stop();
 }
+
+// ------------------------------------------------------- versions.clients
+
+/// The status a client of `protocol` gets: shown protocol and version name.
+async fn status(addr: SocketAddr, protocol: i32) -> (i64, String) {
+    let (_, json) = pumbo_testclient::status(addr, module(protocol))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    (
+        v["version"]["protocol"].as_i64().unwrap(),
+        v["version"]["name"].as_str().unwrap().to_string(),
+    )
+}
+
+/// Off the list: refused before the login with the listed versions, and
+/// shown the newest listed one in the server list.
+#[tokio::test(flavor = "multi_thread")]
+async fn versions_off_the_list_are_refused_before_the_login() {
+    let (lobby, _) = common::backend().await;
+    let cfg = config(
+        &[("lobby", lobby, None)],
+        &["lobby"],
+        "versions:\n  clients: [\"1.21.4\"]\n",
+    );
+    let (proxy, addr) = common::start_proxy(&cfg).await;
+    let err = refused(addr, 777, "Newer").await;
+    assert!(err.starts_with("refused:"), "{err}");
+    assert!(
+        err.contains("This server supports Minecraft up to 1.21.4."),
+        "{err}"
+    );
+    let err = refused(addr, 767, "Older").await;
+    assert!(
+        err.contains("Unsupported Minecraft version. Use 1.21.4."),
+        "{err}"
+    );
+    let p = Player::join(addr, module(769), JoinOptions::new("Listed"))
+        .await
+        .unwrap();
+    assert_eq!(p.logins[0].dimension, "minecraft:overworld");
+    p.close().await;
+    assert_eq!(status(addr, 777).await, (769, "PumboProx 1.21.4".into()));
+    assert_eq!(status(addr, 769).await.0, 769);
+    proxy.stop();
+    // The owner's text, with the listed versions.
+    let cfg = cfg.replace(
+        "versions:\n",
+        "versions:\n  unsupported-message: \"<red>Only {versions} here\"\n",
+    );
+    let (proxy, addr) = common::start_proxy(&cfg).await;
+    let err = refused(addr, 777, "Newer").await;
+    assert!(err.contains("Only 1.21.4 here"), "{err}");
+    proxy.stop();
+}
+
+/// A reload changes the list for new connections; players online stay.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_list_follows_reload_and_spares_players_online() {
+    let (lobby, _) = common::backend().await;
+    let open = config(&[("lobby", lobby, None)], &["lobby"], "");
+    let path = file("reload", &open);
+    let (proxy, addr) = common::start_proxy_at(&open, Some(path.clone())).await;
+    let mut p = Player::join(addr, module(769), JoinOptions::new("Early"))
+        .await
+        .unwrap();
+    std::fs::write(&path, format!("{open}versions:\n  clients: [\"26.3\"]\n")).unwrap();
+    proxy.reload().unwrap();
+    let err = refused(addr, 769, "Late").await;
+    assert!(
+        err.contains("Unsupported Minecraft version. Use 26.3."),
+        "{err}"
+    );
+    assert_eq!(status(addr, 769).await.0, 777);
+    p.command("server").await.unwrap();
+    assert!(
+        message(&mut p, "You are on lobby.").await,
+        "{:?}",
+        p.messages
+    );
+    std::fs::write(&path, &open).unwrap();
+    proxy.reload().unwrap();
+    let again = Player::join(addr, module(769), JoinOptions::new("Again"))
+        .await
+        .unwrap();
+    again.close().await;
+    p.close().await;
+    proxy.stop();
+}
+
+/// Without servers only the list counts: a listed version waits in the
+/// Pumbox (where a new network is claimed), any other is refused with the
+/// list, never for a missing server.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_network_without_servers_checks_only_the_list() {
+    let list = "versions:\n  clients: [\"26.3\"]\n";
+    for operators in [
+        "",
+        "commands:\n  operators: [\"069a79f4-44e9-4726-a5be-fca90e38aaf5\"]\n",
+    ] {
+        let cfg = config(&[], &[], &format!("{list}{operators}"));
+        let (proxy, addr) = common::start_proxy(&cfg).await;
+        let code = pumbo_prox::commands::claim_code(&proxy);
+        assert_eq!(code.is_some(), operators.is_empty());
+        let p = Player::join(addr, module(777), JoinOptions::new("Owner"))
+            .await
+            .unwrap();
+        assert_eq!(p.logins[0].dimension, "pumbo:virtual");
+        assert_eq!(
+            pumbo_prox::commands::claim_open(&proxy, &proxy.runtime()),
+            operators.is_empty()
+        );
+        let err = refused(addr, 769, "Older").await;
+        assert!(
+            err.contains("Unsupported Minecraft version. Use 26.3."),
+            "{err}"
+        );
+        p.close().await;
+        proxy.stop();
+    }
+}
+
+/// The versions a refused client is told to use are listed ones.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_version_hint_names_only_listed_versions() {
+    let (mid, _) = common::backend().await;
+    let (old, _) = common::backend().await;
+    let cfg = config(
+        &[("mid", mid, Some(775)), ("old", old, Some(776))],
+        &["mid", "old"],
+        "versions:\n  clients: [\"26.2\", \"26.3\"]\n",
+    );
+    let (proxy, addr) = common::start_proxy(&cfg).await;
+    let err = refused(addr, 777, "Newer").await;
+    assert!(err.contains("Please join with 26.2."), "{err}");
+    proxy.stop();
+    // No listed version has a server: the plain text, not an empty list.
+    let cfg = config(
+        &[("old", old, Some(776))],
+        &["old"],
+        "versions:\n  clients: [\"26.3\"]\n",
+    );
+    let (proxy, addr) = common::start_proxy(&cfg).await;
+    let err = refused(addr, 777, "Newest").await;
+    assert!(err.starts_with("refused:"), "{err}");
+    assert!(err.contains(NO_SERVER), "{err}");
+    assert!(!err.contains("Please join"), "{err}");
+    proxy.stop();
+}

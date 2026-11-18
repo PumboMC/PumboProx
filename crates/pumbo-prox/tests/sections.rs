@@ -47,6 +47,8 @@ const TRUST_KEYS: &[&str] = &[
     "authentication",
     "plugins.allow-premium-profile-changes",
     "commands.sensitive",
+    // the client versions let in
+    "versions.clients",
     // keys and verification
     "managed-servers.allow-unverified",
     "managed-servers.download-from-game",

@@ -9,7 +9,7 @@ Everything the proxy reads from `pumboprox.yml`. The file written on the first s
 - `pumboprox` reads `pumboprox.yml` in the directory it starts in; `pumboprox run <file>` reads another file. Relative paths in the file (secrets, `plugins/`, `servers/`, `permissions.yml`, the server icon) are read next to the config file, wherever the proxy starts. When one of them exists only in the directory the proxy starts in, or next to the config only as an empty folder (an install that worked that way before, such as `plugins/`), the proxy reads all of them from there and says so in a warning; move them next to the config.
 - `pumboprox check-config [file]` checks the file and the configs of the plugins without starting the proxy, and exits with 1 on an error. A key that nothing reads (a typo such as `max-player`) keeps the default: the start and `reload` warn about it with its line and the closest known key, and `check-config` counts it as an error.
 - `reload` in the console (or `/prox reload`) reads the file again. Players stay online. The **Applies** column says what a change needs:
-  - **reload**: a `reload` is enough. Settings of a login (limits, `login`, forwarding, authentication, translation) apply to connections made after the reload.
+  - **reload**: a `reload` is enough. Settings of a login (limits, `login`, `versions`, forwarding, authentication, translation) apply to connections made after the reload.
   - **restart**: the proxy reads it once at start; stop the proxy and start it again.
 
 ## config-version
@@ -24,7 +24,7 @@ Times are in milliseconds unless the key says otherwise (`-secs`, `-seconds`). T
 
 ## Contents
 
-[listener](#listener) · [status](#status) · [login](#login) · [authentication](#authentication) · [forwarding](#forwarding) · [servers](#servers) · [routing](#routing) · [forced-hosts](#forced-hosts) · [translation](#translation) · [storage](#storage) · [limits](#limits) · [logging](#logging) · [switching](#switching) · [commands](#commands) · [plugin-messages](#plugin-messages) · [messaging-channel](#messaging-channel) · [messages](#messages) · [virtual](#virtual) · [tab](#tab) · [pumbox](#pumbox) · [bridge](#bridge) · [managed-servers](#managed-servers) · [plugins](#plugins) · [services](#services) · [permissions](#permissions) · [placeholders](#placeholders) · [server-group](#server-group) · [style](#style)
+[listener](#listener) · [status](#status) · [versions](#versions) · [login](#login) · [authentication](#authentication) · [forwarding](#forwarding) · [servers](#servers) · [routing](#routing) · [forced-hosts](#forced-hosts) · [translation](#translation) · [storage](#storage) · [limits](#limits) · [logging](#logging) · [switching](#switching) · [commands](#commands) · [plugin-messages](#plugin-messages) · [messaging-channel](#messaging-channel) · [messages](#messages) · [virtual](#virtual) · [tab](#tab) · [pumbox](#pumbox) · [bridge](#bridge) · [managed-servers](#managed-servers) · [plugins](#plugins) · [services](#services) · [permissions](#permissions) · [placeholders](#placeholders) · [server-group](#server-group) · [style](#style)
 
 ## listener
 
@@ -54,8 +54,24 @@ What the server list shows.
 | --- | --- | --- | --- |
 | `motd` | the PumboProx banner with the version | MOTD, two lines separated by `\n` | reload |
 | `max-players` | `500` | The maximum shown in the server list; only shown. `limits.max-players` sets a real limit | reload |
-| `version-name` | empty | Version text in the server list; empty shows `PumboProx <oldest>-<newest>` | reload |
+| `version-name` | empty | Version text in the server list; empty shows `PumboProx` and the versions of `versions.clients`, for example `PumboProx 1.21.4-1.21.8, 26.3` | reload |
 | `favicon` | `server-icon.png` | Server icon, a 64x64 PNG. Empty: no icon. When the default file is missing the proxy shows the Pumbo icon | reload |
+
+## versions
+
+The Minecraft versions players may join with. The proxy checks it when a player connects, before the login: any other version gets `unsupported-message` and never reaches the account service, the plugins or a server. The server list shows a listed version as compatible, and any other version the newest listed one. Players already online when a `reload` changes the list stay.
+
+```yaml
+versions:
+  clients: ["1.21.4-1.21.8", "26.3"]
+```
+
+| Key | Default | Description | Applies |
+| --- | --- | --- | --- |
+| `clients` | `all` | `all`, or a list of releases (`"26.3"`) and ranges (`"1.21.4-26.3"`). A release lets in every release with the same protocol: `"1.21.7"` lets in 1.21.8 too. A release this build does not know is left out with a warning (an error in `check-config`), and a range is cut to the releases it knows. Write a single release in quotes: a bare `26.3` is a number. `pumboprox version` lists the releases this build knows | reload |
+| `unsupported-message` | empty | Disconnect text for any other version; `{versions}`: the listed versions. Empty: `Unsupported Minecraft version. Use <the listed versions>.`, or for a newer client `This server supports Minecraft up to <the newest listed release>.` | reload |
+
+When the network has servers, a version none of them takes (every server has a `protocol`, and the proxy cannot translate the client to any of them) is refused before the login too, with `messages.no-server-for-version`. A network without servers lets every listed version into the Pumbox. The default `status.motd` names the versions of this release: set your own when you list fewer.
 
 ## login
 

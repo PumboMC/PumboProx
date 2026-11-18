@@ -101,6 +101,11 @@ login:
   online-mode: true
   # accept-transfers: false     # true: players sent here by /transfer
 
+# Client versions players may join with: all, or releases and ranges such
+# as ["1.21.4-1.21.8", "26.3"]. Other versions are refused before they log in.
+# versions:
+#   clients: all
+
 # Servers you run yourself: replace {} with them, for example
 # { lobby: { address: "127.0.0.1:25566" } }. Addresses outside private networks
 # (and Tailscale) are refused unless the server has allow-public: true:

@@ -129,3 +129,57 @@ fn no_release_name_has_a_dash() {
         }
     }
 }
+
+/// Through the whole config: releases this build does not know are notes
+/// with the line of `clients`, like unknown keys; elements stay text.
+#[test]
+fn unknown_releases_in_the_config_are_remarks() {
+    use crate::config::Config;
+    let text = "status: {}\nversions:\n  clients: [26.3, 26.4, 777, 26.10, \"1.21.4-26.9\"]\n";
+    let (mut cfg, remarks) = Config::parse_checked(text).unwrap();
+    assert_eq!(
+        cfg.versions.clients.protocols(),
+        v(&[769, 770, 771, 772, 773, 774, 775, 776, 777])
+    );
+    assert!(cfg.versions.clients.take_notes().is_empty());
+    let lines: Vec<Option<usize>> = remarks.unknown.iter().map(|(l, _)| *l).collect();
+    assert_eq!(lines, [Some(3); 4], "{:?}", remarks.unknown);
+    assert!(
+        remarks.unknown[2].1.contains("release 26.10,"),
+        "{:?}",
+        remarks.unknown
+    );
+    let err = |text: &str| Config::parse(text).unwrap_err().to_string();
+    assert!(err("versions:\n  clients: [26.4]\n").contains("names no release this build knows"));
+    assert!(err("versions:\n  clients: []\n").contains("is empty"));
+    let e = err("versions:\n  clients: 26.3\n");
+    assert!(
+        e.contains("expected all, a release in quotes") && e.contains("line 2"),
+        "{e}"
+    );
+}
+
+/// A server whose version no client may join with still has its version:
+/// translated clients reach it, and its tables are there when it is used.
+#[cfg(feature = "translate")]
+#[test]
+fn a_server_off_the_list_keeps_its_version() {
+    use crate::config::Config;
+    use crate::server::Runtime;
+    let text = "forwarding:\n  mode: none\nversions:\n  clients: [\"1.21.4\"]\n\
+                servers:\n  lobby: { address: \"127.0.0.1:1\", protocol: 777 }\n";
+    let rt = Runtime::build(Config::parse(text).unwrap()).unwrap();
+    assert!(!rt.config.versions.clients.admits(ProtocolVersion(777)));
+    assert!(has_way(&rt, ProtocolVersion(769)));
+    let registry = crate::modules::versions().unwrap();
+    let server = registry.get(ProtocolVersion(777)).unwrap();
+    assert!(
+        server
+            .packet_id(
+                pumbo_protocol::Phase::Login,
+                pumbo_protocol::Direction::Serverbound,
+                pumbo_protocol::PacketKind::Hello
+            )
+            .is_some()
+    );
+}

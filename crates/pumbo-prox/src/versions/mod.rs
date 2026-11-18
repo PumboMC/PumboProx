@@ -1,6 +1,8 @@
 //! Which client versions reach which servers: the one place that asks the
 //! translation chain, for the handshake, the session and backend logins.
 
+use std::sync::Arc;
+
 use pumbo_core::routing::BackendInfo;
 use pumbo_core::translate::TranslationPlan;
 use pumbo_protocol::{ProtocolVersion, VersionModule};
@@ -42,6 +44,18 @@ pub(crate) fn has_way(rt: &Runtime, client: ProtocolVersion) -> bool {
     rt.backends.is_empty() || rt.backends.iter().any(|b| reaches(rt, client, b))
 }
 
+/// The version module of a client whose version `versions.clients` lets in.
+pub(crate) fn module(
+    proxy: &Proxy,
+    rt: &Runtime,
+    protocol: ProtocolVersion,
+) -> Option<Arc<dyn VersionModule>> {
+    if !rt.config.versions.clients.admits(protocol) {
+        return None;
+    }
+    proxy.versions.get(protocol).cloned()
+}
+
 /// The handshake's decision on a client's version, before its login: the
 /// module to log in with, or the refusal. A version passes when the
 /// translation chain lets it in and, on a network with servers, one of them
@@ -55,7 +69,7 @@ pub(crate) fn check<'m>(
     let (Some(TranslationPlan::Passthrough), Some(module)) = (plan(rt, protocol, None), module)
     else {
         debug!("a login with protocol {protocol} is refused: an unsupported version");
-        return Err(unsupported(protocol));
+        return Err(unsupported(rt, protocol));
     };
     if !has_way(rt, protocol) {
         debug!("a login with protocol {protocol} is refused: no server takes it");
@@ -65,9 +79,17 @@ pub(crate) fn check<'m>(
 }
 
 /// The refusal of a version the proxy does not let in, naming the versions
-/// it does.
-fn unsupported(protocol: ProtocolVersion) -> Fail {
-    let clients = ClientVersions::default();
+/// it does: `versions.unsupported-message`, or the built-in text.
+fn unsupported(rt: &Runtime, protocol: ProtocolVersion) -> Fail {
+    let versions = &rt.config.versions;
+    let clients = &versions.clients;
+    if !versions.unsupported_message.is_empty() {
+        return Fail::Kick(Box::new(parse_text(
+            &versions
+                .unsupported_message
+                .replace("{versions}", &clients.names(" to ")),
+        )));
+    }
     let newest = clients.newest();
     let text = match pumbo_data::releases(newest).last() {
         Some(last) if protocol > newest => {
@@ -82,9 +104,15 @@ fn unsupported(protocol: ProtocolVersion) -> Fail {
 }
 
 /// `messages.no-server-for-version` for a client no server takes: its
-/// release and the releases of the servers.
+/// release and the releases of the servers that `versions.clients` lets in.
 pub(crate) fn no_way_text(proxy: &Proxy, rt: &Runtime, client: &dyn VersionModule) -> Component {
-    let mut protocols: Vec<_> = rt.backends.iter().filter_map(|b| b.protocol).collect();
+    let clients = &rt.config.versions.clients;
+    let mut protocols: Vec<_> = rt
+        .backends
+        .iter()
+        .filter_map(|b| b.protocol)
+        .filter(|p| clients.admits(*p))
+        .collect();
     protocols.sort();
     protocols.dedup();
     let supported: Vec<String> = protocols
@@ -92,6 +120,10 @@ pub(crate) fn no_way_text(proxy: &Proxy, rt: &Runtime, client: &dyn VersionModul
         .filter_map(|p| proxy.versions.get(*p))
         .map(|m| releases(m.release_names()))
         .collect();
+    // No listed version has a server: there is nothing to suggest.
+    if supported.is_empty() {
+        return parse_text(&rt.config.messages.no_server);
+    }
     parse_text(
         &rt.config
             .messages

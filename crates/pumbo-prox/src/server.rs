@@ -68,10 +68,7 @@ impl Runtime {
             })
             .collect();
         let version_name = if config.status.version_name.is_empty() {
-            format!(
-                "PumboProx {}",
-                crate::versions::ClientVersions::default().names("-")
-            )
+            format!("PumboProx {}", config.versions.clients.names("-"))
         } else {
             config.status.version_name.clone()
         };

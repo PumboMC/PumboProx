@@ -29,6 +29,7 @@ All notable changes to PumboProx, one section per release. The format follows [K
 
 ### Added
 
+- `versions.clients` (default `all`): the Minecraft versions players may join with, as releases (`"26.3"`) and ranges (`"1.21.4-26.3"`). Other versions are refused before they log in, with `versions.unsupported-message` or the built-in text, and the server list shows them as incompatible. A `reload` applies a new list to new connections; players online stay. A release this version of PumboProx does not know is left out with a warning, and an older PumboProx ignores the section and lets every version in.
 - `limits.backend-login-timeout-ms` (default 30000): how long the proxy waits to connect and log in to a server. It was a fixed 10 s, which dropped players while a busy server was slow to let them in.
 - `docs/configuration.md`: every key of `pumboprox.yml` with its default, what it does and whether `reload` applies it.
 - `limits.max-players` (default `0`, off): the most players online at once. Others are kicked with `messages.network-full`; operators and players with `pumbo.proxy.join-full` still get in. `status.max-players` stays only the number shown in the server list.

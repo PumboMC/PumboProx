@@ -98,6 +98,17 @@ impl Default for StatusConfig {
     }
 }
 
+/// `versions`: the client versions players may join with.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "kebab-case", default)]
+pub struct VersionsConfig {
+    /// `all`, releases (`"1.21.4"`) and ranges (`"1.21.4-26.3"`).
+    pub clients: crate::versions::ClientVersions,
+    /// The refusal of any other version; `{versions}` names `clients`.
+    /// Empty: the built-in text.
+    pub unsupported_message: String,
+}
+
 /// `online-mode: per-player | true | false`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OnlineMode {
