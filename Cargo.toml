@@ -57,7 +57,7 @@ await_holding_refcell_ref = "deny"
 [workspace.dependencies]
 rand_core = { version = "0.6", features = ["getrandom"] }
 redb = "3.1"
-aes = "0.8"
+aes = "0.9"
 argon2 = { version = "0.5", default-features = false, features = ["password-hash", "rand", "std"] }
 aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys", "alloc"] }
 # Already built for reqwest; the server icon in the status answer.
