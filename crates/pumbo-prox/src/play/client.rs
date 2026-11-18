@@ -62,9 +62,10 @@ impl Play<'_> {
     async fn client_step(&mut self, f: &RawFrame) -> Result<Step, Fail> {
         let module = self.module;
         let sb = ctx(module, Direction::Serverbound);
-        let kind = module.packet_kind(self.client_phase, Direction::Serverbound, f.id);
+        let phase = self.client_phase;
+        let kind = module.packet_kind(phase, Direction::Serverbound, f.id);
         let m = &self.proxy.metrics;
-        Ok(match (self.client_phase, kind) {
+        let step = match (phase, kind) {
             (_, Some(PacketKind::KeepAlive)) => {
                 let k: KeepAlive = packets::decode(&f.payload, &sb)?;
                 if self.own_keep_alive == Some(k.id) {
@@ -239,6 +240,10 @@ impl Play<'_> {
                 self.suggest(&s)?
             }
             _ => Step::Forward,
+        };
+        Ok(match step {
+            Step::Forward if self.hooks.wants_client(kind) => self.client_hooks(phase, kind, f)?,
+            step => step,
         })
     }
 

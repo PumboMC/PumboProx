@@ -95,7 +95,7 @@ impl Play<'_> {
         };
         let kind = module.packet_kind(phase, Direction::Clientbound, f.id);
         let epoch = self.epoch;
-        Ok(match (phase, kind) {
+        let step = match (phase, kind) {
             (_, Some(PacketKind::KeepAlive)) => {
                 let k: KeepAlive = packets::decode(&f.payload, &cb)?;
                 if let Some(b) = self.backend.as_mut() {
@@ -236,6 +236,12 @@ impl Play<'_> {
             (Phase::Play, Some(PacketKind::LevelParticles)) => self.level_particles(f)?,
             (_, Some(PacketKind::Transfer)) => self.backend_transfer(phase, f)?,
             _ => Step::Forward,
+        };
+        Ok(match step {
+            Step::Forward if self.hooks.wants_backend(kind) => {
+                self.backend_hooks(phase, kind, f)?
+            }
+            step => step,
         })
     }
 
@@ -470,6 +476,12 @@ impl Play<'_> {
             queue_out(&mut self.client, self.module, phase, &p)?;
             return Ok(Step::Drop);
         }
+        if self.hooks.wants_channel(&channel) {
+            match self.channel_hooks(phase, &channel, f)? {
+                Step::Forward => {}
+                step => return Ok(step),
+            }
+        }
         if messaging::is_channel(&channel) {
             if phase == Phase::Play {
                 self.messaging_channel(r.rest());
@@ -593,6 +605,7 @@ impl Play<'_> {
         if let Some(g) = self.proxy.teleport_gate(self.player.profile.id) {
             g.send_replace(crate::bridge::Tp::Sent(Instant::now()));
         }
+        self.joined_hooks();
         self.proxy.set_server(self.player.profile.id, Some(&server));
         if login.enforces_secure_chat && self.proxy.first_report("secure_chat", &server) {
             // Pumpkin 0.2.0 reports this even with allow_chat_reports = false,
@@ -617,6 +630,8 @@ impl Play<'_> {
                 );
             }
         }
+        // What the hooks asked for at the join, now that it is recorded.
+        self.hook_out();
         // The Tab header is rendered again in the new server's context (§5.8.3).
         self.after_join();
     }

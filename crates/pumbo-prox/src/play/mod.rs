@@ -48,6 +48,7 @@ mod client;
 mod event_loop;
 #[cfg(test)]
 mod forward_bench;
+mod hooks;
 #[cfg(test)]
 mod messaging_tests;
 mod switching;
@@ -58,6 +59,7 @@ mod test_rig;
 mod virtual_world;
 
 use backend::pumpkin_trail;
+use hooks::Hooks;
 
 /// Time for the client to acknowledge `start_configuration` (§3.3 step 4).
 const ACK_TIMEOUT: Duration = Duration::from_secs(5);
@@ -334,6 +336,8 @@ struct Play<'a> {
     next_tab: Instant,
     /// Id of the `trail` particle in the versions Pumpkin sends it broken in (D-COMPAT-1).
     trail: Option<i32>,
+    /// The session's hooks and the packets they want.
+    hooks: Hooks,
 }
 
 /// A player in a virtual world and its driver's input channel.
@@ -419,6 +423,7 @@ impl<'a> Play<'a> {
             own_keep_alive_at: now,
             next_tab: now,
             pending_kick: None,
+            hooks: Hooks::new(Vec::new()),
         }
     }
 }
