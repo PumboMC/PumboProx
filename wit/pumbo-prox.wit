@@ -45,6 +45,7 @@ interface types {
   /// The player's context right now: server and its groups in config order.
   record player-context { server: option<server-name>, groups: list<string> }
 
+  /// Only `direct` is set; the other value goes in the next breaking API version.
   enum route { direct, viaproxy }
 
   record connection {

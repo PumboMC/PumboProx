@@ -269,7 +269,7 @@ impl Play<'_> {
     }
 
     /// The translation chain lets the client on this server: same version or
-    /// translated in the proxy (not an external translator).
+    /// translated in the proxy.
     pub(super) fn reachable(&self, b: &BackendInfo) -> bool {
         matches!(
             self.rt

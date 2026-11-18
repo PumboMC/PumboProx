@@ -2,11 +2,8 @@
 //! backend's version.
 //!
 //! A chain of providers decides on every backend connection what to do with a
-//! version difference (§3.2): pass frames through, send the client to an
-//! external translator (ViaProxy), or translate inside the proxy
-//! ([`TranslationPlan::Translate`]).
-
-use std::net::SocketAddr;
+//! version difference (§3.2): pass frames through or translate inside the
+//! proxy ([`TranslationPlan::Translate`]).
 
 use pumbo_protocol::{ProtocolVersion, RawFrame};
 
@@ -42,8 +39,6 @@ pub trait PacketTranslator: Send {
 pub enum TranslationPlan {
     /// Equal versions: frames pass unchanged.
     Passthrough,
-    /// The client goes through an external translator (ViaProxy) at this address (§8).
-    External { address: SocketAddr },
     /// Translation inside the proxy process.
     Translate(Box<dyn PacketTranslator>),
 }
@@ -52,7 +47,6 @@ impl std::fmt::Debug for TranslationPlan {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Passthrough => f.write_str("Passthrough"),
-            Self::External { address } => write!(f, "External({address})"),
             Self::Translate(_) => f.write_str("Translate(..)"),
         }
     }

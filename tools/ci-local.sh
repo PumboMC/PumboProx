@@ -23,6 +23,13 @@ if git grep -n -i -E "$banned" -- . ':!*NOTICE' ':!*/licenses/*' ':!Cargo.lock' 
   echo "banned text found"
   exit 1
 fi
+# The removed translation provider's name (in hex) stays only where old
+# configs are read and in the plugin API, until its next breaking version.
+old="$(printf '\x76\x69\x61\x70\x72\x6f\x78\x79')"
+if git grep -l -i "$old" -- . | grep -v -x -e crates/pumbo-prox/src/migrate.rs -e wit/pumbo-prox.wit; then
+  echo "the removed translation provider is named outside the config migration and the plugin API"
+  exit 1
+fi
 
 step scripts
 tools/lock-test.sh

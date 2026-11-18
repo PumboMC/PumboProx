@@ -199,8 +199,8 @@ pub struct Config {
     /// only reported).
     #[serde(skip)]
     pub check_only: bool,
-    /// Other sections, e.g. `viaproxy` for the translation provider of that
-    /// name; any value, so an unknown key is a warning, not a parse error.
+    /// Keys no field reads, for the unknown-key check and the migrations;
+    /// any value, so an unknown key is a warning, not a parse error.
     #[serde(flatten)]
     pub sections: BTreeMap<String, serde_json::Value>,
 }

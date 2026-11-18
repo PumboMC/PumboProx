@@ -22,6 +22,7 @@ pub struct GameProfile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForwardedPlayer {
     pub profile: GameProfile,
-    /// Client address (the real one behind ViaProxy, from the PROXY protocol).
+    /// Client address (the real one behind a load balancer or another proxy,
+    /// from the PROXY protocol).
     pub address: std::net::IpAddr,
 }

@@ -1,6 +1,6 @@
 [package]
 name = "pumbo-translate"
-description = "Version translation providers: passthrough, multiversion (in-proxy) and redirect to ViaProxy"
+description = "Version translation providers: passthrough and multiversion (in-proxy)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

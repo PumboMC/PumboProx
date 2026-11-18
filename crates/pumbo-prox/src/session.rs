@@ -512,8 +512,8 @@ async fn login(
             Vec::new(),
         ))));
     }
-    // The translation chain decides at handshake (e.g. ViaProxy for old
-    // clients, E11); in E3 only native versions get further.
+    // The translation chain decides at handshake; only versions with data
+    // get further.
     let plan = rt
         .modules
         .translators
@@ -830,7 +830,6 @@ pub(crate) fn backend_version(
     match plan {
         TranslationPlan::Passthrough => Some((proxy.versions.get(client)?.clone(), None)),
         TranslationPlan::Translate(t) => Some((proxy.versions.get(backend?)?.clone(), Some(t))),
-        TranslationPlan::External { .. } => None,
     }
 }
 
