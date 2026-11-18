@@ -44,8 +44,7 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    /// `releases`: first and last supported release, for the default version name.
-    pub fn build(config: Config, releases: &(String, String)) -> Result<Self, String> {
+    pub fn build(config: Config) -> Result<Self, String> {
         let registry = modules::builtin().map_err(|e| e.to_string())?;
         let modules = modules::build(&registry, &config).map_err(|e| e.to_string())?;
         for (name, s) in &config.servers {
@@ -69,7 +68,10 @@ impl Runtime {
             })
             .collect();
         let version_name = if config.status.version_name.is_empty() {
-            format!("PumboProx {}-{}", releases.0, releases.1)
+            format!(
+                "PumboProx {}",
+                crate::versions::ClientVersions::default().names("-")
+            )
         } else {
             config.status.version_name.clone()
         };
@@ -345,7 +347,6 @@ pub fn stop_budget(m: &pumbo_servers::Config) -> String {
 pub struct Proxy {
     pub versions: VersionRegistry,
     newest: Arc<dyn VersionModule>,
-    releases: (String, String),
     pub key: ServerKey,
     /// A watch, so sessions waiting in the Pumbox see a new server list at once.
     runtime: watch::Sender<Arc<Runtime>>,
@@ -419,31 +420,14 @@ impl Proxy {
             .and_then(|v| versions.get(v))
             .cloned()
             .ok_or("no protocol versions")?;
-        let release = |v: Option<ProtocolVersion>, last: bool| {
-            v.and_then(|v| versions.get(v))
-                .and_then(|m| {
-                    if last {
-                        m.release_names().last()
-                    } else {
-                        m.release_names().first()
-                    }
-                })
-                .cloned()
-                .unwrap_or_default()
-        };
-        let releases = (
-            release(versions.oldest(), false),
-            release(versions.newest(), true),
-        );
         let ip_display = IpDisplay::new(config.logging.log_ips);
         let pending = Arc::new(Semaphore::new(config.limits.max_pending_logins));
         let auth_slots = Arc::new(Semaphore::new(config.limits.max_concurrent_has_joined));
-        let runtime = Runtime::build(config, &releases)?;
+        let runtime = Runtime::build(config)?;
         let key = ServerKey::generate().map_err(|e| e.to_string())?;
         Ok(Arc::new(Self {
             versions,
             newest,
-            releases,
             key,
             runtime: watch::channel(Arc::new(runtime)).0,
             players: Mutex::new(HashMap::new()),
@@ -589,7 +573,7 @@ impl Proxy {
         {
             warn!("{e}; players skip it until it exists");
         }
-        let mut runtime = Runtime::build(config, &self.releases)?;
+        let mut runtime = Runtime::build(config)?;
         runtime.managed = managed;
         Ok(runtime)
     }
@@ -655,11 +639,6 @@ impl Proxy {
 
     pub fn newest(&self) -> Arc<dyn VersionModule> {
         self.newest.clone()
-    }
-
-    /// First release of the oldest and last release of the newest protocol.
-    pub fn release_range(&self) -> &(String, String) {
-        &self.releases
     }
 
     pub fn online(&self) -> usize {

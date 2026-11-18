@@ -55,7 +55,7 @@ pub(crate) fn check<'m>(
     let (Some(TranslationPlan::Passthrough), Some(module)) = (plan(rt, protocol, None), module)
     else {
         debug!("a login with protocol {protocol} is refused: an unsupported version");
-        return Err(unsupported(proxy, protocol));
+        return Err(unsupported(protocol));
     };
     if !has_way(rt, protocol) {
         debug!("a login with protocol {protocol} is refused: no server takes it");
@@ -64,13 +64,19 @@ pub(crate) fn check<'m>(
     Ok(module)
 }
 
-/// The refusal of a version the proxy does not let in.
-fn unsupported(proxy: &Proxy, protocol: ProtocolVersion) -> Fail {
-    let (oldest, newest) = proxy.release_range();
-    let text = if proxy.versions.newest().is_some_and(|n| protocol > n) {
-        format!("This server supports Minecraft up to {newest}.")
-    } else {
-        format!("Unsupported Minecraft version. Use {oldest} to {newest}.")
+/// The refusal of a version the proxy does not let in, naming the versions
+/// it does.
+fn unsupported(protocol: ProtocolVersion) -> Fail {
+    let clients = ClientVersions::default();
+    let newest = clients.newest();
+    let text = match pumbo_data::releases(newest).last() {
+        Some(last) if protocol > newest => {
+            format!("This server supports Minecraft up to {last}.")
+        }
+        _ => format!(
+            "Unsupported Minecraft version. Use {}.",
+            clients.names(" to ")
+        ),
     };
     Fail::Kick(Box::new(Component::text(text)))
 }

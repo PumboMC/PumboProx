@@ -202,7 +202,7 @@ fn check_config(path: &str) -> ExitCode {
             pumbo_prox::metrics::read_token(&cfg.logging.metrics_token_file)
                 .map_err(|e| format!("logging.metrics-token-file {e}"))?;
         }
-        Runtime::build(cfg, &(String::new(), String::new())).map(|rt| (rt, loaded.host))
+        Runtime::build(cfg).map(|rt| (rt, loaded.host))
     });
     match result {
         Ok((rt, host)) => {
