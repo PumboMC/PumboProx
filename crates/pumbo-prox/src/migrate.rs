@@ -163,6 +163,7 @@ pub fn migrate_text(text: &str) -> Result<Option<(String, Vec<String>)>, String>
     if text.ends_with('\n') {
         out.push_str(eol);
     }
+    check_result(&value, &out)?;
     let (_, remarks) = Config::parse_checked(&out)
         .map_err(|e| format!("the migrated file would not load: {e}"))?;
     changes.extend(
@@ -172,6 +173,34 @@ pub fn migrate_text(text: &str) -> Result<Option<(String, Vec<String>)>, String>
             .map(|(_, w)| format!("warning: {w}")),
     );
     Ok(Some((out, changes)))
+}
+
+/// The settings of the migrated file must be the old file's with exactly the
+/// changes of [`migrate_text`]: the channel key renamed, the old provider out
+/// of the chain and the top level, the version set. Anything else means an
+/// edit went wrong, and nothing is written.
+fn check_result(old: &Value, out: &str) -> Result<(), String> {
+    let mut want = old.clone();
+    if let Some(m) = want.as_object_mut() {
+        if let Some(v) = m.remove(OLD_CHANNEL) {
+            m.insert(CHANNEL.into(), v);
+        }
+        m.remove(OLD_PROVIDER);
+        if let Some(chain) = m
+            .get_mut("translation")
+            .and_then(|t| t.get_mut("chain"))
+            .and_then(Value::as_array_mut)
+        {
+            chain.retain(|p| p.as_str() != Some(OLD_PROVIDER));
+        }
+        m.insert("config-version".into(), CONFIG_VERSION.into());
+    }
+    let got: Value = pumbo_core::yaml::from_str(out)?;
+    if got == want {
+        Ok(())
+    } else {
+        Err("the edits would change other settings too; change the old keys by hand".into())
+    }
 }
 
 /// `config-version` at [`CONFIG_VERSION`]: a line that already says so
@@ -564,6 +593,26 @@ mod tests {
         assert_eq!(
             changes,
             ["line 1: bungeecord-channel is now messaging-channel"]
+        );
+    }
+
+    #[test]
+    fn a_result_with_other_changes_is_refused() {
+        let p = OLD_PROVIDER;
+        let old: Value = pumbo_core::yaml::from_str(&format!(
+            "logging:\n  level: info\n{p}:\n  address: x\n#  route: below-native\n  min-native-protocol: 767\n"
+        ))
+        .unwrap();
+        // The section cut at the comment: its last key lands under logging.
+        let err = check_result(
+            &old,
+            "config-version: 2\n\nlogging:\n  level: info\n  min-native-protocol: 767\n",
+        )
+        .unwrap_err();
+        assert!(err.contains("by hand"), "{err}");
+        assert_eq!(
+            check_result(&old, "config-version: 2\n\nlogging:\n  level: info\n"),
+            Ok(())
         );
     }
 }
