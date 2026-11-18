@@ -3,13 +3,12 @@
 //! server, proxy commands, chat cancelled with a replacement `chat_ack`,
 //! plugin messages and session hooks.
 //!
-//! Switching follows Velocity (GPL-3.0, `ClientPlaySessionHandler.doSwitch`
-//! and the backend `ConfigSessionHandler`): the next server logs in while the
-//! player still plays, then the client gets `start_configuration`, the old
-//! server is dropped and the next one's configuration is relayed. Unlike
-//! Velocity the proxy keeps reading the next server in the meantime, answers
-//! its keep-alives and pings itself and holds the rest (§2.9, §3.3 step 3).
-//! Everything runs in one `select!` loop per session.
+//! Switching (ported, see NOTICE): the next server logs in while the player
+//! still plays, then the client gets `start_configuration`, the old server
+//! is dropped and the next one's configuration is relayed. Unlike the
+//! original, the proxy keeps reading the next server in the meantime,
+//! answers its keep-alives and pings itself and holds the rest (§2.9, §3.3
+//! step 3). Everything runs in one `select!` loop per session.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;

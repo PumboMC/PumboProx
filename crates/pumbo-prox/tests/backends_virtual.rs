@@ -353,10 +353,10 @@ fn pumpkin_release() {
     let end = at + base[at..].find('\n').unwrap();
     let mut cfg = base.clone();
     cfg.replace_range(at..end, &format!("address = \"127.0.0.1:{port}\""));
-    let velocity = cfg
+    let table = cfg
         .find("[networking.proxy.velocity]\nenabled = true\nsecret = \"")
         .unwrap();
-    let at = velocity + cfg[velocity..].find("secret = ").unwrap();
+    let at = table + cfg[table..].find("secret = ").unwrap();
     let end = at + cfg[at..].find('\n').unwrap();
     cfg.replace_range(at..end, &format!("secret = \"{secret}\""));
     assert!(cfg.contains("[networking.proxy]\nenabled = true"));

@@ -96,7 +96,7 @@ fn first_ready(proxy: &Proxy) {
 /// The forwarding secret and, when the proxy runs one, the bridge for the
 /// files of new servers.
 fn network(config: &Config, bridge: Option<&crate::bridge::Bridge>) -> Result<Network, String> {
-    let velocity_secret = if config.forwarding.mode == "modern" {
+    let forwarding_secret = if config.forwarding.mode == "modern" {
         let get = |k: &str| config.forwarding.rest.get(k).and_then(|v| v.as_str());
         let secret = match get("secret-env") {
             Some(var) => {
@@ -114,7 +114,7 @@ fn network(config: &Config, bridge: Option<&crate::bridge::Bridge>) -> Result<Ne
     // The key the bridge runs with (from key-env or key-file).
     let bridge = bridge.map(|b| (config.bridge.listen.clone(), b.key_hex()));
     Ok(Network {
-        velocity_secret,
+        forwarding_secret,
         bridge_releases: bridge
             .is_some()
             .then(|| pumbo_servers::versions::PUMBOBRIDGE_API.to_string()),

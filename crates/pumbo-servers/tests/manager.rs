@@ -98,7 +98,7 @@ fn nanos() -> u32 {
 fn manager(cfg: Config) -> Arc<Manager> {
     let sources: Vec<Arc<dyn Source>> = vec![Arc::new(Pumpkin::default())];
     let network = Network {
-        velocity_secret: Some("s3cret".into()),
+        forwarding_secret: Some("s3cret".into()),
         bridge: Some(("127.0.0.1:25578".into(), "ab".repeat(32))),
         bridge_releases: None,
     };
@@ -721,7 +721,7 @@ async fn new_server_gets_bridge_plugin_and_config() {
     let with = |base: String| {
         let sources: Vec<Arc<dyn Source>> = vec![Arc::new(Pumpkin::default())];
         let network = Network {
-            velocity_secret: None,
+            forwarding_secret: None,
             bridge: Some(("127.0.0.1:25578".into(), "ab".repeat(32))),
             bridge_releases: Some(base),
         };

@@ -10,7 +10,7 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Default)]
 pub struct Network {
     /// Modern forwarding secret; `None`: no forwarding.
-    pub velocity_secret: Option<String>,
+    pub forwarding_secret: Option<String>,
     /// PumboBridge: address the bridges connect to and the key.
     pub bridge: Option<(String, String)>,
     /// Where new servers get the PumboBridge plugin from (GitHub API of its
@@ -158,7 +158,7 @@ pub fn random_seed() -> Result<String, String> {
 /// `pumpkin.toml` of a new server: loopback only, offline behind the proxy,
 /// Modern forwarding with the proxy's secret, no console TTY.
 pub fn pumpkin_toml(name: &str, port: u16, secret: Option<&str>, seed: &str) -> String {
-    let velocity = match secret {
+    let forwarding = match secret {
         Some(s) => format!(
             "[networking.proxy]\nenabled = true\n\n[networking.proxy.velocity]\nenabled = true\nsecret = \"{s}\"\n"
         ),
@@ -180,7 +180,7 @@ pub fn pumpkin_toml(name: &str, port: u16, secret: Option<&str>, seed: &str) -> 
          [networking.lan_broadcast]\n\
          enabled = false\n\
          \n\
-         {velocity}\
+         {forwarding}\
          \n\
          [commands]\n\
          use_tty = false\n\

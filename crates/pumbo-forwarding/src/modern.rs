@@ -25,18 +25,18 @@ pub const VERSION_LAZY_SESSION: u8 = 4;
 /// Minimum secret length in bytes (§3.1).
 pub const MIN_SECRET_LEN: usize = 16;
 
-pub struct VelocityModern {
+pub struct ModernForwarding {
     key: hmac::Key,
 }
 
-impl std::fmt::Debug for VelocityModern {
+impl std::fmt::Debug for ModernForwarding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // The secret never goes to logs or diagnostics.
-        f.debug_struct("VelocityModern").finish_non_exhaustive()
+        f.debug_struct("ModernForwarding").finish_non_exhaustive()
     }
 }
 
-impl VelocityModern {
+impl ModernForwarding {
     pub fn new(secret: &[u8]) -> Result<Self, String> {
         if secret.len() < MIN_SECRET_LEN {
             return Err(format!("secret is shorter than {MIN_SECRET_LEN} bytes"));
@@ -87,7 +87,7 @@ impl VelocityModern {
     }
 }
 
-impl ForwardingMode for VelocityModern {
+impl ForwardingMode for ModernForwarding {
     fn name(&self) -> &str {
         NAME
     }
@@ -125,7 +125,7 @@ pub fn factory(cfg: &ModuleConfig) -> Result<Arc<dyn ForwardingMode>, ModuleErro
     if let Some(var) = opt_str(cfg, NAME, "secret-env")? {
         let secret = std::env::var(var)
             .map_err(|_| err(format!("environment variable {var} is not set")))?;
-        let module = VelocityModern::new(secret.trim().as_bytes()).map_err(err)?;
+        let module = ModernForwarding::new(secret.trim().as_bytes()).map_err(err)?;
         return Ok(Arc::new(module));
     }
     let path = opt_str(cfg, NAME, "secret-file")?.unwrap_or("forwarding.secret");
@@ -134,7 +134,7 @@ pub fn factory(cfg: &ModuleConfig) -> Result<Arc<dyn ForwardingMode>, ModuleErro
         // Only checked, never used: a throwaway secret.
         let mut bytes = [0u8; 32];
         aws_lc_rs::rand::fill(&mut bytes).map_err(|_| err("random generator failed".into()))?;
-        return Ok(Arc::new(VelocityModern::new(&bytes).map_err(err)?));
+        return Ok(Arc::new(ModernForwarding::new(&bytes).map_err(err)?));
     }
     if !std::path::Path::new(path).exists() {
         create_secret(path).map_err(err)?;
@@ -144,7 +144,7 @@ pub fn factory(cfg: &ModuleConfig) -> Result<Arc<dyn ForwardingMode>, ModuleErro
     }
     check_permissions(path).map_err(err)?;
     let secret = std::fs::read_to_string(path).map_err(|e| err(format!("{path}: {e}")))?;
-    let module = VelocityModern::new(secret.trim().as_bytes()).map_err(err)?;
+    let module = ModernForwarding::new(secret.trim().as_bytes()).map_err(err)?;
     Ok(Arc::new(module))
 }
 
@@ -219,7 +219,7 @@ mod tests {
 
     #[test]
     fn data_layout() {
-        let p = VelocityModern::payload(1, &player());
+        let p = ModernForwarding::payload(1, &player());
         let mut expected = vec![1u8, 11];
         expected.extend_from_slice(b"203.0.113.7");
         expected.extend_from_slice(&0x0011_2233_4455_6677_8899_aabb_ccdd_eeffu128.to_be_bytes());
@@ -239,7 +239,7 @@ mod tests {
     #[test]
     fn signature_verifies_with_the_same_secret() {
         let secret = b"0123456789abcdef0123";
-        let m = VelocityModern::new(secret).unwrap();
+        let m = ModernForwarding::new(secret).unwrap();
         let answer = m
             .answer_login_query(CHANNEL, &[4], &player())
             .unwrap()
@@ -254,12 +254,12 @@ mod tests {
 
     #[test]
     fn version_negotiation() {
-        assert_eq!(VelocityModern::negotiate(None), 1);
-        assert_eq!(VelocityModern::negotiate(Some(1)), 1);
-        assert_eq!(VelocityModern::negotiate(Some(2)), 1);
-        assert_eq!(VelocityModern::negotiate(Some(3)), 1);
-        assert_eq!(VelocityModern::negotiate(Some(4)), 4);
-        assert_eq!(VelocityModern::negotiate(Some(9)), 4);
+        assert_eq!(ModernForwarding::negotiate(None), 1);
+        assert_eq!(ModernForwarding::negotiate(Some(1)), 1);
+        assert_eq!(ModernForwarding::negotiate(Some(2)), 1);
+        assert_eq!(ModernForwarding::negotiate(Some(3)), 1);
+        assert_eq!(ModernForwarding::negotiate(Some(4)), 4);
+        assert_eq!(ModernForwarding::negotiate(Some(9)), 4);
     }
 
     #[test]
@@ -288,12 +288,12 @@ mod tests {
 
     #[test]
     fn foreign_channel_and_short_secret() {
-        let m = VelocityModern::new(b"0123456789abcdef").unwrap();
+        let m = ModernForwarding::new(b"0123456789abcdef").unwrap();
         assert!(
             m.answer_login_query("other:channel", &[], &player())
                 .is_none()
         );
-        assert!(VelocityModern::new(b"short").is_err());
+        assert!(ModernForwarding::new(b"short").is_err());
         assert!(!format!("{m:?}").contains("0123"));
     }
 }

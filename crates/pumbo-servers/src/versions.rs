@@ -381,7 +381,7 @@ impl Source for Pumpkin {
         let toml = servers::pumpkin_toml(
             setup.name,
             setup.port,
-            setup.network.velocity_secret.as_deref(),
+            setup.network.forwarding_secret.as_deref(),
             &servers::random_seed()?,
         );
         servers::write_secret(&dir.join("pumpkin.toml"), &toml)?;

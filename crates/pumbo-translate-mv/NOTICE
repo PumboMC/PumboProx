@@ -4,7 +4,9 @@ pumbo-translate-mv
 Version translation for Minecraft Java Edition (clients 1.21-26.2 on a 26.3
 server), part of PumboProx. Licensed under GPL-3.0-only like the rest of
 PumboProx (see LICENSE in the repository root), so that code from
-ViaBackwards and ViaVersion (GPL-3.0) can be ported into it.
+ViaBackwards and ViaVersion (GPL-3.0) can be ported into it. The last
+section names parts of the proxy itself (`crates/pumbo-prox`) that follow
+another proxy.
 
 pumpkin-java-multiversion
 -------------------------
@@ -88,3 +90,20 @@ Data
 
 Protocol knowledge also comes from the minecraft.wiki protocol pages
 (CC BY-SA 3.0) and PrismarineJS minecraft-data (MIT).
+
+Velocity
+--------
+
+Two parts of `crates/pumbo-prox` marked "ported, see NOTICE" follow Velocity
+(https://github.com/PaperMC/Velocity), licensed under the GNU General Public
+License "either version 3 of the License, or (at your option) any later
+version" (GPL-3.0-or-later). Copyright (C) 2018-2023 Velocity Contributors
+(`ClientPlaySessionHandler`) and Copyright (C) 2019-2023 Velocity
+Contributors (`ConfigSessionHandler`, `BungeeCordMessageResponder`), as the
+headers of these files on its `dev/3.0.0` branch read on 2026-11-10. Which
+commit the code followed is not recorded.
+
+- `src/play/mod.rs`: switching servers while the player plays
+  (`ClientPlaySessionHandler.doSwitch` and the backend `ConfigSessionHandler`).
+- `src/messaging.rs`: the formats of the answers on the `bungeecord:main`
+  channel (`BungeeCordMessageResponder`).

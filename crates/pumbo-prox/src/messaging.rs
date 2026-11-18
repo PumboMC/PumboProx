@@ -1,8 +1,8 @@
 //! `bungeecord:main` for old backend plugins (§2.8, decision §9 point 8):
 //! `Connect`, `ConnectOther`, `IP`, `UUID`, `GetServer`, `GetServers`,
-//! `PlayerCount`, `PlayerList`. Formats as in Velocity's
-//! `BungeeCordMessageResponder` (GPL-3.0): Java `writeUTF` strings, big-endian
-//! ints, lists joined with ", ", UUIDs without dashes.
+//! `PlayerCount`, `PlayerList`. Formats (ported, see NOTICE): Java
+//! `writeUTF` strings, big-endian ints, lists joined with ", ", UUIDs
+//! without dashes.
 
 use std::borrow::Cow;
 use std::net::SocketAddr;

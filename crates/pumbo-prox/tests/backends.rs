@@ -31,7 +31,7 @@ use common::{
 };
 use pumbo_core::profile::{ForwardedPlayer, GameProfile};
 use pumbo_datagen::record::{PLAYER, Server, prepare_dir};
-use pumbo_forwarding::modern::VelocityModern;
+use pumbo_forwarding::modern::ModernForwarding;
 use pumbo_protocol::packets::login::{CustomQuery, CustomQueryAnswer, LoginDisconnect, LoginStart};
 use pumbo_protocol::packets::status::Intention;
 use pumbo_protocol::{Direction, PacketKind, Phase};
@@ -310,11 +310,11 @@ fn pumpkin_forwarding() {
             let none = direct_login(backend, protocol, "PumboDirect", |_| None).await.unwrap();
             report.push(format!("direct, no forwarding answer: {none}"));
             assert!(none.starts_with("refused"), "{none}");
-            let wrong = VelocityModern::new(b"wrong-secret-wrong-secret").unwrap();
+            let wrong = ModernForwarding::new(b"wrong-secret-wrong-secret").unwrap();
             let bad = direct_login(backend, protocol, "PumboDirect", |q| Some(wrong.answer(q.data.first().copied(), &player("PumboDirect", "198.51.100.1")))).await.unwrap();
             report.push(format!("direct, wrong secret: {bad}"));
             assert!(bad.starts_with("refused"), "{bad}");
-            let right = VelocityModern::new(secret.as_bytes()).unwrap();
+            let right = ModernForwarding::new(secret.as_bytes()).unwrap();
             let captured = right.answer(Some(4), &player("PumboReplay", "198.51.100.9"));
             for i in 1..=2 {
                 let r = direct_login(backend, protocol, "PumboReplay", |_| Some(captured.clone())).await.unwrap();
