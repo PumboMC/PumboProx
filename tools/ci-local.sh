@@ -46,10 +46,14 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo clippy -p pumbo-sdk -p pumbo-example -p pumbo-host-test-plugin -p pumbo-bridge-test-plugin \
   --target wasm32-wasip2 --locked \
   --target-dir "$ROOT/target/wasm-plugins" -- -D warnings
+# Without the optional modules (today only version translation); this also
+# lints pumbo-translate without its multiversion feature.
+cargo clippy -p pumbo-prox --no-default-features --all-targets --locked -- -D warnings
 
 step test
 cargo test --workspace --locked --exclude spike-wasm-async
 cargo test -p spike-wasm-async --release --locked -- --nocapture --test-threads=1
+cargo test -p pumbo-prox --no-default-features --locked --test translation
 
 step deny
 # Advisories run in .github/workflows/audit.yml, so a new one does not fail every branch.

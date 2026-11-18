@@ -25,6 +25,8 @@ cargo build --release -p pumbo-prox
 ./target/release/pumboprox version
 ```
 
+`--no-default-features` leaves out the optional modules, today only version translation.
+
 `pumboprox check-config pumboprox.yml` checks a config without starting the proxy.
 
 ## Running the tests

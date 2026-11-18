@@ -13,7 +13,7 @@ use pumbo_core::translate::{
 use pumbo_protocol::{Direction, Phase, ProtocolVersion, RawFrame};
 use pumbo_translate_mv as mv;
 
-pub const MULTIVERSION: &str = "multiversion";
+use crate::MULTIVERSION;
 
 /// Tables per client protocol, built on first use (tens of milliseconds) and
 /// shared by all sessions of that protocol.

@@ -8,16 +8,41 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-bytes.workspace = true
+bytes = { workspace = true, optional = true }
 pumbo-core.workspace = true
-pumbo-data.workspace = true
+pumbo-data = { workspace = true, optional = true }
 pumbo-protocol.workspace = true
-pumbo-translate-mv.workspace = true
+pumbo-translate-mv = { workspace = true, optional = true }
 serde.workspace = true
+
+[features]
+default = ["multiversion"]
+# The translator inside the proxy for older clients (pumbo-translate-mv).
+multiversion = ["dep:bytes", "dep:pumbo-data", "dep:pumbo-translate-mv"]
 
 [dev-dependencies]
 pumbo-nbt.workspace = true
 pumbo-testclient.workspace = true
+
+[[test]]
+name = "bench"
+required-features = ["multiversion"]
+
+[[test]]
+name = "blocks"
+required-features = ["multiversion"]
+
+[[test]]
+name = "golden"
+required-features = ["multiversion"]
+
+[[test]]
+name = "items"
+required-features = ["multiversion"]
+
+[[test]]
+name = "remaps"
+required-features = ["multiversion"]
 
 [lints]
 workspace = true

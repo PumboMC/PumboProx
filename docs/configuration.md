@@ -138,6 +138,8 @@ forced-hosts:
 | --- | --- | --- | --- |
 | `chain` | `[multiversion, passthrough]` | Translation providers in order; the first one with a decision for a client and a server wins. `multiversion`: clients from 1.21 on a 26.3 server, inside the proxy. `passthrough`: the client and the server speak the same version | reload |
 
+A proxy built without its optional modules (`--no-default-features`) has no version translation: the default chain is `[passthrough]`, and a chain that names `multiversion` stops the start.
+
 ## storage
 
 | Key | Default | Description | Applies |

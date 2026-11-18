@@ -46,6 +46,7 @@ All notable changes to PumboProx, one section per release. The format follows [K
 - Metric `pumboprox_translate_dropped_total{to,packet}`: packets the version translator drops for a player on another version. The first drop of each packet per server is logged at `debug`.
 - When the proxy stops with servers it runs, it logs how long a container has to wait for it (`stop_grace_period`, 60 s with the default `managed-servers.stop-timeout-secs`). The Docker image declares `STOPSIGNAL SIGTERM`, and the Docker example in the docs uses `--init --stop-timeout 60`.
 - Release archives and the Docker image (in `/usr/share/doc/pumboprox/`) carry NOTICE, the license texts of the code ported into the version translation and `THIRD-PARTY-LICENSES.txt` with the licenses of every library in the program.
+- `cargo build -p pumbo-prox --no-default-features` builds the proxy without its optional modules, today only version translation: `translation.chain` defaults to `[passthrough]`, and a config that names `multiversion` does not start. Release builds have every module.
 - New pages: [Running it](docs/running.md) (Paper and vanilla servers, systemd, Windows, Docker Compose, stopping, backups), [Upgrading](docs/upgrading.md) (new releases, config versions, going back, moving a network), the [plugin reference](docs/plugins.md) and the [bridge protocol](docs/bridge-protocol.md).
 
 ### Changed

@@ -99,7 +99,9 @@ pumbo-sdk = { path = "crates/pumbo-sdk" }
 pumbo-store = { path = "crates/pumbo-store" }
 pumbo-testclient = { path = "crates/pumbo-testclient" }
 pumbo-text = { path = "crates/pumbo-text" }
-pumbo-translate = { path = "crates/pumbo-translate" }
+# Without its multiversion translator; pumbo-prox turns it on with its
+# translate feature.
+pumbo-translate = { path = "crates/pumbo-translate", default-features = false }
 pumbo-translate-mv = { path = "crates/pumbo-translate-mv" }
 pumbo-virtual = { path = "crates/pumbo-virtual" }
 serde_json = "1"

@@ -82,7 +82,17 @@ pub fn build(reg: &ModuleRegistry, cfg: &Config) -> Result<Modules, ModuleError>
         .translation
         .chain
         .iter()
-        .map(|name| (reg.translators.get(name)?)(&none))
+        .map(|name| {
+            if !pumbo_translate::HAS_MULTIVERSION && name == pumbo_translate::MULTIVERSION {
+                return Err(ModuleError::Config {
+                    name: name.clone(),
+                    message: format!(
+                        "this build has no version translation (built without the translate feature); remove {name} from translation.chain"
+                    ),
+                });
+            }
+            (reg.translators.get(name)?)(&none)
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let store = (reg.stores.get(&cfg.storage.backend)?)(&cfg.storage.rest)?;
     let authenticator =

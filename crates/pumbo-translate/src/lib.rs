@@ -1,6 +1,8 @@
-//! Translation providers: `passthrough` (same versions) and `multiversion`
-//! (translation inside the proxy, `pumbo-translate-mv`).
+//! Translation providers: `passthrough` (same versions) and, with the
+//! feature of that name, `multiversion` (translation inside the proxy,
+//! `pumbo-translate-mv`).
 
+#[cfg(feature = "multiversion")]
 pub mod multiversion;
 
 use std::sync::Arc;
@@ -12,6 +14,10 @@ use pumbo_protocol::ProtocolVersion;
 use serde::Deserialize;
 
 pub const PASSTHROUGH: &str = "passthrough";
+/// The translator inside the proxy, built with the `multiversion` feature.
+pub const MULTIVERSION: &str = "multiversion";
+/// Whether this build has [`MULTIVERSION`]; the proxy asks here.
+pub const HAS_MULTIVERSION: bool = cfg!(feature = "multiversion");
 
 /// The `translation` section of `pumboprox.yml`. Providers have no settings
 /// of their own.
@@ -23,7 +29,12 @@ pub struct TranslationConfig {
 }
 
 fn default_chain() -> Vec<String> {
-    vec![multiversion::MULTIVERSION.into(), PASSTHROUGH.into()]
+    let mut chain = Vec::new();
+    if HAS_MULTIVERSION {
+        chain.push(MULTIVERSION.to_string());
+    }
+    chain.push(PASSTHROUGH.to_string());
+    chain
 }
 
 impl Default for TranslationConfig {
@@ -72,8 +83,9 @@ fn passthrough_factory(_: &ModuleConfig) -> Result<Arc<dyn TranslatorProvider>, 
 
 pub fn register(reg: &mut ModuleRegistry) -> Result<(), ModuleError> {
     reg.translators.register(PASSTHROUGH, passthrough_factory)?;
+    #[cfg(feature = "multiversion")]
     reg.translators
-        .register(multiversion::MULTIVERSION, multiversion::factory)?;
+        .register(MULTIVERSION, multiversion::factory)?;
     Ok(())
 }
 

@@ -43,7 +43,7 @@ fn the_default_chain_routes_like_before() {
         for backend in std::iter::once(None).chain(protocols.iter().copied().map(Some)) {
             let want = if backend.is_none() || backend == Some(client) {
                 "same"
-            } else if backend == Some(777) && client < 777 {
+            } else if backend == Some(777) && client < 777 && cfg!(feature = "translate") {
                 "translate"
             } else {
                 "none"
@@ -81,7 +81,12 @@ fn the_default_chain_is_multiversion_then_passthrough() {
     let m = build(PLAIN);
     assert_eq!(route(&m, 766, None), "same");
     assert_eq!(route(&m, 766, Some(766)), "same");
-    assert_eq!(names(&build(PLAIN)), ["multiversion", "passthrough"]);
+    let want: &[&str] = if cfg!(feature = "translate") {
+        &["multiversion", "passthrough"]
+    } else {
+        &["passthrough"]
+    };
+    assert_eq!(names(&build(PLAIN)), want);
 }
 
 /// The keys of the first-start file of 25e6a3f, with the old default chain
@@ -122,8 +127,13 @@ fn an_old_config_with_the_external_provider_loads_with_warnings() {
         assert_eq!(cfg.translation.chain, ["multiversion", "passthrough"]);
         // As check-config builds them: no forwarding secret is created.
         cfg.check_only = true;
-        let m = modules::build(&modules::builtin().unwrap(), &cfg).unwrap();
-        assert_eq!(names(&m), ["multiversion", "passthrough"]);
+        let built = modules::build(&modules::builtin().unwrap(), &cfg);
+        if cfg!(feature = "translate") {
+            assert_eq!(names(&built.unwrap()), ["multiversion", "passthrough"]);
+        } else {
+            let e = built.unwrap_err().to_string();
+            assert!(e.contains("this build has no version translation"), "{e}");
+        }
     }
 }
 
@@ -164,5 +174,27 @@ fn a_section_named_after_a_provider_is_unknown() {
         remarks.unknown[0].1.starts_with("unknown key multiversion"),
         "{:?}",
         remarks.unknown
+    );
+}
+
+/// Without the translate feature the proxy says why `multiversion` is
+/// missing, and does not offer it for a misspelled name.
+#[cfg(not(feature = "translate"))]
+#[test]
+fn a_build_without_translation_refuses_multiversion() {
+    let reg = modules::builtin().unwrap();
+    let chain = |c: &str| {
+        let text = format!("{PLAIN}translation:\n  chain: {c}\n");
+        modules::build(&reg, &Config::parse(&text).unwrap())
+            .unwrap_err()
+            .to_string()
+    };
+    assert_eq!(
+        chain("[multiversion, passthrough]"),
+        "configuration of module \"multiversion\": this build has no version translation (built without the translate feature); remove multiversion from translation.chain"
+    );
+    assert_eq!(
+        chain("[multiversoin]"),
+        "unknown translator module \"multiversoin\" (available: passthrough)"
     );
 }
