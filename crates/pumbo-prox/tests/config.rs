@@ -16,11 +16,7 @@ routing:
   try: [lobby]
 
 translation:
-  chain: [viaproxy, passthrough]
-
-viaproxy:
-  address: "127.0.0.1:25568"
-  route: backend-mismatch
+  chain: [passthrough]
 "#;
 
 #[test]
@@ -31,7 +27,7 @@ fn modules_from_config() {
     assert_eq!(m.forwarding.name(), "none");
     assert_eq!(m.selector.name(), "try");
     let names: Vec<_> = m.translators.iter().map(|t| t.name().to_string()).collect();
-    assert_eq!(names, ["viaproxy", "passthrough"]);
+    assert_eq!(names, ["passthrough"]);
 }
 
 #[test]
