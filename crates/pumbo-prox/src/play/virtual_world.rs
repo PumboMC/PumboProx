@@ -220,8 +220,7 @@ impl Play<'_> {
     /// proxy, until the server list changes. A kick with `text` when the
     /// Pumbox is off or no server speaks the client's version.
     pub(super) fn wait_in_pumbox(&mut self, text: Component) -> Option<End> {
-        let unsupported =
-            !self.rt.backends.is_empty() && !self.rt.backends.iter().any(|b| self.reachable(b));
+        let unsupported = !crate::versions::has_way(&self.rt, self.module.protocol());
         if !self.rt.config.pumbox.enabled || unsupported {
             return Some(End::Kick(Box::new(text)));
         }

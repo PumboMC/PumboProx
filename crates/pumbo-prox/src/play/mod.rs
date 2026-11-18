@@ -547,15 +547,6 @@ fn millis(since: Instant) -> u32 {
     u32::try_from(since.elapsed().as_millis()).unwrap_or(u32::MAX)
 }
 
-/// Releases of a protocol for messages: "26.3" or "26.1–26.1.2".
-fn releases(names: &[String]) -> String {
-    match (names.first(), names.last()) {
-        (Some(a), Some(b)) if a != b => format!("{a}–{b}"),
-        (Some(a), _) => a.clone(),
-        _ => "?".into(),
-    }
-}
-
 /// Adds `names` (with their subcommands) under the root at `root_at` (§2.8):
 /// each a literal with a greedy string after it that asks the server for
 /// suggestions. False when this version has no string argument.
@@ -624,15 +615,5 @@ mod tests {
         };
         assert_eq!(text(ConnError::WriteTimeout), "write timed out");
         assert!(text(Error::other("no route").into()).contains("no route"));
-    }
-
-    #[test]
-    fn release_ranges() {
-        assert_eq!(releases(&["26.3".into()]), "26.3");
-        assert_eq!(
-            releases(&["26.1".into(), "26.1.1".into(), "26.1.2".into()]),
-            "26.1–26.1.2"
-        );
-        assert_eq!(releases(&[]), "?");
     }
 }

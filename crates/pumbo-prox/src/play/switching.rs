@@ -7,7 +7,6 @@ use std::time::Duration;
 use bytes::Bytes;
 use pumbo_core::profile::ForwardedPlayer;
 use pumbo_core::routing::{BackendInfo, SelectContext, SelectReason};
-use pumbo_core::translate::TranslationPlan;
 use pumbo_protocol::packets;
 use pumbo_protocol::packets::common::{ClearDialog, Disconnect, KeepAlive, Ping, Pong, Transfer};
 use pumbo_protocol::packets::play::{
@@ -25,10 +24,11 @@ use crate::session::{
     BackendFail, BackendVersion, Fail, backend_login, backend_version, ctx, queue, queue_out,
 };
 use crate::status::parse_text;
+use crate::versions;
 
 use super::{
     ACK_TIMEOUT, Backend, End, LoginFuture, MAX_REDIRECTS, Next, NextEvent, OWN_KEEP_ALIVE, Play,
-    Purpose, Request, releases,
+    Purpose, Request,
 };
 
 impl Play<'_> {
@@ -268,39 +268,17 @@ impl Play<'_> {
         up
     }
 
-    /// The translation chain lets the client on this server: same version or
-    /// translated in the proxy.
+    /// The translation chain lets the client on this server (`versions::reaches`).
     pub(super) fn reachable(&self, b: &BackendInfo) -> bool {
-        matches!(
-            self.rt
-                .modules
-                .translators
-                .iter()
-                .find_map(|t| t.plan(self.module.protocol(), b.protocol)),
-            Some(TranslationPlan::Passthrough | TranslationPlan::Translate(_))
-        )
+        versions::reaches(&self.rt, self.module.protocol(), b)
     }
 
     /// "No server" text; names the versions when no server speaks the client's.
     pub(super) fn no_server_text(&self) -> Component {
-        let msgs = &self.rt.config.messages;
-        if self.rt.backends.is_empty() || self.rt.backends.iter().any(|b| self.reachable(b)) {
-            return parse_text(&msgs.no_server);
+        if versions::has_way(&self.rt, self.module.protocol()) {
+            return parse_text(&self.rt.config.messages.no_server);
         }
-        let mut protocols: Vec<_> = self.rt.backends.iter().filter_map(|b| b.protocol).collect();
-        protocols.sort();
-        protocols.dedup();
-        let supported: Vec<String> = protocols
-            .iter()
-            .filter_map(|p| self.proxy.versions.get(*p))
-            .map(|m| releases(m.release_names()))
-            .collect();
-        parse_text(
-            &msgs
-                .no_server_for_version
-                .replace("{version}", &releases(self.module.release_names()))
-                .replace("{supported}", &supported.join(", ")),
-        )
+        versions::no_way_text(self.proxy, &self.rt, self.module)
     }
 
     /// Starts the next candidate of the request.

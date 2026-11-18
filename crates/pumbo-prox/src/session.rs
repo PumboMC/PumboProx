@@ -822,12 +822,7 @@ pub(crate) fn backend_version(
     client: ProtocolVersion,
     backend: Option<ProtocolVersion>,
 ) -> Option<BackendVersion> {
-    let plan = rt
-        .modules
-        .translators
-        .iter()
-        .find_map(|t| t.plan(client, backend))?;
-    match plan {
+    match crate::versions::plan(rt, client, backend)? {
         TranslationPlan::Passthrough => Some((proxy.versions.get(client)?.clone(), None)),
         TranslationPlan::Translate(t) => Some((proxy.versions.get(backend?)?.clone(), Some(t))),
     }
