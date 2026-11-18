@@ -62,7 +62,7 @@ argon2 = { version = "0.5", default-features = false, features = ["password-hash
 aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys", "alloc"] }
 # Already built for reqwest; the server icon in the status answer.
 base64 = "0.23"
-bcrypt = { version = "0.17", default-features = false, features = ["std"] }
+bcrypt = { version = "0.19", default-features = false, features = ["std"] }
 bytes = "1.12"
 # The version wasmtime-wasi uses: plugin data directories resolved like the guest's own sandbox.
 cap-primitives = "=4.0.3"
