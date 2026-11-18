@@ -55,7 +55,7 @@ await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"
 
 [workspace.dependencies]
-rand_core = { version = "0.6", features = ["getrandom"] }
+rand_core = { version = "0.10", features = ["getrandom"] }
 redb = "3.1"
 aes = "0.8"
 argon2 = { version = "0.5", default-features = false, features = ["password-hash", "rand", "std"] }
