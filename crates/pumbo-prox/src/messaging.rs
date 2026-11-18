@@ -4,8 +4,15 @@
 //! `BungeeCordMessageResponder` (GPL-3.0): Java `writeUTF` strings, big-endian
 //! ints, lists joined with ", ", UUIDs without dashes.
 
+use std::borrow::Cow;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
+use pumbo_core::hook::{
+    HookCx, HookInterests, SessionHook, SessionHookFactory, SessionInfo, Verdict,
+};
+use pumbo_protocol::types::Reader;
+use pumbo_protocol::{Phase, RawFrame};
 use uuid::Uuid;
 
 use crate::server::{Proxy, Runtime, SessionCmd};
@@ -133,6 +140,57 @@ pub fn handle(proxy: &Proxy, rt: &Runtime, sender: &Sender<'_>, mut data: &[u8])
             }
         }
         _ => Action::None,
+    }
+}
+
+/// Makes the hook of each session, which answers its servers.
+pub(crate) struct Factory<'a>(pub(crate) &'a Arc<Proxy>);
+
+impl SessionHookFactory for Factory<'_> {
+    fn for_session(&self, s: &SessionInfo<'_>) -> Option<Box<dyn SessionHook>> {
+        // Always: a reload turns the channel on and off during a session,
+        // and its messages never reach the client.
+        Some(Box::new(Hook {
+            proxy: self.0.clone(),
+            peer: s.peer,
+        }))
+    }
+}
+
+/// Both names of the channel, as a hook wants them.
+const CHANNELS: &[Cow<'static, str>] = &[Cow::Borrowed(CHANNEL), Cow::Borrowed(LEGACY_CHANNEL)];
+
+/// The channel in one session.
+struct Hook {
+    proxy: Arc<Proxy>,
+    peer: SocketAddr,
+}
+
+impl SessionHook for Hook {
+    fn interests(&self) -> HookInterests {
+        HookInterests {
+            backend_channels: Cow::Borrowed(CHANNELS),
+            ..HookInterests::default()
+        }
+    }
+
+    /// Answered in play, before the server's login too; dropped in any
+    /// phase, so the client never gets it.
+    fn on_backend(&mut self, cx: &mut HookCx<'_>, f: &RawFrame) -> Verdict {
+        let mut r = Reader::new(&f.payload);
+        if cx.phase == Phase::Play && r.identifier().is_ok() {
+            let sender = Sender {
+                id: cx.player.profile.id,
+                address: self.peer,
+                server: cx.server,
+            };
+            match handle(&self.proxy, &self.proxy.runtime(), &sender, r.rest()) {
+                Action::Reply(data) => cx.out.to_backend.push((Cow::Borrowed(CHANNEL), data)),
+                Action::Connect(server) => cx.out.connect = Some(server),
+                Action::None => {}
+            }
+        }
+        Verdict::Drop
     }
 }
 

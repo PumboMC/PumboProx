@@ -31,7 +31,10 @@ pub fn builtin() -> Result<ModuleRegistry, ModuleError> {
 /// The session hooks of the built-in modules, in calling order; a new hook
 /// is one line here.
 pub(crate) fn session_hooks(proxy: &Arc<Proxy>, s: &SessionInfo<'_>) -> Vec<Box<dyn SessionHook>> {
-    let factories: [&dyn SessionHookFactory; 1] = [&crate::bridge::gate::Factory(proxy)];
+    let factories: [&dyn SessionHookFactory; 2] = [
+        &crate::messaging::Factory(proxy),
+        &crate::bridge::gate::Factory(proxy),
+    ];
     factories.iter().filter_map(|f| f.for_session(s)).collect()
 }
 

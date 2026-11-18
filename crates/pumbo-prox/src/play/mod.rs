@@ -1,7 +1,7 @@
 //! The part of a session after login (§3.3, §2.8, §2.9): relaying to one
 //! backend at a time, switching servers, fallback, reconnecting to the same
 //! server, proxy commands, chat cancelled with a replacement `chat_ack`,
-//! plugin messages and `bungeecord:main`.
+//! plugin messages and session hooks.
 //!
 //! Switching follows Velocity (GPL-3.0, `ClientPlaySessionHandler.doSwitch`
 //! and the backend `ConfigSessionHandler`): the next server logs in while the
@@ -283,7 +283,6 @@ struct Play<'a> {
     /// The same module, for what keeps its own handle (a virtual world).
     module_arc: Arc<dyn VersionModule>,
     player: ForwardedPlayer,
-    peer: SocketAddr,
     host: String,
     client: Conn,
     /// Phase of the client's stream.
@@ -393,7 +392,6 @@ impl<'a> Play<'a> {
             module: &**module,
             module_arc: module.clone(),
             player,
-            peer,
             host: host.to_string(),
             client,
             client_phase: Phase::Configuration,

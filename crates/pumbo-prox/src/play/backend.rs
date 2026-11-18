@@ -9,7 +9,7 @@ use pumbo_protocol::packets::commands::{Commands, NODE_LITERAL};
 use pumbo_protocol::packets::common::{
     self as pc, ClientboundCustomPayload, CookieRequest, CookieResponse, CustomReportDetails,
     Disconnect, KeepAlive, ResourcePackPop, ResourcePackPush, ResourcePackResponse, ServerLinks,
-    ServerboundCustomPayload, StoreCookie, Transfer,
+    StoreCookie, Transfer,
 };
 use pumbo_protocol::packets::play::{BossAction, BossEvent, Login};
 use pumbo_protocol::types::{Reader, WriteExt};
@@ -20,7 +20,6 @@ use tracing::{debug, info, warn};
 
 use crate::commands::{self, Source};
 use crate::config::{PacksOnSwitch, split_host_port};
-use crate::messaging;
 use crate::metrics::Metrics;
 use crate::session::{Fail, ctx, forward, queue, queue_out};
 use crate::status::parse_text;
@@ -453,7 +452,7 @@ impl Play<'_> {
         Ok(Step::Forward)
     }
 
-    /// Brand rewrite, `bungeecord:main`, size limit (§2.8).
+    /// Brand rewrite, channels of the hooks, size limit (§2.8).
     fn backend_payload(&mut self, phase: Phase, f: &RawFrame) -> Result<Step, Fail> {
         let mut r = Reader::new(&f.payload);
         let channel = r.identifier()?;
@@ -472,12 +471,6 @@ impl Play<'_> {
                 step => return Ok(step),
             }
         }
-        if messaging::is_channel(&channel) {
-            if phase == Phase::Play {
-                self.messaging_channel(r.rest());
-            }
-            return Ok(Step::Drop);
-        }
         if crate::bridge::is_channel(&channel) {
             // The bridge never uses plugin messages (PumboBridge spec §6.4).
             Metrics::inc(&self.proxy.metrics.dropped_payloads);
@@ -492,40 +485,6 @@ impl Play<'_> {
             }
         }
         Ok(Step::Forward)
-    }
-
-    fn messaging_channel(&mut self, data: &[u8]) {
-        let current = self.current();
-        let sender = messaging::Sender {
-            id: self.player.profile.id,
-            address: self.peer,
-            server: current.as_deref(),
-        };
-        match messaging::handle(self.proxy, &self.rt, &sender, data) {
-            messaging::Action::Reply(data) => {
-                let p = ServerboundCustomPayload {
-                    channel: messaging::CHANNEL.into(),
-                    data,
-                };
-                if let Some(b) = self.backend.as_mut()
-                    && let Err(e) = queue(
-                        &mut b.conn,
-                        self.module,
-                        Phase::Play,
-                        Direction::Serverbound,
-                        &p,
-                    )
-                {
-                    debug!("messaging channel reply: {e:?}");
-                }
-            }
-            messaging::Action::Connect(server) => {
-                if let Err(msg) = self.switch_to(&server, true) {
-                    debug!("messaging channel Connect {server}: {msg}");
-                }
-            }
-            messaging::Action::None => {}
-        }
     }
 
     /// Adds the proxy commands to the backend's tree (§2.8); a tree that
