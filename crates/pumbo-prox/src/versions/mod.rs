@@ -5,8 +5,10 @@ use pumbo_core::routing::BackendInfo;
 use pumbo_core::translate::TranslationPlan;
 use pumbo_protocol::{ProtocolVersion, VersionModule};
 use pumbo_text::Component;
+use tracing::debug;
 
 use crate::server::{Proxy, Runtime};
+use crate::session::Fail;
 use crate::status::parse_text;
 
 #[cfg(test)]
@@ -38,6 +40,39 @@ pub(crate) fn reaches(rt: &Runtime, client: ProtocolVersion, b: &BackendInfo) ->
 /// health and whether players are routed to it.
 pub(crate) fn has_way(rt: &Runtime, client: ProtocolVersion) -> bool {
     rt.backends.is_empty() || rt.backends.iter().any(|b| reaches(rt, client, b))
+}
+
+/// The handshake's decision on a client's version, before its login: the
+/// module to log in with, or the refusal. A version passes when the
+/// translation chain lets it in and, on a network with servers, one of them
+/// takes it.
+pub(crate) fn check<'m>(
+    proxy: &Proxy,
+    rt: &Runtime,
+    protocol: ProtocolVersion,
+    module: Option<&'m dyn VersionModule>,
+) -> Result<&'m dyn VersionModule, Fail> {
+    let (Some(TranslationPlan::Passthrough), Some(module)) = (plan(rt, protocol, None), module)
+    else {
+        debug!("a login with protocol {protocol} is refused: an unsupported version");
+        return Err(unsupported(proxy, protocol));
+    };
+    if !has_way(rt, protocol) {
+        debug!("a login with protocol {protocol} is refused: no server takes it");
+        return Err(Fail::Kick(Box::new(no_way_text(proxy, rt, module))));
+    }
+    Ok(module)
+}
+
+/// The refusal of a version the proxy does not let in.
+fn unsupported(proxy: &Proxy, protocol: ProtocolVersion) -> Fail {
+    let (oldest, newest) = proxy.release_range();
+    let text = if proxy.versions.newest().is_some_and(|n| protocol > n) {
+        format!("This server supports Minecraft up to {newest}.")
+    } else {
+        format!("Unsupported Minecraft version. Use {oldest} to {newest}.")
+    };
+    Fail::Kick(Box::new(Component::text(text)))
 }
 
 /// `messages.no-server-for-version` for a client no server takes: its

@@ -482,17 +482,6 @@ pub(crate) fn random_bytes<const N: usize>() -> Result<[u8; N], Fail> {
     Ok(b)
 }
 
-fn version_kick(proxy: &Proxy, protocol: ProtocolVersion) -> Fail {
-    let (oldest, newest) = proxy.release_range();
-    if proxy.versions.newest().is_some_and(|n| protocol > n) {
-        kick(format!("This server supports Minecraft up to {newest}."))
-    } else {
-        kick(format!(
-            "Unsupported Minecraft version. Use {oldest} to {newest}."
-        ))
-    }
-}
-
 /// Login with the client: online or offline, encryption, compression,
 /// `login_finished`, `login_acknowledged`. The client is in configuration
 /// afterwards.
@@ -512,16 +501,7 @@ async fn login(
             Vec::new(),
         ))));
     }
-    // The translation chain decides at handshake; only versions with data
-    // get further.
-    let plan = rt
-        .modules
-        .translators
-        .iter()
-        .find_map(|t| t.plan(protocol, None));
-    let (Some(TranslationPlan::Passthrough), Some(module)) = (plan, module) else {
-        return Err(version_kick(proxy, protocol));
-    };
+    let module = crate::versions::check(proxy, rt, protocol, module)?;
     client.inbound.max_frame = MAX_LOGIN_FRAME;
     let (f, _) = client.read_frame().await?;
     let start: LoginStart = expect(module, Phase::Login, Direction::Serverbound, &f)?;

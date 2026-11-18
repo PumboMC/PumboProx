@@ -10,6 +10,7 @@
 mod common;
 
 use std::net::SocketAddr;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use common::{message, module};
@@ -220,5 +221,33 @@ async fn through_the_test_gate_a_server_that_takes_the_login_and_closes_is_a_kic
         p.messages
     );
     assert_eq!(p.disconnect.as_deref(), Some(NO_SERVER));
+    proxy.stop();
+}
+
+// ------------------------------------------------------- the handshake
+
+/// The only server speaks 26.2: a 26.3 client is refused before its login
+/// with the text it got after the login before, and nothing counts it as
+/// logged in.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_version_no_server_takes_is_refused_before_the_login() {
+    let (lobby, _) = common::backend().await;
+    let (proxy, addr) =
+        common::start_proxy(&config(&[("lobby", lobby, Some(776))], &["lobby"], "")).await;
+    let err = refused(addr, 777, "Newer").await;
+    // `refused:` is a `login_disconnect`; a kick after the login reads `no play login`.
+    assert!(err.starts_with("refused:"), "{err}");
+    assert!(
+        err.contains("no server for Minecraft 26.3. Please join with 26.2."),
+        "{err}"
+    );
+    let m = &proxy.metrics;
+    assert_eq!(m.logins_offline.load(Ordering::Relaxed), 0);
+    assert_eq!(m.logins_denied.load(Ordering::Relaxed), 1);
+    let p = Player::join(addr, module(776), JoinOptions::new("Older"))
+        .await
+        .unwrap();
+    assert_eq!(p.logins[0].dimension, "minecraft:overworld");
+    p.close().await;
     proxy.stop();
 }

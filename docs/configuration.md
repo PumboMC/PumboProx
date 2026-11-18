@@ -102,7 +102,7 @@ servers:
 | Key | Default | Description | Applies |
 | --- | --- | --- | --- |
 | `address` | required | `host:port`; IPv6 in brackets (`[::1]:25566`). It has to be on loopback, a private network (`10.x`, `172.16-31.x`, `192.168.x`, IPv6 `fd..`) or a tunnel (Tailscale `100.64.x`): forwarding answers are signed, not encrypted, so someone on the way could read one and join as that player. A host name (a Docker container, for example) is resolved at start and on `reload`, and every address it gives must be private; a name that does not resolve yet is only a warning | reload |
-| `protocol` | not set | The server's protocol number (`777` is 26.3). With it the proxy can translate older clients for this server; without it a client joins with its own version unchanged | reload |
+| `protocol` | not set | The server's protocol number (`777` is 26.3). With it the proxy can translate older clients for this server; without it a client joins with its own version unchanged. When every server has a `protocol`, a client version none of them takes is refused at the login | reload |
 | `chat-session-forwarding` | `true` | Pass the client's chat session to the server. `false`: the server treats all chat as unsigned | reload |
 | `signed-chat-cancel` | `drop` | What happens when a plugin cancels a signed chat message on this server. `drop`: the message is dropped and the player stays. `kick`: the player is disconnected with `messages.signed-chat-blocked`. Vanilla and Paper reject every later signed message after a dropped one until the player reconnects; Pumpkin does not check | reload |
 | `allow-public` | `false` | Accept an `address` outside private networks anyway. Use it only when the connection is protected some other way | reload |
@@ -308,7 +308,7 @@ The `bungeecord:main` plugin message channel, for older server plugins that ask 
 | Key | Default | Description | Applies |
 | --- | --- | --- | --- |
 | `no-server` | `No server is available right now.` | No server could be reached | reload |
-| `no-server-for-version` | `This network has no server for Minecraft {version}. Please join with {supported}.` | No server speaks the client's version. `{version}`: the client's release, `{supported}`: the releases of the servers | reload |
+| `no-server-for-version` | `This network has no server for Minecraft {version}. Please join with {supported}.` | No server speaks the client's version: at the login, when the network has servers, and when a change of the server list leaves the player without one. `{version}`: the client's release, `{supported}`: the releases of the servers | reload |
 | `signed-chat-blocked` | `Your message was blocked. Please reconnect.` | Kick text for `signed-chat-cancel: kick` | reload |
 | `network-full` | `The network is full. Please try again later.` | Kick text when `limits.max-players` is reached | reload |
 | `gates-full` | `Too many players are logging in right now. Please try again in a moment.` | Kick text when `limits.max-in-gates` is reached | reload |
