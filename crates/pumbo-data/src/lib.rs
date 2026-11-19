@@ -122,12 +122,26 @@ pub fn tables(v: ProtocolVersion) -> Result<&'static Tables, DataError> {
     .map_err(Clone::clone)
 }
 
-/// Registers a module for every embedded protocol.
+/// Registers a module for every embedded protocol; each parses its tables
+/// the first time it is used.
 pub fn register_all(reg: &mut VersionRegistry) -> Result<(), DataError> {
-    for v in protocols() {
-        reg.register(Arc::new(DataVersion::new(tables(v)?)))?;
+    for e in EMBEDDED {
+        reg.register(Arc::new(DataVersion::embedded(
+            ProtocolVersion(e.protocol),
+            e.releases,
+        )))?;
     }
     Ok(())
+}
+
+/// Whether the tables of `v` were parsed (for tests).
+#[doc(hidden)]
+pub fn is_parsed(v: ProtocolVersion) -> bool {
+    EMBEDDED
+        .iter()
+        .position(|e| e.protocol == v.0)
+        .and_then(|i| PARSED.get(i))
+        .is_some_and(|slot| slot.get().is_some())
 }
 
 /// Recorded configuration data of a protocol (`None` if not recorded yet).

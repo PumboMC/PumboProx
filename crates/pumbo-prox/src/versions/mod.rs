@@ -7,7 +7,7 @@ use pumbo_core::routing::BackendInfo;
 use pumbo_core::translate::TranslationPlan;
 use pumbo_protocol::{ProtocolVersion, VersionModule};
 use pumbo_text::Component;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::server::{Proxy, Runtime};
 use crate::session::Fail;
@@ -44,13 +44,21 @@ pub(crate) fn has_way(rt: &Runtime, client: ProtocolVersion) -> bool {
     rt.backends.is_empty() || rt.backends.iter().any(|b| reaches(rt, client, b))
 }
 
-/// The version module of a client whose version `versions.clients` lets in.
+/// The version module of a client whose version `versions.clients` lets in
+/// and whose tables parse: a version whose tables do not is refused like an
+/// unknown one, with one warning.
 pub(crate) fn module(
     proxy: &Proxy,
     rt: &Runtime,
     protocol: ProtocolVersion,
 ) -> Option<Arc<dyn VersionModule>> {
     if !rt.config.versions.clients.admits(protocol) {
+        return None;
+    }
+    if let Err(e) = pumbo_data::tables(protocol) {
+        if proxy.first_report("protocol tables", &protocol.to_string()) {
+            warn!("{e}; clients of protocol {protocol} are refused");
+        }
         return None;
     }
     proxy.versions.get(protocol).cloned()

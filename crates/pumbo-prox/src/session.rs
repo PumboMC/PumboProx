@@ -190,17 +190,15 @@ async fn run(proxy: Arc<Proxy>, listener: Arc<ListenerSettings>, incoming: Incom
         First::Intention(i) => i,
     };
     let protocol = ProtocolVersion(intention.protocol);
-    let module = crate::versions::module(&proxy, &rt, protocol);
     match intention.intent {
         Intention::STATUS => {
             if !proxy.ips.status(peer.ip(), limits) {
                 return Metrics::inc(&m.rejected_status_rate);
             }
             Metrics::inc(&m.status_pings);
-            let module = match &module {
-                Some(md) => md.clone(),
-                None => proxy.newest(),
-            };
+            // After the limit: this can read the tables of the version.
+            let module =
+                crate::versions::module(&proxy, &rt, protocol).unwrap_or_else(|| proxy.newest());
             let r = timeout_at(
                 hs_deadline,
                 answer_status(
@@ -219,6 +217,7 @@ async fn run(proxy: Arc<Proxy>, listener: Arc<ListenerSettings>, incoming: Incom
             }
         }
         Intention::LOGIN | Intention::TRANSFER => {
+            let module = crate::versions::module(&proxy, &rt, protocol);
             let login_module = module.clone().unwrap_or_else(|| proxy.newest());
             let deadline = Instant::now() + Duration::from_millis(limits.login_timeout_ms);
             let result = timeout_at(
