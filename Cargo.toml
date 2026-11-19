@@ -7,6 +7,7 @@ members = [
     "crates/pumbo-data",
     "crates/pumbo-datagen",
     "crates/pumbo-contracts",
+    "crates/pumbo-engines",
     "crates/pumbo-forwarding",
     "crates/pumbo-host",
     "crates/pumbo-identity",
@@ -87,6 +88,7 @@ pumbo-common = { path = "crates/pumbo-common" }
 pumbo-contracts = { path = "crates/pumbo-contracts" }
 pumbo-core = { path = "crates/pumbo-core" }
 pumbo-data = { path = "crates/pumbo-data" }
+pumbo-engines = { path = "crates/pumbo-engines" }
 pumbo-forwarding = { path = "crates/pumbo-forwarding" }
 pumbo-host = { path = "crates/pumbo-host" }
 pumbo-identity = { path = "crates/pumbo-identity" }

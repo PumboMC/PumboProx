@@ -1639,6 +1639,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pumbo-engines"
+version = "0.2.5-beta"
+dependencies = [
+ "pumbo-core",
+]
+
+[[package]]
 name = "pumbo-example"
 version = "0.2.5-beta"
 dependencies = [
