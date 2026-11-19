@@ -11,6 +11,7 @@
 //! - product features (filter, login, bans, skins) are WASM plugins only;
 //!   the core has none of their logic.
 
+pub mod engine;
 pub mod forwarding;
 pub mod hook;
 pub mod identity;
