@@ -53,6 +53,8 @@ mod hook_tests;
 mod hooks;
 #[cfg(test)]
 mod messaging_tests;
+#[cfg(test)]
+mod quirk_tests;
 mod switching;
 #[cfg(test)]
 mod teleport_tests;

@@ -8,6 +8,7 @@ use pumbo_protocol::{Direction, PacketKind, Phase, ProtocolVersion};
 
 use crate::conn::Conn;
 
+use super::quirk_tests::{level_particles, particle};
 use super::test_rig::{Rig, accept, attach, encode, join, position};
 
 /// Reads `block` `times` times, then ends.
@@ -48,8 +49,9 @@ fn into_sink(
 }
 
 /// Forwards `PUMBO_BENCH_FRAMES` frames (rounded up to 1024) of one kind,
-/// `PUMBO_BENCH_KIND`, through a session in play: `entity`, `time` and
-/// `teleport` from the server, `move` and `accept` from the client. Run it in
+/// `PUMBO_BENCH_KIND`, through a session in play: `entity`, `time`,
+/// `teleport` and `particles` (a flame, which the trail repair reads and
+/// leaves) from the server, `move` and `accept` from the client. Run it in
 /// release under an instruction counter with many frames and with 1024; the
 /// difference over the frames is the cost of one. Setting the proxy up makes
 /// an RSA key, whose cost varies by up to 1 G instructions between runs.
@@ -86,6 +88,11 @@ async fn forward_one_frame() {
             id(cb, PacketKind::PlayerPosition),
             encode(m, cb, &position(1)),
         ),
+        "particles" => (
+            false,
+            id(cb, PacketKind::LevelParticles),
+            level_particles(true, particle(ProtocolVersion::V777, "flame"), &[]),
+        ),
         "move" => {
             let step = MovePlayerPos(MovePlayer {
                 position: Some((0.7, 65.0, 0.5)),
@@ -103,7 +110,9 @@ async fn forward_one_frame() {
             id(sb, PacketKind::AcceptTeleportation),
             encode(m, sb, &accept(1)),
         ),
-        other => panic!("PUMBO_BENCH_KIND {other}: entity, time, teleport, move or accept"),
+        other => {
+            panic!("PUMBO_BENCH_KIND {other}: entity, time, teleport, particles, move or accept")
+        }
     };
     let mut block = bytes::BytesMut::new();
     for _ in 0..1024 {

@@ -412,6 +412,17 @@ mod tests {
         }
     }
 
+    /// Dashboards see the repairs' series before the first repair.
+    #[test]
+    fn the_fixed_packets_series_is_there_from_the_start() {
+        let text = Metrics::default().render();
+        assert!(
+            text.lines()
+                .any(|l| l == "pumboprox_fixed_packets_total{kind=\"trail_particle\"} 0"),
+            "{text}"
+        );
+    }
+
     fn endpoint(ready: impl Fn() -> bool + Send + Sync + 'static) -> Endpoint {
         Endpoint {
             metrics: Arc::default(),
