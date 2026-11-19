@@ -1,7 +1,7 @@
 //! Which client versions reach which servers: the one place that asks the
 //! translation chain, for the handshake, the session and backend logins.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use pumbo_core::routing::BackendInfo;
 use pumbo_core::translate::TranslationPlan;
@@ -68,9 +68,9 @@ pub(crate) fn module(
 /// module to log in with, or the refusal. A version passes when the
 /// translation chain lets it in and, on a network with servers, one of them
 /// takes it.
-pub(crate) fn check<'m>(
+pub(crate) async fn check<'m>(
     proxy: &Proxy,
-    rt: &Runtime,
+    rt: &Arc<Runtime>,
     protocol: ProtocolVersion,
     module: Option<&'m dyn VersionModule>,
 ) -> Result<&'m dyn VersionModule, Fail> {
@@ -79,11 +79,51 @@ pub(crate) fn check<'m>(
         debug!("a login with protocol {protocol} is refused: an unsupported version");
         return Err(unsupported(rt, protocol));
     };
-    if !has_way(rt, protocol) {
+    if !way(rt, protocol).await {
         debug!("a login with protocol {protocol} is refused: no server takes it");
         return Err(Fail::Kick(Box::new(no_way_text(proxy, rt, module))));
     }
     Ok(module)
+}
+
+/// Whether a server takes each embedded protocol, worked out once per
+/// runtime: a new server list is a new runtime.
+#[derive(Debug)]
+pub(crate) struct Ways(Vec<OnceLock<bool>>);
+
+impl Default for Ways {
+    fn default() -> Self {
+        Self(pumbo_data::protocols().map(|_| OnceLock::new()).collect())
+    }
+}
+
+impl Ways {
+    fn of(&self, protocol: ProtocolVersion) -> Option<&OnceLock<bool>> {
+        self.0
+            .get(pumbo_data::protocols().position(|p| p == protocol)?)
+    }
+}
+
+/// [`has_way`] for the handshake, once per runtime and protocol: the first
+/// answer can build translation tables (tens of milliseconds), so it is
+/// worked out on the blocking pool, and later logins reuse it. It asks
+/// every server there, so the session that picks among them finds the
+/// tables of each built.
+pub(crate) async fn way(rt: &Arc<Runtime>, protocol: ProtocolVersion) -> bool {
+    let Some(known) = rt.ways.of(protocol) else {
+        return has_way(rt, protocol);
+    };
+    if let Some(way) = known.get() {
+        return *way;
+    }
+    let runtime = Arc::clone(rt);
+    let way = tokio::task::spawn_blocking(move || {
+        let takes = |b: &&BackendInfo| reaches(&runtime, protocol, b);
+        runtime.backends.is_empty() || runtime.backends.iter().filter(takes).count() > 0
+    })
+    .await
+    .unwrap_or_else(|_| has_way(rt, protocol));
+    *known.get_or_init(|| way)
 }
 
 /// The refusal of a version the proxy does not let in, naming the versions

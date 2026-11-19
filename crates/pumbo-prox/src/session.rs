@@ -493,7 +493,7 @@ pub(crate) fn random_bytes<const N: usize>() -> Result<[u8; N], Fail> {
 /// afterwards.
 async fn login(
     proxy: &Arc<Proxy>,
-    rt: &Runtime,
+    rt: &Arc<Runtime>,
     client: &mut Conn,
     module: Option<&dyn VersionModule>,
     intention: &Intention,
@@ -507,7 +507,7 @@ async fn login(
             Vec::new(),
         ))));
     }
-    let module = crate::versions::check(proxy, rt, protocol, module)?;
+    let module = crate::versions::check(proxy, rt, protocol, module).await?;
     client.inbound.max_frame = MAX_LOGIN_FRAME;
     let (f, _) = client.read_frame().await?;
     let start: LoginStart = expect(module, Phase::Login, Direction::Serverbound, &f)?;

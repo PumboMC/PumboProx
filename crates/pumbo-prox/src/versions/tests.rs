@@ -210,3 +210,38 @@ fn unreachable_only_when_no_listed_version_reaches_a_server() {
     );
     assert_eq!(unreachable(&rt("{}")), None);
 }
+
+/// The way of a protocol is worked out once per runtime and kept.
+#[tokio::test]
+async fn the_way_of_a_version_is_kept_per_runtime() {
+    use crate::config::Config;
+    use crate::server::Runtime;
+    let rt = |protocol: i32| {
+        let text = format!(
+            "forwarding:\n  mode: none\nservers:\n  lobby: {{ address: \"127.0.0.1:1\", protocol: {protocol} }}\n"
+        );
+        Arc::new(Runtime::build(Config::parse(&text).unwrap()).unwrap())
+    };
+    let old = rt(776);
+    let newer = ProtocolVersion(777);
+    assert!(!way(&old, newer).await);
+    assert_eq!(old.ways.of(newer).and_then(OnceLock::get), Some(&false));
+    assert!(way(&old, ProtocolVersion(776)).await);
+    assert_eq!(
+        old.ways.of(ProtocolVersion(776)).and_then(OnceLock::get),
+        Some(&true)
+    );
+    assert_eq!(
+        old.ways.of(ProtocolVersion(775)).and_then(OnceLock::get),
+        None
+    );
+    // Translated: 26.2 on a 26.3 server, with the translator built in.
+    if cfg!(feature = "translate") {
+        let new = rt(777);
+        assert!(way(&new, ProtocolVersion(776)).await);
+        assert_eq!(
+            new.ways.of(ProtocolVersion(776)).and_then(OnceLock::get),
+            Some(&true)
+        );
+    }
+}

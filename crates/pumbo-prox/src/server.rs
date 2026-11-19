@@ -41,6 +41,8 @@ pub struct Runtime {
     pub sensitive: HashSet<String>,
     /// Servers of `managed-servers` added to `config.servers`.
     pub managed: Vec<String>,
+    /// Whether a server takes each client version (`versions::way`).
+    pub(crate) ways: crate::versions::Ways,
 }
 
 impl Runtime {
@@ -94,6 +96,7 @@ impl Runtime {
             backends,
             version_name,
             managed: Vec::new(),
+            ways: crate::versions::Ways::default(),
         })
     }
 }
