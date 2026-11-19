@@ -50,3 +50,32 @@ The translator is behind the `translate` feature, on by default; `--no-default-f
 | development build of 2026-11-10, `--no-default-features` | 33,096,704 | -1.76% against the default build |
 
 Without the feature the binary still holds the protocol tables of every version, which the proxy reads itself, and the one function of the translator crate that repairs a malformed particle from Pumpkin.
+
+## Version tables on first use
+
+The proxy used to parse the tables of every embedded version at start; now a version's tables and packet lookups are built the first time a player or a server uses it. Development builds of 2026-11-10, release, aarch64-apple-darwin, Mac16,8, macOS 27, on mains power, while another build and test run used the machine (load average about 5 to 6). Before and after ran in turns and each number is a median.
+
+### Start and memory without players
+
+`pumboprox run` with no servers, no plugins, bridge and managed servers off, on 127.0.0.1. Start: from the process start to the first accepted TCP connection, polled by a script, so only differences of more than about 30 ms would show; the first round of each build was cold (634 and 572 ms) and the other four took 78 to 134 ms and 78 to 106 ms, so this shows no difference between the builds. Memory: `phys_footprint` 5 s after the start, then after a status request of one version and after status requests of all eleven.
+
+| build | start (median of 5) | without players | after one version | after eleven |
+|---|---|---|---|---|
+| tables at start | 106 ms | 20 MB | 20 MB | 20 MB |
+| tables on first use | 104 ms | 4.0 MB | 6.1 MB | 20 MB |
+
+### First use of a version
+
+`first_use` in `crates/pumbo-prox/tests/first_use.rs` (ignored), each in a fresh process, median of three. Registering the eleven versions took 11.6 ms with the tables parsed at start and 0.06 ms without; the tables and packet lookups of one version take 1.0 to 1.2 ms on its first use. The translation tables of one older client for a 26.3 server take 22 to 36 ms in both builds; the proxy builds them on the blocking pool the first time a client of that version logs in after a start or `reload`.
+
+### Forwarding one frame
+
+`forward_one_frame` as in "Session hooks", three runs per kind and build, the setup median taken over both builds' ten setup runs (1.08 G instructions).
+
+| frame | tables at start | tables on first use | change |
+|---|---|---|---|
+| entity move from the server | 810.9 | 817.6 | +0.8% |
+| `set_time` from the server | 826.6 | 839.2 | +1.5% |
+| `move_player_pos` from the client | 1342.6 | 1347.2 | +0.3% |
+
+Every packet lookup now first checks that the version's lookups exist. Three runs per kind and build leave a thin margin: the runs of one build differ by up to 1.6% (entity move with the tables at start: 55.27 to 56.14 G instructions), and the ten setup runs took 0.81 to 1.77 G, about 7 instructions per frame either way. For `set_time` every run with the tables on first use is above every run with the tables at start, by 0.85 to 1.6%, so that cost is real and under the 2% bound. For the other two kinds the runs of the two builds overlap, so their difference is within the noise of this method.
