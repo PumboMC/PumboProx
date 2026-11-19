@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::BoxFuture;
+use crate::engine::EngineAdapter;
 use crate::forwarding::ForwardingMode;
 use crate::identity::Authenticator;
 use crate::listener::Listener;
@@ -42,6 +43,8 @@ pub type SelectorFactory = fn(&ModuleConfig) -> Result<Arc<dyn BackendSelector>,
 pub type TranslatorFactory = fn(&ModuleConfig) -> Result<Arc<dyn TranslatorProvider>, ModuleError>;
 pub type AuthenticatorFactory = fn(&ModuleConfig) -> Result<Arc<dyn Authenticator>, ModuleError>;
 pub type StoreFactory = fn(&ModuleConfig) -> Result<Arc<dyn KeyValueStore>, ModuleError>;
+/// Engines have no config section.
+pub type EngineFactory = fn() -> Arc<dyn EngineAdapter>;
 
 /// One family of modules: name → factory.
 #[derive(Debug)]
@@ -94,6 +97,7 @@ pub struct ModuleRegistry {
     pub translators: Slot<TranslatorFactory>,
     pub authenticators: Slot<AuthenticatorFactory>,
     pub stores: Slot<StoreFactory>,
+    pub engines: Slot<EngineFactory>,
 }
 
 impl Default for ModuleRegistry {
@@ -105,6 +109,7 @@ impl Default for ModuleRegistry {
             translators: Slot::new("translator"),
             authenticators: Slot::new("authenticator"),
             stores: Slot::new("store"),
+            engines: Slot::new("engine"),
         }
     }
 }
@@ -134,6 +139,7 @@ pub fn opt_str<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::{BackendDefaults, EngineRef, SignedChatCancel};
     use crate::routing::{BackendInfo, SelectContext};
 
     #[derive(Debug)]
@@ -165,6 +171,41 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "unknown selector module \"balancer\" (available: first)"
+        );
+    }
+
+    #[derive(Debug)]
+    struct Stone;
+    impl EngineAdapter for Stone {
+        fn name(&self) -> &str {
+            "stone"
+        }
+        fn defaults(&self, _: &EngineRef) -> BackendDefaults {
+            BackendDefaults {
+                signed_chat_cancel: SignedChatCancel::Kick,
+                chat_session_forwarding: true,
+            }
+        }
+    }
+
+    fn stone() -> Arc<dyn EngineAdapter> {
+        Arc::new(Stone)
+    }
+
+    #[test]
+    fn an_engine_registers_by_name() {
+        let mut reg = ModuleRegistry::new();
+        reg.engines.register("stone", stone).unwrap();
+        assert!(matches!(
+            reg.engines.register("stone", stone),
+            Err(ModuleError::Duplicate { .. })
+        ));
+        let engine = (reg.engines.get("stone").unwrap())();
+        assert_eq!(engine.name(), "stone");
+        let err = reg.engines.get("paper").map(|_| ()).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "unknown engine module \"paper\" (available: stone)"
         );
     }
 }

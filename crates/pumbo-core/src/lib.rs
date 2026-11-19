@@ -5,7 +5,7 @@
 //! - the core knows only the traits of this crate, never concrete implementations,
 //! - implementations live in separate crates (`pumbo-listener-java`,
 //!   `pumbo-forwarding`, `pumbo-routing`, `pumbo-translate`, `pumbo-identity`,
-//!   `pumbo-store`) and register factories in [`ModuleRegistry`],
+//!   `pumbo-store`, `pumbo-engines`) and register factories in [`ModuleRegistry`],
 //! - the `pumboprox` binary is the only place that assembles modules; the
 //!   choice of implementation comes from the config (module name + its section),
 //! - product features (filter, login, bans, skins) are WASM plugins only;
