@@ -70,6 +70,18 @@ pub struct Setup<'a> {
     pub template: &'a Template,
 }
 
+/// The PumboBridge plugin for a server of some software, in a PumboBridge release.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BridgeArtifact {
+    /// The Minecraft release it is built for, for messages.
+    pub minecraft: String,
+    /// The release file is the one whose name starts and ends with these.
+    pub asset_prefix: String,
+    pub asset_suffix: &'static str,
+    /// Its name in the server's `plugins/`.
+    pub file_name: String,
+}
+
 /// One kind of server software (`pumpkin`, later `paper`): its releases,
 /// its files and how a server of it is set up and started.
 pub trait Source: Send + Sync {
@@ -87,6 +99,10 @@ pub trait Source: Send + Sync {
     fn prepare(&self, dir: &Path, setup: &Setup<'_>) -> Result<(), String>;
     /// How to start a server whose software is `file`.
     fn launch(&self, file: &Path, template: &Template) -> Result<Launch, String>;
+    /// The PumboBridge plugin for version `tag` of this software. `Ok(None)`:
+    /// this software has no bridge plugin. The error says why a server that
+    /// should get one does not.
+    fn bridge_artifact(&self, tag: &str) -> Result<Option<BridgeArtifact>, String>;
 }
 
 /// HTTP for release lists and downloads. The User-Agent names only the
@@ -264,21 +280,23 @@ impl Pumpkin {
     }
 }
 
+/// A release in GitHub's release list.
 #[derive(Deserialize)]
-struct GhRelease {
-    tag_name: String,
+pub struct GhRelease {
+    pub tag_name: String,
     #[serde(default)]
-    prerelease: bool,
+    pub prerelease: bool,
     #[serde(default)]
-    draft: bool,
+    pub draft: bool,
     #[serde(default)]
-    assets: Vec<GhAsset>,
+    pub assets: Vec<GhAsset>,
 }
 
+/// A file of a GitHub release.
 #[derive(Deserialize)]
-struct GhAsset {
-    name: String,
-    browser_download_url: String,
+pub struct GhAsset {
+    pub name: String,
+    pub browser_download_url: String,
 }
 
 /// The Pumpkin file for a machine (names of the release assets).
@@ -403,6 +421,19 @@ impl Source for Pumpkin {
             args: Vec::new(),
         })
     }
+
+    /// The plugin for the Minecraft release of `tag`.
+    fn bridge_artifact(&self, tag: &str) -> Result<Option<BridgeArtifact>, String> {
+        let mc = self
+            .minecraft(tag)
+            .ok_or("the Minecraft release of its Pumpkin is unknown")?;
+        Ok(Some(BridgeArtifact {
+            asset_prefix: format!("PumboBridge-Pumpkin-{mc}-"),
+            asset_suffix: ".wasm",
+            file_name: format!("PumboBridge-{mc}.wasm"),
+            minecraft: mc,
+        }))
+    }
 }
 
 // ------------------------------------------------------------------ PumboBridge
@@ -410,14 +441,17 @@ impl Source for Pumpkin {
 /// PumboBridge releases (its Pumpkin plugin). Only this repository.
 pub const PUMBOBRIDGE_API: &str = "https://api.github.com/repos/PumboMC/PumboBridge";
 
-/// The file of the PumboBridge release `tag` for Minecraft `mc` (asset names
-/// of `tools/release-plugins.sh`: `PumboBridge-Pumpkin-<mc>-<version>.wasm`).
-fn pumbobridge_asset(files: &[GhAsset], mc: &str) -> Option<String> {
-    let prefix = format!("PumboBridge-Pumpkin-{mc}-");
+/// The file of a PumboBridge release that is `artifact` (asset names of
+/// `tools/release-plugins.sh`: `PumboBridge-Pumpkin-<mc>-<version>.wasm`).
+fn pumbobridge_asset(files: &[GhAsset], artifact: &BridgeArtifact) -> Option<String> {
     files
         .iter()
         .map(|a| &a.name)
-        .find(|n| n.starts_with(&prefix) && n.ends_with(".wasm") && valid_tag(n))
+        .find(|n| {
+            n.starts_with(&artifact.asset_prefix)
+                && n.ends_with(artifact.asset_suffix)
+                && valid_tag(n)
+        })
         .cloned()
 }
 
@@ -620,9 +654,13 @@ impl VersionStore {
             .unwrap_or(false)
     }
 
-    /// The newest PumboBridge release for Minecraft `mc` from `api`, kept in
+    /// `artifact` of the newest PumboBridge release from `api`, kept in
     /// `versions/pumbobridge/<tag>/` after its SHA256 matched `SHA256SUMS`.
-    pub async fn pumbobridge(&self, api: &str, mc: &str) -> Result<PathBuf, String> {
+    pub async fn pumbobridge(
+        &self,
+        api: &str,
+        artifact: &BridgeArtifact,
+    ) -> Result<PathBuf, String> {
         let api = api.trim_end_matches('/');
         let body = self.http.get(&format!("{api}/releases/latest")).await?;
         let release: GhRelease =
@@ -631,7 +669,8 @@ impl VersionStore {
         if !valid_tag(tag) {
             return Err(format!("PumboBridge release tag {tag:?} is not usable"));
         }
-        let name = pumbobridge_asset(&release.assets, mc)
+        let mc = &artifact.minecraft;
+        let name = pumbobridge_asset(&release.assets, artifact)
             .ok_or_else(|| format!("PumboBridge {tag} has no file for Minecraft {mc}"))?;
         let url = |n: &str| {
             release
@@ -772,5 +811,21 @@ mod tests {
         assert_eq!(p.minecraft("canary"), None);
         assert!(version_key("0.10.0+26.4") > version_key("0.2.0+26.3-26.51"));
         assert!(version_key("0.2.0+26.3") > version_key("0.1.0-dev+26.2-26.45"));
+    }
+
+    #[test]
+    fn pumpkin_names_its_bridge_plugin() {
+        let p = Pumpkin::default();
+        let want = BridgeArtifact {
+            minecraft: "26.3".into(),
+            asset_prefix: "PumboBridge-Pumpkin-26.3-".into(),
+            asset_suffix: ".wasm",
+            file_name: "PumboBridge-26.3.wasm".into(),
+        };
+        assert_eq!(p.bridge_artifact("0.2.0+26.3-26.51"), Ok(Some(want)));
+        assert_eq!(
+            p.bridge_artifact("canary"),
+            Err("the Minecraft release of its Pumpkin is unknown".into())
+        );
     }
 }

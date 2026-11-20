@@ -256,8 +256,7 @@ impl Manager {
                 template: &tpl,
             },
         )?;
-        self.install_bridge(name, &dir, source.minecraft(&tag))
-            .await;
+        self.install_bridge(name, &dir, source.as_ref(), &tag).await;
         let entry = Entry {
             source: src.to_string(),
             version: tag,
@@ -280,9 +279,15 @@ impl Manager {
     }
 
     /// Puts PumboBridge into a new server's `plugins/` (unless its template
-    /// brought one), so ranks and commands of the proxy reach it. A failure
-    /// leaves the server without it, with a warning.
-    async fn install_bridge(&self, name: &str, dir: &std::path::Path, mc: Option<String>) {
+    /// brought one or its software has none), so ranks and commands of the
+    /// proxy reach it. A failure leaves the server without it, with a warning.
+    async fn install_bridge(
+        &self,
+        name: &str,
+        dir: &std::path::Path,
+        source: &dyn Source,
+        tag: &str,
+    ) {
         let (Some(_), Some(api)) = (&self.network.bridge, &self.network.bridge_releases) else {
             return;
         };
@@ -296,15 +301,18 @@ impl Manager {
             return;
         }
         let installed = async {
-            let mc = mc.ok_or("the Minecraft release of its Pumpkin is unknown")?;
-            let file = self.versions.pumbobridge(api, &mc).await?;
+            let Some(artifact) = source.bridge_artifact(tag)? else {
+                return Ok(None);
+            };
+            let file = self.versions.pumbobridge(api, &artifact).await?;
             std::fs::create_dir_all(&plugins).map_err(|e| format!("{}: {e}", plugins.display()))?;
-            let to = plugins.join(format!("PumboBridge-{mc}.wasm"));
+            let to = plugins.join(&artifact.file_name);
             std::fs::copy(&file, &to).map_err(|e| format!("{}: {e}", to.display()))?;
-            Ok::<_, String>(to)
+            Ok::<_, String>(Some(to))
         };
         match installed.await {
-            Ok(to) => tracing::info!("{name}: PumboBridge installed ({})", to.display()),
+            Ok(None) => {}
+            Ok(Some(to)) => tracing::info!("{name}: PumboBridge installed ({})", to.display()),
             Err(e) => tracing::warn!(
                 "{name}: PumboBridge not installed ({e}); put it into {} yourself",
                 plugins.display()
