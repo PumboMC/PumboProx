@@ -2,7 +2,12 @@
 
 use std::sync::Arc;
 
-use pumbo_core::engine::{BackendDefaults, EngineAdapter, EngineRef, SignedChatCancel};
+use pumbo_core::engine::{
+    BackendDefaults, EngineAdapter, EngineRef, PacketFilter, SignedChatCancel,
+};
+use pumbo_protocol::ProtocolVersion;
+
+mod trail;
 
 #[derive(Debug)]
 pub struct PumpkinAdapter;
@@ -23,6 +28,10 @@ impl EngineAdapter for PumpkinAdapter {
             signed_chat_cancel: SignedChatCancel::Drop,
             chat_session_forwarding: true,
         }
+    }
+
+    fn quirks(&self, _: &EngineRef, wire: ProtocolVersion) -> Option<Box<dyn PacketFilter>> {
+        trail::TrailFix::for_version(wire).map(|f| Box::new(f) as Box<dyn PacketFilter>)
     }
 }
 

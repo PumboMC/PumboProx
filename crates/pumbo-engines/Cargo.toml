@@ -9,6 +9,8 @@ publish.workspace = true
 
 [dependencies]
 pumbo-core.workspace = true
+pumbo-data.workspace = true
+pumbo-protocol.workspace = true
 
 [lints]
 workspace = true
