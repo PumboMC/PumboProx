@@ -49,11 +49,17 @@ cargo clippy -p pumbo-sdk -p pumbo-example -p pumbo-host-test-plugin -p pumbo-br
 # Without the optional modules (today only version translation); this also
 # lints pumbo-translate without its multiversion feature.
 cargo clippy -p pumbo-prox --no-default-features --all-targets --locked -- -D warnings
+# The build without the optional modules has no translator crate in its tree.
+tree="$(cargo tree -p pumbo-prox --no-default-features --locked --prefix none)"
+if grep -q '^pumbo-translate-mv ' <<<"$tree"; then
+  echo "pumbo-prox without default features depends on pumbo-translate-mv"
+  exit 1
+fi
 
 step test
 cargo test --workspace --locked --exclude spike-wasm-async
 cargo test -p spike-wasm-async --release --locked -- --nocapture --test-threads=1
-cargo test -p pumbo-prox --no-default-features --locked --test translation
+cargo test -p pumbo-prox --no-default-features --locked --lib --test translation
 
 step deny
 # Advisories run in .github/workflows/audit.yml, so a new one does not fail every branch.

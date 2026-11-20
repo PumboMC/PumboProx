@@ -40,7 +40,6 @@ pumbo-servers.workspace = true
 pumbo-store.workspace = true
 pumbo-text.workspace = true
 pumbo-translate.workspace = true
-pumbo-translate-mv.workspace = true
 pumbo-virtual.workspace = true
 serde.workspace = true
 serde_json.workspace = true

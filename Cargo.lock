@@ -1777,7 +1777,6 @@ dependencies = [
  "pumbo-testclient",
  "pumbo-text",
  "pumbo-translate",
- "pumbo-translate-mv",
  "pumbo-virtual",
  "serde",
  "serde_json",
