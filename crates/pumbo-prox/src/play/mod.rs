@@ -55,6 +55,7 @@ mod hooks;
 mod messaging_tests;
 #[cfg(test)]
 mod quirk_tests;
+mod quirks;
 mod switching;
 #[cfg(test)]
 mod teleport_tests;
@@ -62,8 +63,8 @@ mod teleport_tests;
 mod test_rig;
 mod virtual_world;
 
-use backend::pumpkin_trail;
 use hooks::Hooks;
+use quirks::Quirks;
 
 /// Time for the client to acknowledge `start_configuration` (§3.3 step 4).
 const ACK_TIMEOUT: Duration = Duration::from_secs(5);
@@ -235,6 +236,8 @@ struct Backend {
     /// The client's chat session went to this backend.
     session_sent: bool,
     signed_cancel: SignedChatCancel,
+    /// The engine's repairs of this connection and the packets they read.
+    quirks: Option<Quirks>,
 }
 
 /// A resource pack the client has (§3.3).
@@ -341,8 +344,6 @@ struct Play<'a> {
     own_keep_alive_at: Instant,
     /// Next render of the `tab` header and footer.
     next_tab: Instant,
-    /// Id of the `trail` particle in the versions Pumpkin sends it broken in (D-COMPAT-1).
-    trail: Option<i32>,
     /// The session's hooks and the packets they want.
     hooks: Hooks,
 }
@@ -393,7 +394,6 @@ impl<'a> Play<'a> {
         Play {
             proxy,
             rt: rt.clone(),
-            trail: pumpkin_trail(module.protocol()),
             module: &**module,
             module_arc: module.clone(),
             player,

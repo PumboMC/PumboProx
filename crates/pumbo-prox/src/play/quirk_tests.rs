@@ -1,14 +1,22 @@
 //! The repair of a `trail` particle without options on a server connection
 //! without a translator: which client versions get it and in which layout,
-//! that the proxy's own filters come first and what it reports.
+//! that the proxy's own filters come first and what it reports; and what an
+//! engine's packet filter sees and does.
 
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use pumbo_core::engine::{Filtered, PacketFilter, Repair};
+use pumbo_protocol::packets::common::KeepAlive;
+use pumbo_protocol::packets::world::SetTime;
 use pumbo_protocol::types::WriteExt;
-use pumbo_protocol::{Direction, PacketKind, Phase, ProtocolVersion, VersionModule};
+use pumbo_protocol::{Direction, PacketKind, Phase, ProtocolVersion, RawFrame, VersionModule};
 
-use super::test_rig::{Rig, attach, backend_reads, finish_configuration, join, to_client};
+use super::Quirks;
+use super::quirks::delivered;
+use super::test_rig::{
+    Rig, attach, backend_reads, finish_configuration, from_backend, join, login, to_client,
+};
 
 /// A `level_particles` payload at (10.5, 64.5, -3.5): in the 26.3 layout
 /// (`particle_first`) the particle and its options lead, in 26.2's they
@@ -155,4 +163,116 @@ async fn the_first_repair_of_a_server_is_logged_once() {
         ),
         "{log}"
     );
+}
+
+/// A repair without a counter of its own.
+static ODD: Repair = Repair {
+    kind: "odd",
+    what: "an odd packet",
+    cause: "a test",
+};
+
+/// What a filter was shown.
+type Seen = Arc<Mutex<Vec<(Phase, PacketKind)>>>;
+
+/// A filter that wants `wants`, notes what it is shown and replaces it.
+struct Swap {
+    wants: &'static [PacketKind],
+    seen: Seen,
+}
+
+impl Swap {
+    fn quirks(wants: &'static [PacketKind]) -> (Quirks, Seen) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let swap = Swap {
+            wants,
+            seen: seen.clone(),
+        };
+        (Quirks::new(Box::new(swap)), seen)
+    }
+}
+
+impl PacketFilter for Swap {
+    fn interests(&self) -> &'static [PacketKind] {
+        self.wants
+    }
+
+    fn backend_to_client(&mut self, phase: Phase, kind: PacketKind, _: &RawFrame) -> Filtered {
+        self.seen.lock().unwrap().push((phase, kind));
+        Filtered::Replace {
+            payload: vec![1, 2, 3],
+            repair: &ODD,
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_filter_gets_the_kinds_it_wants_and_its_payload_goes_on() {
+    let (rig, cmds) = Rig::new("");
+    let pl = Phase::Play;
+    let (mut play, mut client) = rig.session(cmds);
+    let mut lobby = attach(&mut play, "lobby");
+    join(&mut play, &mut client, &mut lobby).await;
+    let (quirks, seen) = Swap::quirks(&[PacketKind::SetTime]);
+    play.backend.as_mut().unwrap().quirks = Some(quirks);
+    let time = SetTime {
+        world_age: 1,
+        time_of_day: 1,
+        ticking: true,
+        clocks: Vec::new(),
+    };
+    from_backend(&mut play, &mut lobby, pl, &time).await;
+    from_backend(&mut play, &mut lobby, pl, &KeepAlive { id: 9 }).await;
+    let flame = level_particles(true, particle(ProtocolVersion::V777, "flame"), &[]);
+    lobby.send_raw(particles_id(&*rig.module), &flame).await;
+    assert!(backend_reads(&mut play).await.is_none());
+    assert_eq!(*seen.lock().unwrap(), [(pl, PacketKind::SetTime)]);
+    let got = to_client(&mut play, &mut client).await;
+    let set_time = rig
+        .module
+        .packet_id(pl, Direction::Clientbound, PacketKind::SetTime);
+    assert_eq!(got.len(), 3, "{got:?}");
+    assert_eq!(
+        (Some(got[0].id), &got[0].payload[..]),
+        (set_time, &[1, 2, 3][..])
+    );
+    assert_eq!(got[2].payload, flame);
+    // A repair without a counter counts nowhere.
+    assert_eq!(fixed(&rig), 0);
+}
+
+#[tokio::test]
+async fn a_filter_sees_nothing_before_the_servers_login() {
+    let (rig, cmds) = Rig::new("");
+    let (cfg, pl) = (Phase::Configuration, Phase::Play);
+    let (mut play, mut client) = rig.session(cmds);
+    let mut lobby = attach(&mut play, "lobby");
+    let (quirks, seen) = Swap::quirks(&[PacketKind::KeepAlive]);
+    play.backend.as_mut().unwrap().quirks = Some(quirks);
+    from_backend(&mut play, &mut lobby, cfg, &KeepAlive { id: 1 }).await;
+    finish_configuration(&mut play, &mut client, &mut lobby).await;
+    from_backend(&mut play, &mut lobby, pl, &KeepAlive { id: 2 }).await;
+    assert!(seen.lock().unwrap().is_empty());
+    // The keep-alive in play before the login reached the client unchanged.
+    let got = to_client(&mut play, &mut client).await;
+    let want = super::test_rig::encode(&*rig.module, Direction::Clientbound, &KeepAlive { id: 2 });
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].payload, want);
+    from_backend(&mut play, &mut lobby, pl, &login()).await;
+    from_backend(&mut play, &mut lobby, pl, &KeepAlive { id: 3 }).await;
+    assert_eq!(*seen.lock().unwrap(), [(pl, PacketKind::KeepAlive)]);
+}
+
+#[test]
+fn a_filter_may_want_only_what_reaches_it() {
+    let reach = [PacketKind::KeepAlive, PacketKind::LevelParticles];
+    assert!(delivered(&reach));
+    for never in [
+        PacketKind::RegistryData,
+        PacketKind::Login,
+        PacketKind::Disconnect,
+        PacketKind::MovePlayerPos,
+    ] {
+        assert!(!delivered(&[never]), "{never:?}");
+    }
 }

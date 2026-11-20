@@ -222,15 +222,24 @@ impl Play<'_> {
                 }
                 Step::Forward
             }
-            (Phase::Play, Some(PacketKind::LevelParticles)) => self.level_particles(f)?,
             (_, Some(PacketKind::Transfer)) => self.backend_transfer(phase, f)?,
             _ => Step::Forward,
         };
-        Ok(match step {
-            Step::Forward if self.hooks.wants_backend(kind) => {
-                self.backend_hooks(phase, kind, f)?
+        let (Step::Forward, Some(k)) = (&step, kind) else {
+            return Ok(step);
+        };
+        // The engine's repairs see the play frames the proxy forwards after the
+        // server's login, before its hooks.
+        if phase == Phase::Play && joined && self.quirks_want(k) {
+            let step = self.quirk(phase, k, f)?;
+            if !matches!(step, Step::Forward) {
+                return Ok(step);
             }
-            step => step,
+        }
+        Ok(if self.hooks.wants_backend(kind) {
+            self.backend_hooks(phase, kind, f)?
+        } else {
+            Step::Forward
         })
     }
 
@@ -354,31 +363,6 @@ impl Play<'_> {
             };
             queue(&mut b.conn, module, phase, Direction::Serverbound, &answer)?;
         }
-        Ok(Step::Drop)
-    }
-
-    /// Pumpkin's `trail` particle without options kicks the client (Pumpkin
-    /// issue #3065): repaired for clients without a translator, which repairs
-    /// it itself (D-COMPAT-1). Correct packets pass unchanged.
-    fn level_particles(&mut self, f: &RawFrame) -> Result<Step, Fail> {
-        let Some(b) = self.backend.as_ref().filter(|b| !b.conn.translates()) else {
-            return Ok(Step::Forward);
-        };
-        let first = self.module.protocol() >= pumbo_protocol::ProtocolVersion::V777;
-        let Some(fixed) = self
-            .trail
-            .and_then(|t| packets::particles::add_trail_options(&f.payload, t, first))
-        else {
-            return Ok(Step::Forward);
-        };
-        Metrics::inc(&self.proxy.metrics.fixed_trails);
-        if self.proxy.first_report("trail", &b.name) {
-            warn!(
-                "fixed a malformed trail particle from {} (Pumpkin issue #3065); this stops by itself once the server sends correct packets",
-                b.name
-            );
-        }
-        self.client.queue(f.id, &fixed)?;
         Ok(Step::Drop)
     }
 
@@ -581,22 +565,6 @@ impl Play<'_> {
         // The Tab header is rendered again in the new server's context (§5.8.3).
         self.after_join();
     }
-}
-
-/// The `trail` particle's id in 26.2 and 26.3, the versions of Pumpkin 0.1 and
-/// 0.2 that send it without options (D-COMPAT-1).
-pub(super) fn pumpkin_trail(v: pumbo_protocol::ProtocolVersion) -> Option<i32> {
-    use pumbo_protocol::ProtocolVersion as V;
-    // Only Pumpkin's protocols so far; a later Pumpkin with the same bug
-    // needs its protocol here (26.3's layout from 777 on, see `add_trail_options`).
-    if v != V::V776 && v != V::V777 {
-        return None;
-    }
-    let id = pumbo_data::tables(v)
-        .ok()?
-        .registry("particle_type")?
-        .id("trail")?;
-    i32::try_from(id).ok()
 }
 
 /// The server whose address a `transfer` names: the same host (no DNS

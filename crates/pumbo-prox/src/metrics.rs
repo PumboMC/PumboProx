@@ -103,6 +103,15 @@ impl Metrics {
     pub fn add(c: &AtomicU64, n: u64) {
         c.fetch_add(n, Ordering::Relaxed);
     }
+
+    /// The counter of `pumboprox_fixed_packets_total` with label `kind`; a
+    /// new repair needs its line in the list above and here.
+    pub fn fixed(&self, kind: &str) -> Option<&AtomicU64> {
+        match kind {
+            "trail_particle" => Some(&self.fixed_trails),
+            _ => None,
+        }
+    }
 }
 
 /// `pumboprox_translate_dropped_total{to, packet}`: packets the version
@@ -421,6 +430,14 @@ mod tests {
                 .any(|l| l == "pumboprox_fixed_packets_total{kind=\"trail_particle\"} 0"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn the_pumpkin_repair_has_a_counter() {
+        let m = Metrics::default();
+        let trail = m.fixed("trail_particle").unwrap();
+        assert!(std::ptr::eq(trail, &m.fixed_trails));
+        assert!(m.fixed("trail").is_none());
     }
 
     fn endpoint(ready: impl Fn() -> bool + Send + Sync + 'static) -> Endpoint {

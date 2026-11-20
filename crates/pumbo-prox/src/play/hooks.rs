@@ -15,7 +15,7 @@ use crate::session::{Fail, queue};
 use super::{Backend, Play, Step};
 
 /// One bit per packet kind.
-type Kinds = [u64; PacketKind::ALL.len().div_ceil(64)];
+pub(super) type Kinds = [u64; PacketKind::ALL.len().div_ceil(64)];
 
 // The masks take a kind's discriminant for its bit: it must be its place in
 // `PacketKind::ALL`.
@@ -31,7 +31,7 @@ const _: () = {
     }
 };
 
-fn kinds(list: &[PacketKind]) -> Kinds {
+pub(super) fn kinds(list: &[PacketKind]) -> Kinds {
     let mut m = Kinds::default();
     for k in list {
         let i = *k as usize;
@@ -43,7 +43,7 @@ fn kinds(list: &[PacketKind]) -> Kinds {
 }
 
 #[inline]
-fn has(m: &Kinds, k: PacketKind) -> bool {
+pub(super) fn has(m: &Kinds, k: PacketKind) -> bool {
     let i = k as usize;
     m.get(i >> 6).is_some_and(|w| w >> (i & 63) & 1 != 0)
 }

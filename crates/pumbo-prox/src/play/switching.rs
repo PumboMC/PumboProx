@@ -28,7 +28,7 @@ use crate::versions;
 
 use super::{
     ACK_TIMEOUT, Backend, End, LoginFuture, MAX_REDIRECTS, Next, NextEvent, OWN_KEEP_ALIVE, Play,
-    Purpose, Request,
+    Purpose, Quirks, Request,
 };
 
 impl Play<'_> {
@@ -182,7 +182,14 @@ impl Play<'_> {
         self.epoch += 1;
         self.own_keep_alive = None;
         let server = self.rt.config.servers.get(&name);
-        let (chat_sessions, signed_cancel) = self.rt.modules.engines.of(&name).chat(server);
+        let e = self.rt.modules.engines.of(&name);
+        let (chat_sessions, signed_cancel) = e.chat(server);
+        // Without a translator the server's frames are in the client's
+        // version; a translator repairs what it translates itself.
+        let quirks = (!conn.translates())
+            .then(|| e.adapter.quirks(&e.engine, self.module.protocol()))
+            .flatten()
+            .map(Quirks::new);
         debug!("{}: configuring on {name}", self.player.profile.name);
         self.backend = Some(Backend {
             conn,
@@ -197,6 +204,7 @@ impl Play<'_> {
             chat_sessions,
             session_sent: false,
             signed_cancel,
+            quirks,
         });
         for (f, body) in buffer {
             if let Some(end) = self.backend_frame(&f, &body) {
