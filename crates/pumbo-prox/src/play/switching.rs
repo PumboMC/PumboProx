@@ -182,8 +182,7 @@ impl Play<'_> {
         self.epoch += 1;
         self.own_keep_alive = None;
         let server = self.rt.config.servers.get(&name);
-        let chat_sessions = server.is_none_or(|s| s.chat_session_forwarding);
-        let signed_cancel = server.map(|s| s.signed_chat_cancel).unwrap_or_default();
+        let (chat_sessions, signed_cancel) = self.rt.modules.engines.of(&name).chat(server);
         debug!("{}: configuring on {name}", self.player.profile.name);
         self.backend = Some(Backend {
             conn,

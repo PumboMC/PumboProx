@@ -79,11 +79,22 @@ fn e4_sections_are_checked() {
     );
     let cfg = Config::parse(&per_server).unwrap();
     let lobby = &cfg.servers["lobby"];
-    assert!(!lobby.chat_session_forwarding);
+    assert_eq!(lobby.chat_session_forwarding, Some(false));
     assert_eq!(
         lobby.signed_chat_cancel,
-        pumbo_prox::config::SignedChatCancel::Kick
+        Some(pumbo_prox::config::SignedChatCancel::Kick)
     );
+    // Left out or empty: the server's engine decides.
+    let plain = &Config::parse(SAMPLE).unwrap().servers["lobby"];
+    let empty = SAMPLE.replace(
+        "protocol: 777 }",
+        "protocol: 777, chat-session-forwarding: ~, signed-chat-cancel: ~ }",
+    );
+    let empty = &Config::parse(&empty).unwrap().servers["lobby"];
+    for s in [plain, empty] {
+        assert_eq!(s.chat_session_forwarding, None);
+        assert_eq!(s.signed_chat_cancel, None);
+    }
 }
 
 #[test]

@@ -227,13 +227,14 @@ pub struct ServerConfig {
     pub address: String,
     pub protocol: Option<i32>,
     /// Pass the client's `chat_session_update` on; `false` makes this backend
-    /// treat all chat as unsigned (§2.8 point 4).
-    #[serde(default = "yes")]
-    pub chat_session_forwarding: bool,
-    /// What a cancelled signed message does on this backend once it got the
-    /// player's chat session (§2.8 point 5, result of the E4 test).
+    /// treat all chat as unsigned (§2.8 point 4). `None`: the engine's value.
     #[serde(default)]
-    pub signed_chat_cancel: SignedChatCancel,
+    pub chat_session_forwarding: Option<bool>,
+    /// What a cancelled signed message does on this backend once it got the
+    /// player's chat session (§2.8 point 5, result of the E4 test). `None`:
+    /// the engine's value.
+    #[serde(default)]
+    pub signed_chat_cancel: Option<SignedChatCancel>,
     /// Pass this server's `transfer` packets on to the client. Without it
     /// the proxy drops them, or switches the player when one names a server
     /// of this proxy: a transfer could send players to any host.
@@ -243,10 +244,6 @@ pub struct ServerConfig {
     /// answers travel unencrypted and could be replayed.
     #[serde(default)]
     pub allow_public: bool,
-}
-
-fn yes() -> bool {
-    true
 }
 
 /// What happens to the previous server's resource packs on a switch (§3.3).

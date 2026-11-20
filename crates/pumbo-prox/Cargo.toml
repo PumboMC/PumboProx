@@ -28,6 +28,7 @@ pumbo-common.workspace = true
 pumbo-contracts.workspace = true
 pumbo-core.workspace = true
 pumbo-data.workspace = true
+pumbo-engines.workspace = true
 pumbo-forwarding.workspace = true
 pumbo-host.workspace = true
 pumbo-identity.workspace = true

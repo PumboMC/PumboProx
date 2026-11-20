@@ -1764,6 +1764,7 @@ dependencies = [
  "pumbo-core",
  "pumbo-data",
  "pumbo-datagen",
+ "pumbo-engines",
  "pumbo-forwarding",
  "pumbo-host",
  "pumbo-identity",
