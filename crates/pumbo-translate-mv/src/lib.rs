@@ -30,7 +30,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub use data::{Block, Bound, Phase, Synced, TagList, VersionData};
-pub use play::fix_empty_trail;
 pub use version::{OLDEST_CLIENT, SERVER_PROTOCOL};
 
 use remap::{IdMap, StandIns};

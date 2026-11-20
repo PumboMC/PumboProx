@@ -58,9 +58,7 @@ Ported functions, by file (the source in brackets):
   `RecipeDisplayRewriter`).
 - `src/nbt.rs`: `text` (ViaBackwards `ComponentRewriter1_21_5`).
 - `src/play.rs`: `commands` (argument parsers the client lacks become strings,
-  as in ViaVersion), `options` (ViaVersion `ParticleType` readers), the test
-  reader `read_trail_26_3` (ViaVersion `TRAIL1_21_4`, ViaBackwards
-  `BlockItemPacketRewriter26_3`).
+  as in ViaVersion), `options` (ViaVersion `ParticleType` readers).
 - `src/remap.rs`: `StandIns::state` (ViaVersion Mappings `MappingsLoader.mapEntry`).
 - `src/serverbound.rs`: `player_action` (ViaBackwards
   `EntityPacketRewriter26_3`).

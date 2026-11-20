@@ -367,7 +367,7 @@ impl Play<'_> {
         let first = self.module.protocol() >= pumbo_protocol::ProtocolVersion::V777;
         let Some(fixed) = self
             .trail
-            .and_then(|t| pumbo_translate_mv::fix_empty_trail(&f.payload, t, first))
+            .and_then(|t| packets::particles::add_trail_options(&f.payload, t, first))
         else {
             return Ok(Step::Forward);
         };
@@ -588,7 +588,7 @@ impl Play<'_> {
 pub(super) fn pumpkin_trail(v: pumbo_protocol::ProtocolVersion) -> Option<i32> {
     use pumbo_protocol::ProtocolVersion as V;
     // Only Pumpkin's protocols so far; a later Pumpkin with the same bug
-    // needs its protocol here (26.3's layout from 777 on, see `fix_empty_trail`).
+    // needs its protocol here (26.3's layout from 777 on, see `add_trail_options`).
     if v != V::V776 && v != V::V777 {
         return None;
     }

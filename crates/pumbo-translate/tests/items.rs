@@ -469,7 +469,7 @@ fn recorded_pumpkin_packets_reach_every_client() {
 
 /// Pumpkin 0.2.0's eyeblossom `trail` without options (Pumpkin issue #3065)
 /// reaches older clients with the options the proxy gives 26.3 clients
-/// (`fix_empty_trail`, D-COMPAT-1), not dropped.
+/// (`add_trail_options`, D-COMPAT-1), not dropped.
 #[test]
 fn trail_without_options_reaches_older_clients_repaired() {
     let server = Side::new(777);

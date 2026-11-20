@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 pumbo-nbt.workspace = true
+pumbo-protocol.workspace = true
 pumbo-text.workspace = true
 
 [dev-dependencies]

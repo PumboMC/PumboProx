@@ -593,64 +593,13 @@ fn options(particle: &str) -> &str {
     }
 }
 
-/// Pumpkin 0.1 and 0.2 send the `trail` particle of an eyeblossom without its
-/// options (Pumpkin issue #3065), and no client can decode that. Returns such a
-/// `level_particles` payload with the options added, `None` for any other
-/// payload (correct ones too), so the repair stops by itself once Pumpkin is
-/// fixed. `particle_first`: the 26.3 layout (particle before the position),
-/// otherwise 26.2's (particle last).
-pub fn fix_empty_trail(payload: &[u8], trail: i32, particle_first: bool) -> Option<Vec<u8>> {
-    let mut r = payload;
-    let split = if particle_first {
-        if r.get_var_int()? != trail {
-            return None;
-        }
-        let split = payload.len() - r.len();
-        // Without options only the flags, position, offset and speeds (50
-        // bytes), the count and the randomization type follow.
-        r.bytes(50)?;
-        r.get_var_int()?;
-        r.get_var_int()?;
-        split
-    } else {
-        // Flags, position, offset, speed and count (46 bytes), then the particle.
-        r.bytes(46)?;
-        if r.get_var_int()? != trail {
-            return None;
-        }
-        payload.len()
-    };
-    if !r.is_empty() {
-        return None;
-    }
-    let (head, tail) = payload.split_at_checked(split)?;
-    let mut position = (if particle_first { tail } else { payload }).get(2..)?;
-    let (x, y, z) = (
-        position.get_f64()?,
-        position.get_f64()?,
-        position.get_f64()?,
-    );
-    let mut out = Vec::with_capacity(payload.len() + 29);
-    out.put_slice(head);
-    // Vanilla's eyeblossom trail (`EyeblossomBlock.Type.spawnTransformParticle`)
-    // at its mean: target 1.5 blocks up, 20 ticks. The packet does not tell
-    // opening from closing, so it takes the opening color (closing: 0x5F5F5F).
-    out.put_f64(x);
-    out.put_f64(y + 1.5);
-    out.put_f64(z);
-    out.put_i32(0x00FC_7812);
-    out.put_var_int(20);
-    out.put_slice(tail);
-    Some(out)
-}
-
 /// `level_particles`: 26.3 moved the particle to the front, split the speed per
 /// axis, made the count a VarInt and added a randomization type.
 fn level_particles(ctx: &mut Ctx<'_>, payload: &[u8]) -> Option<Vec<u8>> {
     if ctx.client() >= V26_3 {
         return Some(payload.to_vec());
     }
-    // The same repair as for 26.3 clients in the proxy (`fix_empty_trail`).
+    // The same repair as for 26.3 clients in the proxy.
     let id = { payload }.get_var_int()?;
     let trail = ctx
         .t
@@ -658,7 +607,9 @@ fn level_particles(ctx: &mut Ctx<'_>, payload: &[u8]) -> Option<Vec<u8>> {
         .registry("particle_type")
         .get(usize::try_from(id).ok()?)
         .is_some_and(|n| n.strip_prefix("minecraft:").unwrap_or(n) == "trail");
-    let fixed = trail.then(|| fix_empty_trail(payload, id, true)).flatten();
+    let fixed = trail
+        .then(|| pumbo_protocol::packets::particles::add_trail_options(payload, id, true))
+        .flatten();
     let mut r = fixed.as_deref().unwrap_or(payload);
     let mut particle_out = Vec::new();
     particle(ctx, &mut r, &mut particle_out)?;
@@ -1186,145 +1137,4 @@ fn show_dialog(ctx: &mut Ctx<'_>, mut r: &[u8]) -> Option<Vec<u8>> {
     let id = holder - 1;
     out.put_var_int(ctx.dynamic("dialog").map_or(Some(id), |m| m.get(id))? + 1);
     Some(out)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const TRAIL: i32 = 59;
-    const FLAME: i32 = 3;
-
-    /// What Pumpkin 0.2.0 sends for an eyeblossom (26.3 layout): the particle
-    /// first, then flags, block center, zero offset and speeds, count 1.
-    fn level_particles_26_3(particle: i32, options: &[u8]) -> Vec<u8> {
-        let mut p = Vec::new();
-        p.put_var_int(particle);
-        p.put_slice(options);
-        p.put_slice(&[0, 0]);
-        [10.5, 64.5, -3.5].iter().for_each(|v| p.put_f64(*v));
-        (0..6).for_each(|_| p.put_f32(0.0));
-        p.put_var_int(1);
-        p.put_var_int(0);
-        p
-    }
-
-    fn level_particles_26_2(particle: i32, options: &[u8]) -> Vec<u8> {
-        let mut p = vec![0, 0];
-        [10.5, 64.5, -3.5].iter().for_each(|v| p.put_f64(*v));
-        (0..4).for_each(|_| p.put_f32(0.0));
-        p.put_i32(1);
-        p.put_var_int(particle);
-        p.put_slice(options);
-        p
-    }
-
-    fn trail_options(target: [f64; 3], color: i32, duration: i32) -> Vec<u8> {
-        let mut o = Vec::new();
-        target.iter().for_each(|v| o.put_f64(*v));
-        o.put_i32(color);
-        o.put_var_int(duration);
-        o
-    }
-
-    /// Reads a 26.3 `level_particles` with a trail in vanilla's field order
-    /// (ported, see NOTICE): target,
-    /// color and duration, then the rest, and nothing may be left.
-    fn read_trail_26_3(mut r: &[u8]) -> ([f64; 3], i32, i32, [f64; 3]) {
-        assert_eq!(r.get_var_int(), Some(TRAIL));
-        let target = [r.get_f64(), r.get_f64(), r.get_f64()].map(Option::unwrap);
-        let (color, duration) = (r.get_i32().unwrap(), r.get_var_int().unwrap());
-        r.bytes(2).unwrap();
-        let pos = [r.get_f64(), r.get_f64(), r.get_f64()].map(Option::unwrap);
-        r.bytes(24).unwrap();
-        assert_eq!(r.get_var_int(), Some(1));
-        assert_eq!(r.get_var_int(), Some(0));
-        assert!(r.is_empty(), "{} bytes left", r.len());
-        (target, color, duration, pos)
-    }
-
-    #[test]
-    fn empty_trail_gets_vanilla_eyeblossom_options() {
-        let fixed = fix_empty_trail(&level_particles_26_3(TRAIL, &[]), TRAIL, true).unwrap();
-        let (target, color, duration, pos) = read_trail_26_3(&fixed);
-        assert_eq!(pos, [10.5, 64.5, -3.5]);
-        assert_eq!(target, [10.5, 66.0, -3.5]);
-        assert_eq!((color, duration), (0xFC7812, 20));
-        // The same options as a correct packet (what a fixed Pumpkin sends).
-        let correct = level_particles_26_3(TRAIL, &trail_options(target, color, 20));
-        assert_eq!(fixed, correct);
-
-        let fixed = fix_empty_trail(&level_particles_26_2(TRAIL, &[]), TRAIL, false).unwrap();
-        let correct = level_particles_26_2(TRAIL, &trail_options(target, color, 20));
-        assert_eq!(fixed, correct);
-    }
-
-    #[test]
-    fn correct_packets_and_other_particles_stay_as_they_are() {
-        let options = trail_options([1.0, 2.0, 3.0], 0x5F5F5F, 7);
-        for (packet, first) in [
-            (level_particles_26_3(TRAIL, &options), true),
-            (level_particles_26_3(FLAME, &[]), true),
-            (level_particles_26_2(TRAIL, &options), false),
-            (level_particles_26_2(FLAME, &[]), false),
-            // A 26.2 packet read as 26.3 and the other way round.
-            (level_particles_26_2(TRAIL, &[]), true),
-            (level_particles_26_3(TRAIL, &[]), false),
-        ] {
-            assert_eq!(
-                fix_empty_trail(&packet, TRAIL, first),
-                None,
-                "{packet:02x?}"
-            );
-        }
-    }
-
-    /// The check on the proxy's relay path: a `level_particles` with another
-    /// particle reads one VarInt, a correct trail its fixed fields.
-    #[test]
-    fn checking_a_particle_packet_is_cheap() {
-        let options = trail_options([1.0, 2.0, 3.0], 0x5F5F5F, 7);
-        for (what, packet) in [
-            ("other particle", level_particles_26_3(FLAME, &[])),
-            ("correct trail", level_particles_26_3(TRAIL, &options)),
-            ("broken trail (repaired)", level_particles_26_3(TRAIL, &[])),
-        ] {
-            let t = std::time::Instant::now();
-            let mut fixed = 0;
-            for _ in 0..1_000_000 {
-                fixed += usize::from(
-                    fix_empty_trail(std::hint::black_box(&packet), TRAIL, true).is_some(),
-                );
-            }
-            let took = t.elapsed();
-            eprintln!("[measure] 1000000 checks, {what}: {took:?} ({fixed} repaired)");
-            assert!(took < std::time::Duration::from_secs(10), "{took:?}");
-        }
-    }
-
-    #[test]
-    fn cut_or_garbage_packets_are_left_alone() {
-        for (packet, first) in [
-            (level_particles_26_3(TRAIL, &[]), true),
-            (level_particles_26_2(TRAIL, &[]), false),
-        ] {
-            for n in 0..packet.len() {
-                assert_eq!(fix_empty_trail(&packet[..n], TRAIL, first), None, "{n}");
-            }
-        }
-        let mut seed = 0x2545_F491_4F6C_DD1D_u64;
-        for len in 0..200 {
-            let junk: Vec<u8> = (0..len)
-                .map(|_| {
-                    seed ^= seed << 13;
-                    seed ^= seed >> 7;
-                    seed ^= seed << 17;
-                    seed as u8
-                })
-                .collect();
-            for first in [true, false] {
-                let _ = fix_empty_trail(&junk, TRAIL, first);
-            }
-        }
-    }
 }
