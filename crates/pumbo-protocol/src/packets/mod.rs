@@ -11,6 +11,7 @@ pub mod commands;
 pub mod common;
 pub mod configuration;
 pub mod login;
+pub mod particles;
 pub mod play;
 pub mod status;
 pub mod world;
