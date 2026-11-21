@@ -113,8 +113,8 @@ const RENAMES: &[(&str, &str)] = &[
 
 /// Everything that depends only on the two versions; shared by sessions.
 pub struct Tables {
-    pub(crate) client: VersionData,
-    pub(crate) server: VersionData,
+    pub(crate) client: Arc<VersionData>,
+    pub(crate) server: Arc<VersionData>,
     /// Per phase: server packet ID → route to the client.
     to_client: [Vec<Route>; 2],
     /// Per phase: client packet ID → route to the server.
@@ -205,6 +205,11 @@ impl Tables {
     /// Tables of one entry of [`PAIRS`]; other protocols are an error. The
     /// `experimental` mark is the caller's to honour.
     pub fn new(client: VersionData, server: VersionData) -> Result<Self, Error> {
+        Self::shared(Arc::new(client), Arc::new(server))
+    }
+
+    /// [`Tables::new`] on version data other tables hold too.
+    pub fn shared(client: Arc<VersionData>, server: Arc<VersionData>) -> Result<Self, Error> {
         let (c, s) = (client.protocol, server.protocol);
         if find(c, s).is_none() {
             return Err(Error::UnsupportedPair {
@@ -336,6 +341,11 @@ impl Tables {
 
     pub fn server_protocol(&self) -> i32 {
         self.server.protocol
+    }
+
+    /// The server's version data, one for every pair with that server.
+    pub fn server_data(&self) -> &Arc<VersionData> {
+        &self.server
     }
 
     /// Client block state for a server block state.

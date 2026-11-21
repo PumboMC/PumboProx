@@ -14,11 +14,12 @@ pumbo-data = { workspace = true, optional = true }
 pumbo-protocol.workspace = true
 pumbo-translate-mv = { workspace = true, optional = true }
 serde.workspace = true
+tracing = { workspace = true, optional = true }
 
 [features]
 default = ["multiversion"]
 # The translator inside the proxy for older clients (pumbo-translate-mv).
-multiversion = ["dep:bytes", "dep:pumbo-data", "dep:pumbo-translate-mv"]
+multiversion = ["dep:bytes", "dep:pumbo-data", "dep:pumbo-translate-mv", "dep:tracing"]
 
 [dev-dependencies]
 pumbo-nbt.workspace = true

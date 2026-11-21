@@ -1878,6 +1878,7 @@ dependencies = [
  "pumbo-testclient",
  "pumbo-translate-mv",
  "serde",
+ "tracing",
 ]
 
 [[package]]

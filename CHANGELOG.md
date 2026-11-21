@@ -101,6 +101,7 @@ All notable changes to PumboProx, one section per release. The format follows [K
 - An unknown top-level key with a plain value (such as `limit: 5`) no longer fails the load with a wrong line number; it is reported as an unknown key.
 - The metrics listed the type of `pumboprox_dropped_packets_total` twice, so Prometheus rejected the whole scrape. Each series now has its type once.
 - `/prox route`, `/prox op` and `migrate-config` keep the owner of `pumboprox.yml` when they write it, not only its mode.
+- A `reload` no longer throws away the version translation tables, so the first player on each older client version after a reload does not wait for them to be built again.
 
 ## [0.2.5-beta] - 2026-10-11
 

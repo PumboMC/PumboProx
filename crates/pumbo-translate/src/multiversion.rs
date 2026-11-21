@@ -2,8 +2,7 @@
 //! (plan E3b), for the pairs it lists in `PAIRS` (clients 1.21–26.2 on a 26.3
 //! backend). This module feeds it the tables of both versions from `pumbo-data`.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, OnceLock};
 
 use bytes::Bytes;
 use pumbo_core::registry::{ModuleConfig, ModuleError};
@@ -15,15 +14,20 @@ use pumbo_translate_mv as mv;
 
 use crate::MULTIVERSION;
 
-/// Tables per pair (client, server), built on first use (tens of
-/// milliseconds) and shared by all sessions of that pair.
+/// The translator of `pumbo-translate-mv` for the pairs it lists. Its tables
+/// are in [`TABLES`], so every provider (a new one comes with each reload)
+/// shares them.
 #[derive(Debug, Default)]
-pub struct Multiversion {
-    tables: Mutex<Cache>,
-}
+pub struct Multiversion {}
 
-/// Tables by (client, server); `None`: they could not be built.
-type Cache = HashMap<(i32, i32), Option<Arc<mv::Tables>>>;
+/// A value made once for the whole process; `None`: it could not be made.
+type Slot<T> = OnceLock<Option<Arc<T>>>;
+
+/// Tables of what this crate's code translates directly (one cell per
+/// entry of [`mv::PAIRS`]), built on the first plan that needs them and
+/// shared by every session; a reload keeps them. `None`: they could not be
+/// built.
+static TABLES: [Slot<mv::Tables>; mv::PAIRS.len()] = [const { OnceLock::new() }; mv::PAIRS.len()];
 
 fn short(name: &str) -> String {
     pumbo_data::short_name(name).to_string()
@@ -135,20 +139,102 @@ pub fn version_data(v: ProtocolVersion) -> Option<mv::VersionData> {
     })
 }
 
-impl Multiversion {
-    fn tables(&self, pair: mv::Pair) -> Option<Arc<mv::Tables>> {
-        let mut cache = self.tables.lock().unwrap_or_else(PoisonError::into_inner);
-        cache
-            .entry((pair.client, pair.server))
-            .or_insert_with(|| {
-                // Built under the lock on the first join of a pair; fine
-                // while it takes milliseconds, move to spawn_blocking if it grows.
-                let client = version_data(ProtocolVersion(pair.client))?;
-                let server = version_data(ProtocolVersion(pair.server))?;
-                mv::Tables::new(client, server).ok().map(Arc::new)
+/// The value of `cell`, made on its first use. A failure is kept, and its
+/// reason goes to `report` that once (`None`: reported elsewhere).
+fn once<T: Clone>(
+    cell: &OnceLock<Option<T>>,
+    make: impl FnOnce() -> Result<T, Option<String>>,
+    report: impl FnOnce(&str),
+) -> Option<T> {
+    cell.get_or_init(|| {
+        make()
+            .map_err(|reason| {
+                if let Some(reason) = reason {
+                    report(&reason);
+                }
             })
-            .clone()
-    }
+            .ok()
+    })
+    .clone()
+}
+
+/// Why protocol `v` has no version data.
+fn no_data(v: i32) -> String {
+    format!("protocol {v}: no tables or no recorded configuration data")
+}
+
+/// What the translator needs about protocol `v`, built once and shared by
+/// every pair with that protocol; a protocol without it is logged once.
+fn data(v: i32) -> Option<Arc<mv::VersionData>> {
+    // One cell per protocol of `mv::PAIRS`, also one this build does not
+    // embed, so that one gets its line in the log too.
+    static DATA: OnceLock<Vec<(i32, Slot<mv::VersionData>)>> = OnceLock::new();
+    let cells = DATA.get_or_init(|| {
+        let mut protocols: Vec<i32> = mv::PAIRS
+            .iter()
+            .flat_map(|p| [p.client, p.server])
+            .collect();
+        protocols.sort_unstable();
+        protocols.dedup();
+        protocols
+            .into_iter()
+            .map(|p| (p, OnceLock::new()))
+            .collect()
+    });
+    let (_, cell) = cells.iter().find(|(p, _)| *p == v)?;
+    once(
+        cell,
+        || {
+            version_data(ProtocolVersion(v))
+                .map(Arc::new)
+                .ok_or_else(|| Some(no_data(v)))
+        },
+        |reason| tracing::warn!("no version translation with {reason}"),
+    )
+}
+
+/// Tables of `client` on `server` on the data `data` gives; `Err(None)` when
+/// a side has no data (its own cell reports that).
+fn build(
+    data: impl Fn(i32) -> Option<Arc<mv::VersionData>>,
+    client: i32,
+    server: i32,
+) -> Result<Arc<mv::Tables>, Option<String>> {
+    let (Some(c), Some(s)) = (data(client), data(server)) else {
+        return Err(None);
+    };
+    mv::Tables::shared(c, s)
+        .map(Arc::new)
+        .map_err(|e| Some(e.to_string()))
+}
+
+/// The tables for `client` on `server`. A pair that has its data and still
+/// cannot be built is logged once.
+fn tables(client: i32, server: i32) -> Option<Arc<mv::Tables>> {
+    let i = mv::PAIRS
+        .iter()
+        .position(|p| p.client == client && p.server == server)?;
+    once(
+        TABLES.get(i)?,
+        || build(data, client, server),
+        |reason| {
+            tracing::warn!(
+                "no version translation for protocol {client} clients on protocol {server} servers: {reason}"
+            );
+        },
+    )
+}
+
+/// Why `pair` has no tables, for `check-config`; `None` when it has them.
+/// Builds them without keeping or logging anything.
+pub fn why_not(pair: &mv::Pair) -> Option<String> {
+    let Some(client) = version_data(ProtocolVersion(pair.client)) else {
+        return Some(no_data(pair.client));
+    };
+    let Some(server) = version_data(ProtocolVersion(pair.server)) else {
+        return Some(no_data(pair.server));
+    };
+    mv::Tables::new(client, server).err().map(|e| e.to_string())
 }
 
 impl TranslatorProvider for Multiversion {
@@ -162,7 +248,7 @@ impl TranslatorProvider for Multiversion {
         backend: Option<ProtocolVersion>,
     ) -> Option<TranslationPlan> {
         let pair = mv::find(client.0, backend?.0)?;
-        let tables = self.tables(pair)?;
+        let tables = tables(pair.client, pair.server)?;
         Some(TranslationPlan::Translate(Box::new(Session {
             inner: mv::Translator::new(tables),
             out: mv::Output::default(),
@@ -235,6 +321,8 @@ pub(crate) fn factory(_: &ModuleConfig) -> Result<Arc<dyn TranslatorProvider>, M
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
 
     /// Dropped packets come out by name: one the client cannot read, and an
@@ -331,5 +419,65 @@ mod tests {
             m.plan(v(769), Some(v(777))),
             Some(TranslationPlan::Translate(_))
         ));
+    }
+
+    #[test]
+    fn tables_are_built_once_per_pair() {
+        let first = tables(769, 777).unwrap();
+        assert!(Arc::ptr_eq(&first, &tables(769, 777).unwrap()));
+    }
+
+    #[test]
+    fn pairs_share_the_servers_data() {
+        let (oldest, newest) = (tables(767, 777).unwrap(), tables(776, 777).unwrap());
+        assert!(Arc::ptr_eq(oldest.server_data(), newest.server_data()));
+    }
+
+    #[test]
+    fn a_pair_without_data_says_why() {
+        let pair = |client| mv::Pair {
+            client,
+            server: 777,
+            experimental: false,
+        };
+        let why = why_not(&pair(700)).unwrap();
+        assert!(why.contains("protocol 700"), "{why}");
+        assert_eq!(why_not(&pair(769)), None);
+    }
+
+    #[test]
+    fn a_failure_is_reported_once() {
+        let cell: OnceLock<Option<u8>> = OnceLock::new();
+        let (made, reported) = (Cell::new(0), Cell::new(0));
+        for _ in 0..2 {
+            let got = once(
+                &cell,
+                || {
+                    made.set(made.get() + 1);
+                    Err(Some("broken".to_string()))
+                },
+                |reason| {
+                    assert_eq!(reason, "broken");
+                    reported.set(reported.get() + 1);
+                },
+            );
+            assert_eq!(got, None);
+        }
+        assert_eq!((made.get(), reported.get()), (1, 1));
+    }
+
+    /// A version without data is reported by its own cell; the pairs that
+    /// need it stay silent.
+    #[test]
+    fn a_missing_version_is_reported_once_for_all_its_pairs() {
+        let reported = Cell::new(0);
+        let report = |_: &str| reported.set(reported.get() + 1);
+        let version: Slot<mv::VersionData> = OnceLock::new();
+        let data = |_| once(&version, || Err(Some(no_data(700))), report);
+        let pairs: [Slot<mv::Tables>; 2] = Default::default();
+        for (pair, client) in pairs.iter().zip([700, 769]) {
+            assert!(once(pair, || build(data, client, 777), report).is_none());
+        }
+        assert_eq!(reported.get(), 1);
     }
 }
