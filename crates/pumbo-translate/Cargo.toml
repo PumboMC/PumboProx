@@ -41,6 +41,10 @@ name = "items"
 required-features = ["multiversion"]
 
 [[test]]
+name = "pair_tables"
+required-features = ["multiversion"]
+
+[[test]]
 name = "remaps"
 required-features = ["multiversion"]
 
