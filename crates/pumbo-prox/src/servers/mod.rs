@@ -6,7 +6,6 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use pumbo_engines::pumpkin::Pumpkin;
 use pumbo_servers::{Manager, Network, ProcessRunner, Source, State};
 use tracing::{info, warn};
 
@@ -23,11 +22,6 @@ pub(crate) use crate::ui::{button, line, reply, row, usage};
 use control::server;
 use download::download;
 
-/// The server software the proxy can download and run.
-fn sources() -> Vec<Arc<dyn Source>> {
-    vec![Arc::new(Pumpkin::default())]
-}
-
 const SERVER_SUBS: &[&str] = &["help", "new", "start", "stop", "restart", "logs", "delete"];
 
 // ------------------------------------------------------------------ setup
@@ -36,7 +30,7 @@ const SERVER_SUBS: &[&str] = &["help", "new", "start", "stop", "restart", "logs"
 /// the server list, takes over the ones a crashed proxy left running and
 /// starts the `autostart` ones. Needs the bridge key, so after the bridge.
 pub fn start(proxy: &Arc<Proxy>) -> Result<(), String> {
-    start_with(proxy, sources())
+    start_with(proxy, crate::modules::server_sources())
 }
 
 /// [`start`] with other server software (tests: a local release server).

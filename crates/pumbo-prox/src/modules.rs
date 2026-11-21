@@ -70,6 +70,12 @@ impl Engines {
     }
 }
 
+/// The server software of `managed-servers`: a list next to the registry,
+/// from the crate of the engine adapters.
+pub fn server_sources() -> Vec<Arc<dyn pumbo_servers::Source>> {
+    pumbo_engines::sources()
+}
+
 /// The session hooks of the built-in modules, in calling order; a new hook
 /// is one line here.
 pub(crate) fn session_hooks(proxy: &Arc<Proxy>, s: &SessionInfo<'_>) -> Vec<Box<dyn SessionHook>> {
