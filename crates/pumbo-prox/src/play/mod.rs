@@ -45,6 +45,8 @@ use pumbo_virtual::{Input, VirtualPlayer};
 mod backend;
 mod channels;
 mod client;
+#[cfg(test)]
+mod engine_tests;
 mod event_loop;
 #[cfg(test)]
 mod forward_bench;

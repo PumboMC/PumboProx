@@ -43,7 +43,7 @@ pub(super) fn level_particles(particle_first: bool, particle: i32, options: &[u8
 }
 
 /// The options vanilla gives that trail: 1.5 blocks up, opening color, 20 ticks.
-fn trail_options() -> Vec<u8> {
+pub(super) fn trail_options() -> Vec<u8> {
     let mut o = Vec::new();
     [10.5, 66.0, -3.5].iter().for_each(|v| o.put_f64(*v));
     o.put_i32(0x00FC_7812);

@@ -436,6 +436,8 @@ const GATE_WAIT: Duration = Duration::from_secs(15);
 pub struct Log {
     pub joins: AtomicUsize,
     pub commands: Mutex<Vec<String>>,
+    /// The protocol of each login's handshake.
+    pub logins: Mutex<Vec<i32>>,
 }
 
 /// A backend of any protocol (from the handshake): login, configuration,
@@ -476,6 +478,7 @@ async fn serve(stream: TcpStream, log: &Log) -> Result<(), String> {
     );
     let (f, _) = c.read_frame().await.map_err(e)?;
     let hs: Intention = sb_decode(&*module(777), &f.payload);
+    log.logins.lock().unwrap().push(hs.protocol);
     let m = module(hs.protocol);
     let m = &*m;
     let (f, _) = c.read_frame().await.map_err(e)?;
