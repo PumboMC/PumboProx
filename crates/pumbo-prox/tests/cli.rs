@@ -111,12 +111,8 @@ fn console(tag: &str, config: &str, input: &str) -> String {
 
 /// A proxy on a free port, no backends, no bridge.
 fn small_config(extra: &str) -> String {
-    let addr = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap();
     format!(
-        "listener:\n  - bind: \"{addr}\"\nforwarding:\n  mode: none\nbridge:\n  enabled: false\n\
+        "listener:\n  - bind: \"127.0.0.1:0\"\nforwarding:\n  mode: none\nbridge:\n  enabled: false\n\
          managed-servers:\n  enabled: false\n{extra}"
     )
 }
@@ -242,13 +238,9 @@ fn check_config_reads_the_metrics_token() {
 fn the_bridge_key_can_come_from_the_environment() {
     use std::io::Write as _;
     let dir = empty_dir("key-env");
-    let bridge = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap();
     let config = small_config("login:\n  online-mode: true\n").replace(
         "bridge:\n  enabled: false\n",
-        &format!("bridge:\n  listen: \"{bridge}\"\n  key-env: PUMBO_TEST_BRIDGE_KEY\n"),
+        "bridge:\n  listen: \"127.0.0.1:0\"\n  key-env: PUMBO_TEST_BRIDGE_KEY\n",
     );
     std::fs::write(dir.join("pumboprox.yml"), config).unwrap();
     let key = "ab".repeat(32);
@@ -416,13 +408,9 @@ fn a_bad_plugin_host_section_is_an_error_everywhere() {
     use std::io::Write as _;
     use std::time::{Duration, Instant};
     let dir = empty_dir("bad-host");
-    let bridge = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap();
     let config = small_config("plugins:\n  memory-mb: lots\n").replace(
         "bridge:\n  enabled: false\n",
-        &format!("bridge:\n  listen: \"{bridge}\"\n"),
+        "bridge:\n  listen: \"127.0.0.1:0\"\n",
     );
     let file = dir.join("pumboprox.yml");
     std::fs::write(&file, &config).unwrap();
