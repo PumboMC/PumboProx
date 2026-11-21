@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use pumbo_data::{protocols, register_all, releases, tables};
+use pumbo_data::{protocol_of, protocols, register_all, releases, tables};
 use pumbo_protocol::{
     Direction, KNOWN_PACKETS, PacketKind, Phase, ProtocolVersion, VersionRegistry,
 };
@@ -313,11 +313,14 @@ fn static_registries_present_everywhere() {
     }
 }
 
-/// The release names known without the tables are the ones in them.
+/// The release names known without the tables are the ones in them, and
+/// each gives its protocol back.
 #[test]
 fn releases_need_no_tables() {
     for v in protocols() {
         assert_eq!(releases(v), tables(v).unwrap().release_names(), "{v}");
     }
     assert!(releases(ProtocolVersion(1)).is_empty());
+    assert_eq!(protocol_of("1.21.8"), Some(ProtocolVersion(772)));
+    assert_eq!(protocol_of("0.1"), None);
 }

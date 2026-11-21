@@ -97,6 +97,14 @@ pub fn releases(v: ProtocolVersion) -> &'static [&'static str] {
         .map_or(&[], |e| e.releases)
 }
 
+/// The protocol of a release this build has, without parsing tables.
+pub fn protocol_of(release: &str) -> Option<ProtocolVersion> {
+    EMBEDDED
+        .iter()
+        .find(|e| e.releases.contains(&release))
+        .map(|e| ProtocolVersion(e.protocol))
+}
+
 /// Tables of one protocol, parsed on first use.
 pub fn tables(v: ProtocolVersion) -> Result<&'static Tables, DataError> {
     let i = EMBEDDED

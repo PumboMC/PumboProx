@@ -5,6 +5,7 @@ use std::sync::{Arc, OnceLock};
 
 use pumbo_core::routing::BackendInfo;
 use pumbo_core::translate::TranslationPlan;
+use pumbo_data::protocol_of;
 use pumbo_protocol::{ProtocolVersion, VersionModule};
 use pumbo_text::Component;
 use tracing::{debug, warn};
@@ -365,11 +366,6 @@ impl<'de> serde::Deserialize<'de> for ClientVersions {
         let items = d.deserialize_any(Items)?;
         Self::parse(&items).map_err(serde::de::Error::custom)
     }
-}
-
-/// The protocol of a release this build knows.
-fn protocol_of(release: &str) -> Option<ProtocolVersion> {
-    pumbo_data::protocols().find(|p| pumbo_data::releases(*p).contains(&release))
 }
 
 /// Every release this build knows, as one run: "1.21 to 26.3".
