@@ -277,6 +277,49 @@ mod tests {
         assert_eq!(out.dropped, [dropped("add_entity"), dropped("unknown")]);
     }
 
+    /// A dropped server packet is named in the server's tables, not the
+    /// client's: `level_chunk_with_light` without a payload cannot be read,
+    /// and its 26.3 ID is another packet for a 1.21 client.
+    #[test]
+    fn server_drops_are_named_in_the_servers_tables() {
+        let v = ProtocolVersion;
+        let Some(TranslationPlan::Translate(mut t)) =
+            Multiversion::default().plan(v(767), Some(v(777)))
+        else {
+            panic!("no translator");
+        };
+        let id = |protocol, phase, name| {
+            pumbo_data::tables(v(protocol))
+                .unwrap()
+                .packets
+                .iter()
+                .find(|p| {
+                    p.phase == phase && p.direction == Direction::Clientbound && p.name == name
+                })
+                .map(|p| p.id)
+        };
+        let chunk = id(777, Phase::Play, "level_chunk_with_light").unwrap();
+        assert_ne!(
+            packet_name(v(767), Phase::Play, Direction::Clientbound, chunk),
+            "level_chunk_with_light"
+        );
+        let frame = |id| RawFrame {
+            id,
+            payload: Bytes::new(),
+        };
+        let mut out = Translated::default();
+        let finish = id(777, Phase::Configuration, "finish_configuration").unwrap();
+        t.backend_to_client(&frame(finish), &mut out);
+        t.backend_to_client(&frame(chunk), &mut out);
+        assert_eq!(
+            out.dropped,
+            [Dropped {
+                to_client: true,
+                packet: "level_chunk_with_light",
+            }]
+        );
+    }
+
     #[test]
     fn plans_only_older_clients_on_26_3() {
         let m = Multiversion::default();
