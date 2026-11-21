@@ -79,3 +79,36 @@ The proxy used to parse the tables of every embedded version at start; now a ver
 | `move_player_pos` from the client | 1342.6 | 1347.2 | +0.3% |
 
 Every packet lookup now first checks that the version's lookups exist. Three runs per kind and build leave a thin margin: the runs of one build differ by up to 1.6% (entity move with the tables at start: 55.27 to 56.14 G instructions), and the ten setup runs took 0.81 to 1.77 G, about 7 instructions per frame either way. For `set_time` every run with the tables on first use is above every run with the tables at start, by 0.85 to 1.6%, so that cost is real and under the 2% bound. For the other two kinds the runs of the two builds overlap, so their difference is within the noise of this method.
+
+## Engine adapters
+
+What the proxy does differently for a server engine now comes from that engine's adapter: the defaults of a server's chat keys and the repair of Pumpkin's malformed trail particle, which runs as the adapter's packet filter on server connections without a translator. Release builds of 2026-11-10, aarch64-apple-darwin, Mac16,8, macOS 27, on mains power, while another build and test run used the machine (load average 3.5 to 9.3).
+
+### Forwarding one frame
+
+`forward_one_frame` as in "Session hooks", but 256 Mi frames per run, three runs per kind and build in turns, the setup median taken over both builds' ten setup runs (1.01 G instructions; the runs took 0.64 to 1.19 G, about 2 instructions per frame either way). Before is the commit that adds the `particles` kind (a flame particle, which the filter reads and leaves), after the one that takes the translator crate out of the build without default features.
+
+| frame | before | after | change |
+|---|---|---|---|
+| entity move from the server, a kind the proxy does not read | 818.1 | 809.0 | -1.1% |
+| `set_time` from the server, no filter or hook wants it | 837.4 | 842.1 | +0.6% |
+| `player_position` from the server, the teleport gate | 2353.5 | 2357.7 | +0.2% |
+| `level_particles` with a flame from the server, the filter reads it | 1014.3 | 1005.6 | -0.9% |
+| `move_player_pos` from the client | 1352.9 | 1352.7 | 0.0% |
+
+A first version that matched the step and the packet kind together cost `set_time` 2.3% (19 instructions per frame in every run); returning early for frames the proxy does not forward or does not know brought it to the numbers above. In `player_position` one run in three of each build came out about 100 instructions lower; the median leaves it out.
+
+A server connection without a translator holds its filter and the kinds the filter reads: 32 bytes in the session and, for Pumpkin's filter, 8 on the heap, while the session no longer keeps the particle's id (8 bytes).
+
+### Binary size, start and memory
+
+Size of `target/release/pumboprox` from `cargo build --release --locked -p pumbo-prox`, the development build before the engine adapters and the one with them.
+
+| build | before | after | change |
+|---|---|---|---|
+| default features | 33,767,008 | 33,789,984 | +0.07% |
+| `--no-default-features` | 33,173,456 | 33,195,952 | +0.07% |
+
+The build without default features no longer has the translator crate in its dependency tree (`tools/ci-local.sh` checks it). It linked only the particle repair from that crate, which is now in `pumbo-protocol`, so leaving the crate out saves nothing and both builds grow by the same new code.
+
+Start and memory without players as in "Version tables on first use", five rounds of each build in turns: no difference. Start: median 124 ms before (runs 72 to 137 ms) and 102 ms after (runs 71 to 180 ms). The runs of both builds fall near 72 or near 125 ms, the steps of the polling, so the ranges overlap and the medians differ only by where the middle run fell. `phys_footprint` is 4.0 MB without players, 6.1 MB after a status request of one version and 20 MB after eleven in both builds.
