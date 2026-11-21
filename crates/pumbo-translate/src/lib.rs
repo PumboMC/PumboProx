@@ -4,6 +4,9 @@
 
 #[cfg(feature = "multiversion")]
 pub mod multiversion;
+mod pairs;
+
+pub use pairs::ExperimentalPairs;
 
 use std::sync::Arc;
 
@@ -18,6 +21,8 @@ pub const PASSTHROUGH: &str = "passthrough";
 pub const MULTIVERSION: &str = "multiversion";
 /// Whether this build has [`MULTIVERSION`]; the proxy asks here.
 pub const HAS_MULTIVERSION: bool = cfg!(feature = "multiversion");
+/// The key of `translation` that lists the experimental pairs turned on.
+pub const EXPERIMENTAL_PAIRS: &str = "experimental-pairs";
 
 /// The `translation` section of `pumboprox.yml`. Providers have no settings
 /// of their own.

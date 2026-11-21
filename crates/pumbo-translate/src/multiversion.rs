@@ -227,7 +227,7 @@ fn tables(client: i32, server: i32) -> Option<Arc<mv::Tables>> {
 
 /// Why `pair` has no tables, for `check-config`; `None` when it has them.
 /// Builds them without keeping or logging anything.
-pub fn why_not(pair: &mv::Pair) -> Option<String> {
+pub(crate) fn why_not(pair: &mv::Pair) -> Option<String> {
     let Some(client) = version_data(ProtocolVersion(pair.client)) else {
         return Some(no_data(pair.client));
     };
