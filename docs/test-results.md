@@ -112,3 +112,48 @@ Size of `target/release/pumboprox` from `cargo build --release --locked -p pumbo
 The build without default features no longer has the translator crate in its dependency tree (`tools/ci-local.sh` checks it). It linked only the particle repair from that crate, which is now in `pumbo-protocol`, so leaving the crate out saves nothing and both builds grow by the same new code.
 
 Start and memory without players as in "Version tables on first use", five rounds of each build in turns: no difference. Start: median 124 ms before (runs 72 to 137 ms) and 102 ms after (runs 71 to 180 ms). The runs of both builds fall near 72 or near 125 ms, the steps of the polling, so the ranges overlap and the medians differ only by where the middle run fell. `phys_footprint` is 4.0 MB without players, 6.1 MB after a status request of one version and 20 MB after eleven in both builds.
+
+## Translation tables per pair
+
+The translator's tables are built once per pair of client and server protocol for the life of the process, every pair shares one copy of a version's data, and a `reload` keeps them; before, each provider kept its own tables with a copy of the 26.3 data per pair, and a `reload` started a new provider without them. Release builds of 2026-11-10, aarch64-apple-darwin, Mac16,8, macOS 27, on mains power, on a loaded machine (the load average is given with each measurement). Before is the commit that adds the `pair_tables` benchmark, after the one that keeps the tables per pair (first run) and the one that adds `translation.experimental-pairs` (second run, the numbers below unless said otherwise). The benchmarks were built with `PUMBO_DATA_FULL` pointing at the vanilla recordings of 2026-10-08 and ran from copies outside `target/`, before and after in turns, 11 runs each.
+
+### First plan and memory of one provider
+
+`pair_tables` in `crates/pumbo-translate/tests/pair_tables.rs` (ignored): one `multiversion` provider kept alive, the first plan of each older client on a 26.3 server in turn, with a counting allocator. The bytes are what the allocations ask for, without the allocator's overhead and without the peak while tables are built, so they are not the memory of the process. Load average 5.0 to 5.4.
+
+| client | first plan before (median, ms) | after | bytes kept by the pair before | after |
+|---|---|---|---|---|
+| 767 (1.21) | 33.17 | 33.20 | 1,868,400 | 1,868,572 |
+| 768 | 30.48 | 29.92 | 1,897,325 | 954,863 |
+| 769 | 28.64 | 28.27 | 1,905,215 | 962,753 |
+| 770 | 27.04 | 26.74 | 1,916,208 | 973,678 |
+| 771 | 25.71 | 25.55 | 1,923,285 | 980,823 |
+| 772 | 25.68 | 25.17 | 1,923,888 | 981,426 |
+| 773 | 24.23 | 24.11 | 1,963,395 | 1,020,933 |
+| 774 | 24.17 | 24.10 | 1,972,039 | 1,029,441 |
+| 775 | 22.38 | 22.01 | 1,994,107 | 1,051,645 |
+| 776 (26.2) | 20.23 | 20.01 | 2,032,758 | 1,090,296 |
+| all ten | 261.73 | 259.08 | 19,396,620 | 10,914,430 |
+
+The byte counts are the same in every run. These builds have the full registry data of the recordings built in (`PUMBO_DATA_FULL`), which release builds do not: the same benchmark on the after commit without it keeps 9,790,720 bytes for all ten pairs and 783,623 for the 26.3 version data. With the full data, the 26.3 version data takes 942,198 bytes; before, every pair held its own copy, now the first pair builds it and the others share it. All ten pairs, about 9.8 MB in a release build, is the most the tables ask for, however many players and reloads: they stay until the process ends, and a handshake before the login can already build a pair's tables.
+
+### Translation cost per frame and per chunk
+
+`translation_cost` in `crates/pumbo-translate/tests/bench.rs` (ignored), the recorded vanilla 26.3 session for clients 767, 770, 773 and 776. Load average 5.4. It prints `us/frame` with two decimals and `us/chunk` with one, so a rounding step is 4% of a 0.26 µs frame and of a 2.5 µs chunk. Frames are compared by the MB/s it also prints, which has three significant digits for the same bytes in every run.
+
+| client | fastest frame run before (MB/s) | after | change in time | chunk before: min, median, mean (µs) | after | change of the mean |
+|---|---|---|---|---|---|---|
+| 767 | 803 | 810 | -0.9% | 2.6, 2.6, 2.636 | 2.6, 2.6, 2.618 | -0.7% |
+| 770 | 950 | 967 | -1.8% | 2.6, 2.6, 2.609 | 2.6, 2.6, 2.609 | 0.0% |
+| 773 | 958 | 954 | +0.4% | 2.5, 2.6, 2.573 | 2.6, 2.6, 2.600 | +1.1% |
+| 776 | 930 | 947 | -1.8% | 1.8, 1.8, 1.827 | 1.8, 1.8, 1.845 | +1.0% |
+
+Every chunk run printed one of two neighbouring values, so the minimum only says whether the lower one came up at all: for 773 it did in 3 of 11 runs before and in none after. The mean of the 11 rounded values shows smaller differences than one step, so the chunk cost is judged on the means and medians. In the first run (load average 4.6 to 4.8, after = the commit that keeps the tables per pair) the minima of 770 and 773 were 2.5 µs before and 2.6 µs after, while the medians were the same and the means differed by +1.4%, +2.1%, -0.3% and +1.5% for 767, 770, 773 and 776. Both runs stay within 3%. Frames run no slower; reading a version's data now goes through one more pointer, which these numbers do not show.
+
+### Start, memory and size
+
+Start and memory without players as in "Version tables on first use", but polled every 2 ms by the measuring script and with status requests a second apart. Load average 2.1 to 3.3.
+
+- Start, 60 runs of each build in random order: median 58.6 ms before and 59.6 ms after (fastest 35.2 and 37.3 ms). In runs with a fixed order the second start of each pair of runs was slower whichever build it was (median 57.5 ms first, 65.7 ms second), so the order is random.
+- `phys_footprint`, six runs of each build in turns: 4,040 and 4,064 KB without players (runs 4,000 to 4,208 and 4,032 to 4,128 KB), 6.1 MB after a status request of one version and 20 MB after eleven in both. A status request builds no translation tables; the handshake of a login does.
+- Size of `target/release/pumboprox` with default features: 33,789,856 bytes before and 33,813,024 after (+23,168 bytes, +0.07%).
