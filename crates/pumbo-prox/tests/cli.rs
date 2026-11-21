@@ -535,6 +535,45 @@ fn check_config_shows_the_versions_each_server_takes() {
     assert!(text.contains(&want) && text.contains(unchecked), "{text}");
 }
 
+/// An experimental pair this build does not know fails `check-config`, and
+/// a pair that is on anyway is only a warning.
+#[test]
+fn check_config_fails_on_a_pair_this_build_lacks() {
+    let text = small_config("translation:\n  experimental-pairs: [\"26.3>26.2\"]\n");
+    let line = text.lines().count();
+    let file = config_file("pairs", &text);
+    let out = pumboprox(&["check-config", file.to_str().unwrap()]);
+    let (stdout, stderr) = (
+        String::from_utf8(out.stdout).unwrap(),
+        String::from_utf8(out.stderr).unwrap(),
+    );
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stdout.contains("\ntranslation: "), "{stdout}");
+    assert!(!stdout.contains("experimental pairs:"), "{stdout}");
+    let why = if pumbo_translate::HAS_MULTIVERSION {
+        "this build does not translate 26.3 clients on 26.2 servers"
+    } else {
+        "this build has no version translation (built without the translate feature)"
+    };
+    let want = format!(
+        "config error: pumboprox.yml line {line}: translation.experimental-pairs: {why}; \"26.3>26.2\" is left out"
+    );
+    assert!(stderr.contains(&want), "{stderr}");
+
+    let file = config_file("pairs-on", &text.replace("26.3>26.2", "26.2>26.3"));
+    let out = pumboprox(&["check-config", file.to_str().unwrap()]);
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    if pumbo_translate::HAS_MULTIVERSION {
+        assert!(out.status.success(), "{stderr}");
+        let want = format!(
+            "pumboprox.yml line {line}: translation.experimental-pairs: this build translates 26.2 clients on 26.3 servers without this entry; remove \"26.2>26.3\""
+        );
+        assert!(stderr.contains(&want), "{stderr}");
+    } else {
+        assert_eq!(out.status.code(), Some(1), "{stderr}");
+    }
+}
+
 #[test]
 fn check_config_fails_when_no_listed_version_reaches_a_server() {
     let file = config_file(

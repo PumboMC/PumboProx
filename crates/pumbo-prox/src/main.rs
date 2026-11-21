@@ -221,6 +221,8 @@ fn check_config(path: &str) -> ExitCode {
             println!("backend selection: {}", m.selector.name());
             let chain: Vec<&str> = m.translators.iter().map(|t| t.name()).collect();
             println!("translation: {}", chain.join(" -> "));
+            let (pairs, missing) = pumbo_prox::versions::experimental(cfg);
+            pairs.iter().for_each(|l| println!("{l}"));
             println!(
                 "servers: {}",
                 cfg.servers.keys().cloned().collect::<Vec<_>>().join(", ")
@@ -232,7 +234,10 @@ fn check_config(path: &str) -> ExitCode {
                 println!("  (servers of managed-servers are not checked here)");
             }
             let mut code = ExitCode::SUCCESS;
-            if let Some(e) = pumbo_prox::versions::unreachable(&rt) {
+            for e in pumbo_prox::versions::unreachable(&rt)
+                .into_iter()
+                .chain(missing)
+            {
                 eprintln!("config error: {e}");
                 code = ExitCode::FAILURE;
             }

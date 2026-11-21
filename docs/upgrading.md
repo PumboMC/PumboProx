@@ -40,7 +40,7 @@ An older release may refuse a newer config. 0.2.5-beta refuses any file with `co
 - `bungeecord-channel` is now `messaging-channel`. The old name still works, with a warning; `migrate-config` renames it.
 - The translation provider that sent players to an external translation service is gone. Its entry in `translation.chain` and its section are skipped with a warning; `migrate-config` removes them.
 - An empty `translation.chain` lets no player in; the start, `reload` and `check-config` warn about it.
-- A top-level `multiversion:` or `passthrough:` section is an unknown key now, so `check-config` fails on it: translation providers have no settings of their own. Remove it.
+- A top-level `multiversion:` or `passthrough:` section is an unknown key now, so `check-config` fails on it: translation providers have no sections of their own (their settings are keys of `translation`). Remove it.
 
 ## Moving a network to PumboProx
 

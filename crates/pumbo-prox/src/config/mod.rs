@@ -277,6 +277,21 @@ impl Config {
                 "translation.chain is empty, so no player can join: add passthrough".into(),
             ));
         }
+        // An entry that is not written as a pair stops the load, like a bad value.
+        let pair_line = |n| {
+            let path = [
+                "translation".into(),
+                "experimental-pairs".into(),
+                Seg::Index(n),
+            ];
+            crate::keys::line_of(text, &path)
+        };
+        let pairs = pumbo_translate::ExperimentalPairs::parse(&cfg.translation.experimental_pairs)
+            .map_err(|(n, message)| match pair_line(n) {
+                Some(line) => ConfigError::At { line, message },
+                None => ConfigError::Invalid(message),
+            })?;
+        warnings.extend(pairs.warnings.into_iter().map(|(n, w)| (pair_line(n), w)));
         cfg.validate().map_err(|e| match e {
             ConfigError::Key { key, message } => match crate::keys::line_of(text, &key) {
                 Some(line) => ConfigError::At { line, message },
@@ -297,6 +312,8 @@ impl Config {
                 .into_iter()
                 .map(|n| (clients, n)),
         );
+        // Pairs this build does not know, too.
+        unknown.extend(pairs.unknown.into_iter().map(|(n, u)| (pair_line(n), u)));
         unknown.sort_by_key(|(line, _)| line.unwrap_or(usize::MAX));
         Ok((cfg, Remarks { unknown, warnings }))
     }

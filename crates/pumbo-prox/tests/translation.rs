@@ -164,7 +164,7 @@ fn a_chain_of_only_the_external_provider_lets_nobody_in() {
     assert_eq!(route(&m, 777, Some(777)), "none");
 }
 
-/// Providers have no settings: a section named after one is a typo.
+/// Providers have no sections of their own: a section named after one is a typo.
 #[test]
 fn a_section_named_after_a_provider_is_unknown() {
     let text = format!("{PLAIN}multiversion:\n  x: 1\n");
@@ -175,6 +175,130 @@ fn a_section_named_after_a_provider_is_unknown() {
         "{:?}",
         remarks.unknown
     );
+}
+
+const PAIRS_KEY: &str = "translation.experimental-pairs";
+
+/// Without the section and without the key alike.
+#[test]
+fn experimental_pairs_default_to_none() {
+    for text in [
+        PLAIN.to_string(),
+        format!("{PLAIN}translation:\n  chain: [passthrough]\n"),
+    ] {
+        let (cfg, remarks) = Config::parse_checked(&text).unwrap();
+        assert!(cfg.translation.experimental_pairs.is_empty(), "{text}");
+        assert_eq!(remarks.unknown, [], "{text}");
+        assert_eq!(remarks.warnings, [], "{text}");
+    }
+}
+
+#[test]
+fn a_malformed_experimental_pair_stops_the_load() {
+    let message = format!(
+        "{PAIRS_KEY}: \"26.3-26.2\" is not a pair; write the client's release, > and the server's release, such as \"26.3>26.2\""
+    );
+    let at = PLAIN.lines().count();
+    let error = |text: String| {
+        Config::parse_checked(&text)
+            .unwrap_err()
+            .in_file("pumboprox.yml")
+    };
+    // A list in one line: the key's line; a block list: the entry's line.
+    assert_eq!(
+        error(format!(
+            "{PLAIN}translation:\n  experimental-pairs: [\"26.3>26.2\", \"26.3-26.2\"]\n"
+        )),
+        format!("pumboprox.yml line {}: {message}", at + 2)
+    );
+    assert_eq!(
+        error(format!(
+            "{PLAIN}translation:\n  experimental-pairs:\n    - \"26.3>26.2\"\n    - \"26.3-26.2\"\n"
+        )),
+        format!("pumboprox.yml line {}: {message}", at + 4)
+    );
+}
+
+#[test]
+fn experimental_pairs_this_build_lacks_are_unknown() {
+    let text = format!(
+        "{PLAIN}translation:\n  experimental-pairs:\n    - \"26.3>26.2\"\n    - \"26.2>26.3\"\n    - \"27.9>26.3\"\n"
+    );
+    let at = PLAIN.lines().count() + 2;
+    let (cfg, remarks) = Config::parse_checked(&text).unwrap();
+    if pumbo_translate::HAS_MULTIVERSION {
+        assert_eq!(
+            remarks.unknown,
+            [
+                (
+                    Some(at + 1),
+                    format!(
+                        "{PAIRS_KEY}: this build does not translate 26.3 clients on 26.2 servers; \"26.3>26.2\" is left out"
+                    )
+                ),
+                (
+                    Some(at + 3),
+                    format!(
+                        "{PAIRS_KEY}: unknown Minecraft release 27.9 in \"27.9>26.3\"; the entry is left out (write release names, such as \"26.3>26.2\")"
+                    )
+                ),
+            ]
+        );
+        assert_eq!(
+            remarks.warnings,
+            [(
+                Some(at + 2),
+                format!(
+                    "{PAIRS_KEY}: this build translates 26.2 clients on 26.3 servers without this entry; remove \"26.2>26.3\""
+                )
+            )]
+        );
+    } else {
+        let note = |n: usize, entry: &str| {
+            (
+                Some(at + n),
+                format!(
+                    "{PAIRS_KEY}: this build has no version translation (built without the translate feature); \"{entry}\" is left out"
+                ),
+            )
+        };
+        assert_eq!(
+            remarks.unknown,
+            [
+                note(1, "26.3>26.2"),
+                note(2, "26.2>26.3"),
+                note(3, "27.9>26.3")
+            ]
+        );
+        assert_eq!(remarks.warnings, []);
+    }
+    let m = modules::build(&modules::builtin().unwrap(), &cfg).unwrap();
+    assert_eq!(route(&m, 777, Some(776)), "none");
+    let older = if pumbo_translate::HAS_MULTIVERSION {
+        "translate"
+    } else {
+        "none"
+    };
+    assert_eq!(route(&m, 776, Some(777)), older);
+}
+
+/// The providers of the chain get the list: `multiversion` refuses an entry
+/// that is not a pair even when the file check was skipped.
+#[test]
+fn the_chain_gets_the_listed_pairs() {
+    let mut cfg = Config::parse(PLAIN).unwrap();
+    cfg.translation.experimental_pairs = vec!["nonsense".into()];
+    let built = modules::build(&modules::builtin().unwrap(), &cfg);
+    if pumbo_translate::HAS_MULTIVERSION {
+        let e = built.unwrap_err().to_string();
+        assert!(
+            e.starts_with("configuration of module \"multiversion\"")
+                && e.contains("is not a pair"),
+            "{e}"
+        );
+    } else {
+        assert!(built.is_ok());
+    }
 }
 
 /// Without the translate feature the proxy says why `multiversion` is

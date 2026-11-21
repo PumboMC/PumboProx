@@ -125,8 +125,13 @@ pub fn build(reg: &ModuleRegistry, cfg: &Config) -> Result<Modules, ModuleError>
         routing.insert("forced-hosts".into(), forced.into());
     }
     let selector = (reg.selectors.get(&cfg.routing.selector)?)(&routing)?;
-    // Translation providers have no section of their own.
-    let none = ModuleConfig::new();
+    // Translation providers have no section of their own; they read the
+    // keys of `translation`.
+    let mut keys = ModuleConfig::new();
+    keys.insert(
+        pumbo_translate::EXPERIMENTAL_PAIRS.into(),
+        cfg.translation.experimental_pairs.clone().into(),
+    );
     let translators = cfg
         .translation
         .chain
@@ -140,7 +145,7 @@ pub fn build(reg: &ModuleRegistry, cfg: &Config) -> Result<Modules, ModuleError>
                     ),
                 });
             }
-            (reg.translators.get(name)?)(&none)
+            (reg.translators.get(name)?)(&keys)
         })
         .collect::<Result<Vec<_>, _>>()?;
     let store = (reg.stores.get(&cfg.storage.backend)?)(&cfg.storage.rest)?;

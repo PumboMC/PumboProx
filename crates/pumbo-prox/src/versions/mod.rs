@@ -10,6 +10,7 @@ use pumbo_protocol::{ProtocolVersion, VersionModule};
 use pumbo_text::Component;
 use tracing::{debug, warn};
 
+use crate::config::Config;
 use crate::server::{Proxy, Runtime};
 use crate::session::Fail;
 use crate::status::parse_text;
@@ -192,6 +193,47 @@ pub fn unreachable(rt: &Runtime) -> Option<String> {
         "versions.clients: no listed version reaches any server ({}); every player is refused",
         servers.join(", ")
     ))
+}
+
+/// For `check-config`: the line that names the experimental pairs the
+/// config turns on (`None`: none), and an error for each of them whose
+/// tables this build cannot make.
+pub fn experimental(cfg: &Config) -> (Option<String>, Vec<String>) {
+    // The file loaded, so every entry is written as a pair.
+    let Ok(pairs) = pumbo_translate::ExperimentalPairs::parse(&cfg.translation.experimental_pairs)
+    else {
+        return (None, Vec::new());
+    };
+    let missing = pairs
+        .missing_data()
+        .into_iter()
+        .map(|(c, s, why)| {
+            format!(
+                "translation.experimental-pairs: {}>{} cannot be turned on: {why}",
+                newest(c),
+                newest(s)
+            )
+        })
+        .collect();
+    (pairs_line(&pairs.on), missing)
+}
+
+/// `experimental pairs: 26.3>26.2, …`, one release a side; `None` for an
+/// empty list.
+fn pairs_line(on: &[(ProtocolVersion, ProtocolVersion)]) -> Option<String> {
+    let pairs: Vec<String> = on
+        .iter()
+        .map(|&(c, s)| format!("{}>{}", newest(c), newest(s)))
+        .collect();
+    (!pairs.is_empty()).then(|| format!("experimental pairs: {}", pairs.join(", ")))
+}
+
+/// The newest release of a protocol, as `translation.experimental-pairs`
+/// takes it back.
+fn newest(p: ProtocolVersion) -> String {
+    pumbo_data::releases(p)
+        .last()
+        .map_or_else(|| format!("protocol {p}"), |r| (*r).to_string())
 }
 
 /// A server's version for messages.

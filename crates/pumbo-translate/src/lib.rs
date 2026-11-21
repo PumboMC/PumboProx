@@ -24,13 +24,16 @@ pub const HAS_MULTIVERSION: bool = cfg!(feature = "multiversion");
 /// The key of `translation` that lists the experimental pairs turned on.
 pub const EXPERIMENTAL_PAIRS: &str = "experimental-pairs";
 
-/// The `translation` section of `pumboprox.yml`. Providers have no settings
-/// of their own.
+/// The `translation` section of `pumboprox.yml`. Providers read their keys
+/// here; they have no sections of their own.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TranslationConfig {
     /// Provider order; the first with a decision wins.
     #[serde(default = "default_chain")]
     pub chain: Vec<String>,
+    /// Experimental pairs the owner turns on, each as "<client release>><server release>".
+    #[serde(default, rename = "experimental-pairs")]
+    pub experimental_pairs: Vec<String>,
 }
 
 fn default_chain() -> Vec<String> {
@@ -46,6 +49,7 @@ impl Default for TranslationConfig {
     fn default() -> Self {
         Self {
             chain: default_chain(),
+            experimental_pairs: Vec::new(),
         }
     }
 }

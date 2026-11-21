@@ -153,6 +153,7 @@ forced-hosts:
 | Key | Default | Description | Applies |
 | --- | --- | --- | --- |
 | `chain` | `[multiversion, passthrough]` | Translation providers in order; the first one with a decision for a client and a server wins. `multiversion`: clients from 1.21 on a 26.3 server, inside the proxy. `passthrough`: the client and the server speak the same version | reload |
+| `experimental-pairs` | `[]` | Version translation pairs marked experimental that you turn on, each written as the client's release, `>` and the server's release, in quotes: `"26.3>26.2"` is 26.3 clients on 26.2 servers. An experimental pair is off until it is listed. An entry that is not written as a pair stops the start. An entry for a release or a pair this build does not know is left out with a warning, and `check-config` fails on it; an entry for a pair that is on anyway gives a warning. `check-config` names the pairs turned on. This version has no experimental pair | reload |
 
 A proxy built without its optional modules (`--no-default-features`) has no version translation: the default chain is `[passthrough]`, and a chain that names `multiversion` stops the start.
 

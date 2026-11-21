@@ -1,6 +1,22 @@
 use super::*;
 
 #[test]
+fn experimental_pairs_line() {
+    assert_eq!(pairs_line(&[]), None);
+    let p = ProtocolVersion;
+    let line = pairs_line(&[(p(777), p(776)), (p(775), p(777))]).unwrap();
+    assert_eq!(line, "experimental pairs: 26.3>26.2, 26.1.2>26.3");
+    // Each pair as the key takes it back.
+    for entry in line["experimental pairs: ".len()..].split(", ") {
+        let listed = [entry.to_string()];
+        assert!(
+            pumbo_translate::ExperimentalPairs::parse(&listed).is_ok(),
+            "{entry}"
+        );
+    }
+}
+
+#[test]
 fn release_ranges() {
     assert_eq!(releases(&["26.3".into()]), "26.3");
     assert_eq!(
