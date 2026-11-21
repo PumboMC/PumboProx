@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use crate::Template;
 use crate::runtime::Launch;
-use crate::servers::{self, Network};
+use crate::servers::Network;
 
 pub type Fut<'a, T> = BoxFuture<'a, Result<T, String>>;
 
@@ -255,30 +255,7 @@ pub fn version_key(tag: &str) -> Vec<u64> {
         .collect()
 }
 
-// ------------------------------------------------------------------ Pumpkin
-
-/// Pumpkin from its GitHub releases. Only this repository.
-pub const PUMPKIN_API: &str = "https://api.github.com/repos/Pumpkin-MC/Pumpkin";
-
-#[derive(Debug, Clone)]
-pub struct Pumpkin {
-    api: String,
-}
-
-impl Default for Pumpkin {
-    fn default() -> Self {
-        Self::with_api(PUMPKIN_API)
-    }
-}
-
-impl Pumpkin {
-    /// Another API base, for tests with a local server.
-    pub fn with_api(api: &str) -> Self {
-        Self {
-            api: api.trim_end_matches('/').to_string(),
-        }
-    }
-}
+// ------------------------------------------------------------------ GitHub releases
 
 /// A release in GitHub's release list.
 #[derive(Deserialize)]
@@ -299,21 +276,6 @@ pub struct GhAsset {
     pub browser_download_url: String,
 }
 
-/// The Pumpkin file for a machine (names of the release assets).
-pub fn pumpkin_asset(arch: &str, os: &str, musl: bool) -> Option<&'static str> {
-    Some(match (arch, os, musl) {
-        ("x86_64", "linux", false) => "pumpkin-X64-Linux",
-        ("x86_64", "linux", true) => "pumpkin-X64-Linux-musl",
-        ("aarch64", "linux", false) => "pumpkin-ARM64-Linux",
-        ("aarch64", "linux", true) => "pumpkin-ARM64-Linux-musl",
-        ("aarch64", "macos", _) => "pumpkin-ARM64-macOS",
-        ("x86_64", "macos", _) => "pumpkin-X64-macOS",
-        ("x86_64", "windows", _) => "pumpkin-X64-Windows.exe",
-        ("aarch64", "windows", _) => "pumpkin-ARM64-Windows.exe",
-        _ => return None,
-    })
-}
-
 /// The checksum of `file` in a `sha256sum` listing (`<hex>  <name>`).
 pub fn checksum_of(listing: &str, file: &str) -> Option<String> {
     listing.lines().find_map(|l| {
@@ -322,118 +284,6 @@ pub fn checksum_of(listing: &str, file: &str) -> Option<String> {
         (name == file && sum.len() == 64 && sum.chars().all(|c| c.is_ascii_hexdigit()))
             .then(|| sum.to_ascii_lowercase())
     })
-}
-
-impl Source for Pumpkin {
-    fn name(&self) -> &'static str {
-        "pumpkin"
-    }
-
-    fn releases<'a>(&'a self, http: &'a Http) -> Fut<'a, Vec<Release>> {
-        Box::pin(async move {
-            let body = http
-                .get(&format!("{}/releases?per_page=30", self.api))
-                .await?;
-            let list: Vec<GhRelease> =
-                serde_json::from_slice(&body).map_err(|e| format!("release list: {e}"))?;
-            Ok(list
-                .into_iter()
-                .filter(|r| !r.draft && valid_tag(&r.tag_name))
-                .map(|r| Release {
-                    official: !r.prerelease,
-                    files: r
-                        .assets
-                        .into_iter()
-                        .map(|a| (a.name, a.browser_download_url))
-                        .collect(),
-                    tag: r.tag_name,
-                })
-                .collect())
-        })
-    }
-
-    fn artifact<'a>(&'a self, http: &'a Http, release: &'a Release) -> Fut<'a, Artifact> {
-        Box::pin(async move {
-            let os = std::env::consts::OS;
-            let arch = std::env::consts::ARCH;
-            let want = pumpkin_asset(arch, os, cfg!(target_env = "musl"))
-                .ok_or_else(|| format!("Pumpkin has no build for {arch} {os}"))?;
-            let file = |name: &str| {
-                release
-                    .files
-                    .iter()
-                    .find(|(n, _)| n == name)
-                    .map(|(_, u)| u.clone())
-            };
-            let url = file(want).ok_or_else(|| format!("release {} has no {want}", release.tag))?;
-            let sha256 = match file("checksums.sha256") {
-                Some(sums) => {
-                    let text = String::from_utf8_lossy(&http.get(&sums).await?).to_string();
-                    Some(
-                        checksum_of(&text, want)
-                            .ok_or_else(|| format!("checksums.sha256 lists no {want}"))?,
-                    )
-                }
-                None => None,
-            };
-            Ok(Artifact { url, sha256 })
-        })
-    }
-
-    fn file_name(&self) -> &'static str {
-        if cfg!(windows) {
-            "pumpkin.exe"
-        } else {
-            "pumpkin"
-        }
-    }
-
-    /// `0.2.0+26.3-26.51` runs 26.3.
-    fn minecraft(&self, tag: &str) -> Option<String> {
-        let mc = tag.split_once('+')?.1;
-        let mc = mc.split('-').next().unwrap_or(mc);
-        (!mc.is_empty()).then(|| mc.to_string())
-    }
-
-    fn prepare(&self, dir: &Path, setup: &Setup<'_>) -> Result<(), String> {
-        let toml = servers::pumpkin_toml(
-            setup.name,
-            setup.port,
-            setup.network.forwarding_secret.as_deref(),
-            &servers::random_seed()?,
-        );
-        servers::write_secret(&dir.join("pumpkin.toml"), &toml)?;
-        if let Some((addr, key)) = &setup.network.bridge {
-            let bridge = dir.join("plugins/data/pumbobridge");
-            std::fs::create_dir_all(&bridge).map_err(|e| format!("{}: {e}", bridge.display()))?;
-            servers::write_secret(
-                &bridge.join("config.yml"),
-                &servers::bridge_config(addr, key),
-            )?;
-        }
-        Ok(())
-    }
-
-    /// Pumpkin runs without arguments in its folder.
-    fn launch(&self, file: &Path, _: &Template) -> Result<Launch, String> {
-        Ok(Launch {
-            program: file.to_path_buf(),
-            args: Vec::new(),
-        })
-    }
-
-    /// The plugin for the Minecraft release of `tag`.
-    fn bridge_artifact(&self, tag: &str) -> Result<Option<BridgeArtifact>, String> {
-        let mc = self
-            .minecraft(tag)
-            .ok_or("the Minecraft release of its Pumpkin is unknown")?;
-        Ok(Some(BridgeArtifact {
-            asset_prefix: format!("PumboBridge-Pumpkin-{mc}-"),
-            asset_suffix: ".wasm",
-            file_name: format!("PumboBridge-{mc}.wasm"),
-            minecraft: mc,
-        }))
-    }
 }
 
 // ------------------------------------------------------------------ PumboBridge
@@ -763,27 +613,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn platform_files() {
-        assert_eq!(
-            pumpkin_asset("x86_64", "linux", false),
-            Some("pumpkin-X64-Linux")
-        );
-        assert_eq!(
-            pumpkin_asset("aarch64", "linux", true),
-            Some("pumpkin-ARM64-Linux-musl")
-        );
-        assert_eq!(
-            pumpkin_asset("aarch64", "macos", false),
-            Some("pumpkin-ARM64-macOS")
-        );
-        assert_eq!(
-            pumpkin_asset("aarch64", "windows", false),
-            Some("pumpkin-ARM64-Windows.exe")
-        );
-        assert_eq!(pumpkin_asset("riscv64", "linux", false), None);
-    }
-
-    #[test]
     fn checksum_listing() {
         let a = "a".repeat(64);
         let b = "B".repeat(64);
@@ -805,27 +634,7 @@ mod tests {
         assert!(!valid_tag(".hidden"));
         assert!(!valid_tag("a/b"));
         assert!(!valid_tag(""));
-        let p = Pumpkin::default();
-        assert_eq!(p.minecraft("0.2.0+26.3-26.51").as_deref(), Some("26.3"));
-        assert_eq!(p.minecraft("0.1.0-dev+26.2-26.45").as_deref(), Some("26.2"));
-        assert_eq!(p.minecraft("canary"), None);
         assert!(version_key("0.10.0+26.4") > version_key("0.2.0+26.3-26.51"));
         assert!(version_key("0.2.0+26.3") > version_key("0.1.0-dev+26.2-26.45"));
-    }
-
-    #[test]
-    fn pumpkin_names_its_bridge_plugin() {
-        let p = Pumpkin::default();
-        let want = BridgeArtifact {
-            minecraft: "26.3".into(),
-            asset_prefix: "PumboBridge-Pumpkin-26.3-".into(),
-            asset_suffix: ".wasm",
-            file_name: "PumboBridge-26.3.wasm".into(),
-        };
-        assert_eq!(p.bridge_artifact("0.2.0+26.3-26.51"), Ok(Some(want)));
-        assert_eq!(
-            p.bridge_artifact("canary"),
-            Err("the Minecraft release of its Pumpkin is unknown".into())
-        );
     }
 }

@@ -7,7 +7,10 @@ use pumbo_core::engine::{
 };
 use pumbo_protocol::ProtocolVersion;
 
+mod source;
 mod trail;
+
+pub use source::{PUMPKIN_API, Pumpkin, pumpkin_asset};
 
 #[derive(Debug)]
 pub struct PumpkinAdapter;

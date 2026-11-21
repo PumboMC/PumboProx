@@ -11,6 +11,14 @@ publish.workspace = true
 pumbo-core.workspace = true
 pumbo-data.workspace = true
 pumbo-protocol.workspace = true
+pumbo-servers.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+aws-lc-rs.workspace = true
+tokio = { workspace = true, features = ["process", "fs", "rt", "rt-multi-thread", "macros"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

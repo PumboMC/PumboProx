@@ -13,7 +13,8 @@ mod common;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use common::config;
-use pumbo_servers::{Manager, Network, ProcessRunner, Pumpkin, Source};
+use pumbo_engines::pumpkin::Pumpkin;
+use pumbo_servers::{Manager, Network, ProcessRunner, Source};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// The log of this thread while the guard lives.

@@ -1642,9 +1642,15 @@ dependencies = [
 name = "pumbo-engines"
 version = "0.2.5-beta"
 dependencies = [
+ "aws-lc-rs",
  "pumbo-core",
  "pumbo-data",
  "pumbo-protocol",
+ "pumbo-servers",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1822,7 +1828,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

@@ -83,7 +83,7 @@ async fn proxy_with(
     match releases {
         Some(api) => {
             let sources: Vec<Arc<dyn pumbo_servers::Source>> =
-                vec![Arc::new(pumbo_servers::Pumpkin::with_api(api))];
+                vec![Arc::new(pumbo_engines::pumpkin::Pumpkin::with_api(api))];
             pumbo_prox::servers::start_with(&proxy, sources).unwrap();
         }
         None => pumbo_prox::servers::start(&proxy).unwrap(),
@@ -409,7 +409,7 @@ async fn fake_github(file: &'static [u8], ms: u64) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let asset = pumbo_servers::versions::pumpkin_asset(
+    let asset = pumbo_engines::pumpkin::pumpkin_asset(
         std::env::consts::ARCH,
         std::env::consts::OS,
         cfg!(target_env = "musl"),

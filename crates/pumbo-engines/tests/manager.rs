@@ -18,7 +18,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use common::{TAG, config, nanos};
-use pumbo_servers::{Config, Manager, Network, ProcessRunner, Progress, Pumpkin, Source, State};
+use pumbo_engines::pumpkin::Pumpkin;
+use pumbo_servers::{Config, Manager, Network, ProcessRunner, Progress, Source, State};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Its first download drops half way.
@@ -311,7 +312,7 @@ async fn autostart_and_a_stale_pid() {
 async fn fake_github(file: &'static [u8], slow: bool) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let asset = pumbo_servers::versions::pumpkin_asset(
+    let asset = pumbo_engines::pumpkin::pumpkin_asset(
         std::env::consts::ARCH,
         std::env::consts::OS,
         cfg!(target_env = "musl"),

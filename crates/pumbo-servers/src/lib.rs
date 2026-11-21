@@ -17,7 +17,7 @@ use serde::Deserialize;
 pub use runtime::{Launch, ProcessRunner, Runner};
 pub use servers::{Entry, Network};
 pub use supervisor::{ServerInfo, State};
-pub use versions::{Progress, Pumpkin, Release, Source, VersionStore};
+pub use versions::{Progress, Release, Source, VersionStore};
 
 /// `managed-servers` in `pumboprox.yml`.
 #[derive(Debug, Clone, Deserialize)]

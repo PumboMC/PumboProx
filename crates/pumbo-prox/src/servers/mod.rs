@@ -6,7 +6,8 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use pumbo_servers::{Manager, Network, ProcessRunner, Pumpkin, Source, State};
+use pumbo_engines::pumpkin::Pumpkin;
+use pumbo_servers::{Manager, Network, ProcessRunner, Source, State};
 use tracing::{info, warn};
 
 use crate::commands::{Reply, Source as Who};

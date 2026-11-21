@@ -155,45 +155,6 @@ pub fn random_seed() -> Result<String, String> {
     Ok((u64::from_le_bytes(b) % 1_000_000_000_000_000_000).to_string())
 }
 
-/// `pumpkin.toml` of a new server: loopback only, offline behind the proxy,
-/// Modern forwarding with the proxy's secret, no console TTY.
-pub fn pumpkin_toml(name: &str, port: u16, secret: Option<&str>, seed: &str) -> String {
-    let forwarding = match secret {
-        Some(s) => format!(
-            "[networking.proxy]\nenabled = true\n\n[networking.proxy.velocity]\nenabled = true\nsecret = \"{s}\"\n"
-        ),
-        None => "[networking.proxy]\nenabled = false\n".to_string(),
-    };
-    format!(
-        "# Written by PumboProx for the server \"{name}\". Pumpkin fills in the options missing here.\n\
-         seed = \"{seed}\"\n\
-         \n\
-         [networking.java]\n\
-         address = \"127.0.0.1:{port}\"\n\
-         online_mode = false\n\
-         encryption = false\n\
-         motd = \"{name}\"\n\
-         \n\
-         [networking.bedrock]\n\
-         enabled = false\n\
-         \n\
-         [networking.lan_broadcast]\n\
-         enabled = false\n\
-         \n\
-         {forwarding}\
-         \n\
-         [commands]\n\
-         use_tty = false\n\
-         \n\
-         [plugins]\n\
-         ask_permission_confirmation = false\n\
-         \n\
-         # Pumpkin's telemetry keeps Pumpkin's default. To turn it off:\n\
-         # [telemetry]\n\
-         # enabled = false\n"
-    )
-}
-
 /// `plugins/data/pumbobridge/config.yml` of a new server.
 pub fn bridge_config(addr: &str, key: &str) -> String {
     format!("# Written by PumboProx.\nproxy: {addr}\nkey: \"{key}\"\n")
@@ -312,47 +273,6 @@ mod tests {
             assert!(s.len() <= 18 && s.parse::<i64>().is_ok(), "{s}");
         }
         assert_ne!(random_seed().unwrap(), random_seed().unwrap());
-    }
-
-    #[test]
-    fn pumpkin_toml_golden() {
-        let got = pumpkin_toml("arena", 25700, Some("abc123"), "42");
-        let want = r#"# Written by PumboProx for the server "arena". Pumpkin fills in the options missing here.
-seed = "42"
-
-[networking.java]
-address = "127.0.0.1:25700"
-online_mode = false
-encryption = false
-motd = "arena"
-
-[networking.bedrock]
-enabled = false
-
-[networking.lan_broadcast]
-enabled = false
-
-[networking.proxy]
-enabled = true
-
-[networking.proxy.velocity]
-enabled = true
-secret = "abc123"
-
-[commands]
-use_tty = false
-
-[plugins]
-ask_permission_confirmation = false
-
-# Pumpkin's telemetry keeps Pumpkin's default. To turn it off:
-# [telemetry]
-# enabled = false
-"#;
-        assert_eq!(got, want);
-        let none = pumpkin_toml("arena", 25700, None, "42");
-        assert!(none.contains("[networking.proxy]\nenabled = false\n"));
-        assert!(!none.contains("velocity"));
     }
 
     #[test]
