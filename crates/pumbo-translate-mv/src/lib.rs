@@ -1,7 +1,7 @@
-//! Version translation for Minecraft Java Edition: clients of protocols
-//! 767–776 (1.21–26.2) on a server of protocol 777 (26.3), for the
-//! configuration and play phases. Handshake, status and login stay with the
-//! caller, in the client's version.
+//! Version translation for Minecraft Java Edition between the protocol pairs
+//! listed in [`PAIRS`] (clients of protocols 767–776, 1.21–26.2, on a server
+//! of protocol 777, 26.3), for the configuration and play phases. Handshake,
+//! status and login stay with the caller, in the client's version.
 //!
 //! Ported in part from other projects (MIT OR Apache-2.0 and GPL-3.0; `NOTICE`
 //! lists the sources and the ported functions, marked "ported, see NOTICE"
@@ -20,6 +20,7 @@ mod entity;
 mod entity_data;
 mod item;
 mod nbt;
+mod pairs;
 mod play;
 mod remap;
 mod serverbound;
@@ -30,7 +31,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub use data::{Block, Bound, Phase, Synced, TagList, VersionData};
-pub use version::{OLDEST_CLIENT, SERVER_PROTOCOL};
+pub use pairs::{PAIRS, Pair, find};
 
 use remap::{IdMap, StandIns};
 
@@ -63,17 +64,31 @@ pub struct Dropped {
 /// Why tables could not be built.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    /// Only [`SERVER_PROTOCOL`] servers are read.
-    UnsupportedServer(i32),
-    /// Clients from [`OLDEST_CLIENT`] to just below the server are translated.
-    UnsupportedClient(i32),
+    /// No entry of [`PAIRS`] for this client on this server.
+    UnsupportedPair { client: i32, server: i32 },
+    /// An entry of [`PAIRS`] whose data is not in `data/`.
+    MissingData {
+        client: i32,
+        server: i32,
+        what: &'static str,
+    },
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::UnsupportedServer(p) => write!(f, "server protocol {p} is not translated"),
-            Error::UnsupportedClient(p) => write!(f, "client protocol {p} is not translated"),
+            Error::UnsupportedPair { client, server } => write!(
+                f,
+                "protocol {client} clients are not translated on protocol {server} servers"
+            ),
+            Error::MissingData {
+                client,
+                server,
+                what,
+            } => write!(
+                f,
+                "no {what} for protocol {client} clients on protocol {server} servers"
+            ),
         }
     }
 }
@@ -187,15 +202,21 @@ impl std::fmt::Debug for Tables {
 }
 
 impl Tables {
+    /// Tables of one entry of [`PAIRS`]; other protocols are an error. The
+    /// `experimental` mark is the caller's to honour.
     pub fn new(client: VersionData, server: VersionData) -> Result<Self, Error> {
-        if server.protocol != SERVER_PROTOCOL {
-            return Err(Error::UnsupportedServer(server.protocol));
+        let (c, s) = (client.protocol, server.protocol);
+        if find(c, s).is_none() {
+            return Err(Error::UnsupportedPair {
+                client: c,
+                server: s,
+            });
         }
-        if client.protocol < OLDEST_CLIENT || client.protocol >= server.protocol {
-            return Err(Error::UnsupportedClient(client.protocol));
-        }
-        let entity_data = entity_data::Fields::load(client.protocol)
-            .ok_or(Error::UnsupportedClient(client.protocol))?;
+        let entity_data = entity_data::Fields::load(c).ok_or(Error::MissingData {
+            client: c,
+            server: s,
+            what: "entity data",
+        })?;
         let via = StandIns::new(client.protocol);
         let client_ids = ids_by_name(&client);
         let server_ids = ids_by_name(&server);
@@ -311,6 +332,10 @@ impl Tables {
 
     pub fn client_protocol(&self) -> i32 {
         self.client.protocol
+    }
+
+    pub fn server_protocol(&self) -> i32 {
+        self.server.protocol
     }
 
     /// Client block state for a server block state.

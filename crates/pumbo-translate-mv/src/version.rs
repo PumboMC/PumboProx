@@ -5,16 +5,12 @@ pub(crate) const V1_21_2: i32 = 768;
 pub(crate) const V1_21_4: i32 = 769;
 pub(crate) const V1_21_5: i32 = 770;
 pub(crate) const V1_21_6: i32 = 771;
+pub(crate) const V1_21_7: i32 = 772;
 pub(crate) const V1_21_9: i32 = 773;
 pub(crate) const V1_21_11: i32 = 774;
 pub(crate) const V26_1: i32 = 775;
 pub(crate) const V26_2: i32 = 776;
 pub(crate) const V26_3: i32 = 777;
-
-/// The server protocol whose packets this crate reads.
-pub const SERVER_PROTOCOL: i32 = V26_3;
-/// Oldest client protocol translated.
-pub const OLDEST_CLIENT: i32 = V1_21;
 
 /// A component's encoding eras (ported, see NOTICE). Each variant
 /// starts at its protocol and lasts until the next one, so protocols where the

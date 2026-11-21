@@ -1,6 +1,7 @@
 #![no_main]
-//! Version translation of server packets for every older client, in
-//! configuration or play: any input must translate without a panic or a hang.
+//! Version translation of server packets for every pair the translator
+//! lists, in configuration or play: any input must translate without a panic
+//! or a hang.
 
 use std::sync::{Arc, OnceLock};
 
@@ -12,15 +13,17 @@ use pumbo_translate_mv as mv;
 fn tables() -> &'static [(Arc<mv::Tables>, i32)] {
     static TABLES: OnceLock<Vec<(Arc<mv::Tables>, i32)>> = OnceLock::new();
     TABLES.get_or_init(|| {
-        let server = version_data(ProtocolVersion(mv::SERVER_PROTOCOL)).expect("server data");
-        let finish = server.packets[0][0]
+        mv::PAIRS
             .iter()
-            .position(|n| n == "finish_configuration")
-            .expect("finish_configuration") as i32;
-        pumbo_data::protocols()
-            .filter_map(|v| {
-                let t = mv::Tables::new(version_data(v)?, server.clone()).ok()?;
-                Some((Arc::new(t), finish))
+            .map(|pair| {
+                let server = version_data(ProtocolVersion(pair.server)).expect("server data");
+                let finish = server.packets[0][0]
+                    .iter()
+                    .position(|n| n == "finish_configuration")
+                    .expect("finish_configuration") as i32;
+                let client = version_data(ProtocolVersion(pair.client)).expect("client data");
+                let t = mv::Tables::new(client, server).expect("tables of a listed pair");
+                (Arc::new(t), finish)
             })
             .collect()
     })

@@ -1,6 +1,6 @@
-//! `multiversion`: translation inside the proxy for clients 1.21–26.2 on a
-//! 26.3 backend, with `pumbo-translate-mv` (plan E3b). This module feeds it
-//! the tables of both versions from `pumbo-data`.
+//! `multiversion`: translation inside the proxy with `pumbo-translate-mv`
+//! (plan E3b), for the pairs it lists in `PAIRS` (clients 1.21–26.2 on a 26.3
+//! backend). This module feeds it the tables of both versions from `pumbo-data`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -15,12 +15,15 @@ use pumbo_translate_mv as mv;
 
 use crate::MULTIVERSION;
 
-/// Tables per client protocol, built on first use (tens of milliseconds) and
-/// shared by all sessions of that protocol.
+/// Tables per pair (client, server), built on first use (tens of
+/// milliseconds) and shared by all sessions of that pair.
 #[derive(Debug, Default)]
 pub struct Multiversion {
-    tables: Mutex<HashMap<i32, Option<Arc<mv::Tables>>>>,
+    tables: Mutex<Cache>,
 }
+
+/// Tables by (client, server); `None`: they could not be built.
+type Cache = HashMap<(i32, i32), Option<Arc<mv::Tables>>>;
 
 fn short(name: &str) -> String {
     pumbo_data::short_name(name).to_string()
@@ -133,15 +136,15 @@ pub fn version_data(v: ProtocolVersion) -> Option<mv::VersionData> {
 }
 
 impl Multiversion {
-    fn tables(&self, client: ProtocolVersion) -> Option<Arc<mv::Tables>> {
+    fn tables(&self, pair: mv::Pair) -> Option<Arc<mv::Tables>> {
         let mut cache = self.tables.lock().unwrap_or_else(PoisonError::into_inner);
         cache
-            .entry(client.0)
+            .entry((pair.client, pair.server))
             .or_insert_with(|| {
-                // Built under the lock on the first join of a protocol; fine
+                // Built under the lock on the first join of a pair; fine
                 // while it takes milliseconds, move to spawn_blocking if it grows.
-                let client = version_data(client)?;
-                let server = version_data(ProtocolVersion(mv::SERVER_PROTOCOL))?;
+                let client = version_data(ProtocolVersion(pair.client))?;
+                let server = version_data(ProtocolVersion(pair.server))?;
                 mv::Tables::new(client, server).ok().map(Arc::new)
             })
             .clone()
@@ -158,11 +161,8 @@ impl TranslatorProvider for Multiversion {
         client: ProtocolVersion,
         backend: Option<ProtocolVersion>,
     ) -> Option<TranslationPlan> {
-        let backend = backend?;
-        if backend.0 != mv::SERVER_PROTOCOL || client.0 < mv::OLDEST_CLIENT || client >= backend {
-            return None;
-        }
-        let tables = self.tables(client)?;
+        let pair = mv::find(client.0, backend?.0)?;
+        let tables = self.tables(pair)?;
         Some(TranslationPlan::Translate(Box::new(Session {
             inner: mv::Translator::new(tables),
             out: mv::Output::default(),
@@ -185,11 +185,11 @@ impl Session {
             .extend(self.out.to_client.drain(..).map(frame));
         out.to_backend
             .extend(self.out.to_server.drain(..).map(frame));
-        let client = self.inner.tables().client_protocol();
+        let tables = self.inner.tables();
         out.dropped.extend(self.out.dropped.drain(..).map(|d| {
             let (protocol, direction) = match d.bound {
-                mv::Bound::Client => (mv::SERVER_PROTOCOL, Direction::Clientbound),
-                mv::Bound::Server => (client, Direction::Serverbound),
+                mv::Bound::Client => (tables.server_protocol(), Direction::Clientbound),
+                mv::Bound::Server => (tables.client_protocol(), Direction::Serverbound),
             };
             let phase = match d.phase {
                 mv::Phase::Configuration => Phase::Configuration,
@@ -241,13 +241,12 @@ mod tests {
     /// ID no table has.
     #[test]
     fn drops_carry_the_packet_name() {
-        let Some(TranslationPlan::Translate(mut t)) = Multiversion::default().plan(
-            ProtocolVersion(769),
-            Some(ProtocolVersion(mv::SERVER_PROTOCOL)),
-        ) else {
+        let Some(TranslationPlan::Translate(mut t)) =
+            Multiversion::default().plan(ProtocolVersion(769), Some(ProtocolVersion(777)))
+        else {
             panic!("no translator");
         };
-        let tables = pumbo_data::tables(ProtocolVersion(mv::SERVER_PROTOCOL)).unwrap();
+        let tables = pumbo_data::tables(ProtocolVersion(777)).unwrap();
         let id = |phase, name| {
             tables
                 .packets
