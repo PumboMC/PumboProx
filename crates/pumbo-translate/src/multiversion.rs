@@ -12,13 +12,45 @@ use pumbo_core::translate::{
 use pumbo_protocol::{Direction, Phase, ProtocolVersion, RawFrame};
 use pumbo_translate_mv as mv;
 
-use crate::MULTIVERSION;
+use crate::{EXPERIMENTAL_PAIRS, ExperimentalPairs, MULTIVERSION};
 
 /// The translator of `pumbo-translate-mv` for the pairs it lists. Its tables
 /// are in [`TABLES`], so every provider (a new one comes with each reload)
 /// shares them.
 #[derive(Debug, Default)]
-pub struct Multiversion {}
+pub struct Multiversion {
+    /// The experimental pairs the owner turned on, as (client, server).
+    listed: Vec<(i32, i32)>,
+}
+
+impl Multiversion {
+    /// `listed`: the experimental pairs the owner turned on, as (client, server).
+    pub fn new(listed: &[(ProtocolVersion, ProtocolVersion)]) -> Self {
+        Self {
+            listed: listed.iter().map(|(c, s)| (c.0, s.0)).collect(),
+        }
+    }
+
+    /// [`TranslatorProvider::plan`] with the pair lookup given, so a test
+    /// can mark a pair experimental.
+    fn plan_with(
+        &self,
+        find: impl Fn(i32, i32) -> Option<mv::Pair>,
+        client: ProtocolVersion,
+        backend: Option<ProtocolVersion>,
+    ) -> Option<TranslationPlan> {
+        let pair = find(client.0, backend?.0)?;
+        // An experimental pair waits until the owner lists it.
+        if pair.experimental && !self.listed.contains(&(pair.client, pair.server)) {
+            return None;
+        }
+        let tables = tables(pair.client, pair.server)?;
+        Some(TranslationPlan::Translate(Box::new(Session {
+            inner: mv::Translator::new(tables),
+            out: mv::Output::default(),
+        })))
+    }
+}
 
 /// A value made once for the whole process; `None`: it could not be made.
 type Slot<T> = OnceLock<Option<Arc<T>>>;
@@ -247,12 +279,7 @@ impl TranslatorProvider for Multiversion {
         client: ProtocolVersion,
         backend: Option<ProtocolVersion>,
     ) -> Option<TranslationPlan> {
-        let pair = mv::find(client.0, backend?.0)?;
-        let tables = tables(pair.client, pair.server)?;
-        Some(TranslationPlan::Translate(Box::new(Session {
-            inner: mv::Translator::new(tables),
-            out: mv::Output::default(),
-        })))
+        self.plan_with(mv::find, client, backend)
     }
 }
 
@@ -315,8 +342,22 @@ impl PacketTranslator for Session {
     }
 }
 
-pub(crate) fn factory(_: &ModuleConfig) -> Result<Arc<dyn TranslatorProvider>, ModuleError> {
-    Ok(Arc::new(Multiversion::default()))
+/// The provider with the experimental pairs `translation.experimental-pairs`
+/// turns on (the proxy hands the key over in `cfg`).
+pub(crate) fn factory(cfg: &ModuleConfig) -> Result<Arc<dyn TranslatorProvider>, ModuleError> {
+    let error = |message: String| ModuleError::Config {
+        name: MULTIVERSION.to_string(),
+        message,
+    };
+    let listed: Vec<String> = match cfg.get(EXPERIMENTAL_PAIRS) {
+        None => Vec::new(),
+        Some(value) => value
+            .as_array()
+            .and_then(|a| a.iter().map(|e| e.as_str().map(String::from)).collect())
+            .ok_or_else(|| error(format!("\"{EXPERIMENTAL_PAIRS}\" must be a list of text")))?,
+    };
+    let pairs = ExperimentalPairs::parse(&listed).map_err(|(_, message)| error(message))?;
+    Ok(Arc::new(Multiversion::new(&pairs.on)))
 }
 
 #[cfg(test)]
@@ -479,5 +520,47 @@ mod tests {
             assert!(once(pair, || build(data, client, 777), report).is_none());
         }
         assert_eq!(reported.get(), 1);
+    }
+
+    /// `mv::find` with 769 on 777 marked experimental.
+    fn with_769_experimental(client: i32, server: i32) -> Option<mv::Pair> {
+        mv::find(client, server).map(|p| mv::Pair {
+            experimental: p.client == 769,
+            ..p
+        })
+    }
+
+    #[test]
+    fn an_experimental_pair_waits_for_the_owner() {
+        let v = ProtocolVersion;
+        let plan = |m: &Multiversion| m.plan_with(with_769_experimental, v(769), Some(v(777)));
+        assert!(plan(&Multiversion::default()).is_none());
+        let listed = Multiversion::new(&[(v(769), v(777))]);
+        assert!(matches!(plan(&listed), Some(TranslationPlan::Translate(_))));
+        // Pairs that are not experimental need no entry.
+        let plan = Multiversion::default().plan_with(with_769_experimental, v(770), Some(v(777)));
+        assert!(matches!(plan, Some(TranslationPlan::Translate(_))));
+    }
+
+    #[test]
+    fn a_listed_pair_opens_only_itself() {
+        let v = ProtocolVersion;
+        let m = Multiversion::new(&[(v(768), v(777)), (v(769), v(776))]);
+        assert!(
+            m.plan_with(with_769_experimental, v(769), Some(v(777)))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn the_factory_reads_the_listed_pairs() {
+        let mut cfg = ModuleConfig::new();
+        assert!(factory(&cfg).is_ok());
+        cfg.insert(EXPERIMENTAL_PAIRS.into(), vec!["nonsense"].into());
+        let e = factory(&cfg).err().unwrap();
+        assert!(
+            matches!(&e, ModuleError::Config { name, message } if name == "multiversion" && message.contains("is not a pair")),
+            "{e}"
+        );
     }
 }
