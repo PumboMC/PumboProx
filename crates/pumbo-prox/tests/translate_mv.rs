@@ -1251,6 +1251,10 @@ fn run_backend(label: &str, protocols: &[i32]) -> Vec<Outcome> {
                 .map(|(_, p, at)| (*p, *at))
                 .collect();
             for b in &mut backends {
+                // An arrow that hits another player is removed before it falls.
+                if label == "vanilla" {
+                    b.command("gamerule pvp false");
+                }
                 for &p in protocols {
                     b.command(&format!("gamemode survival {}", player(p)));
                     b.command(&format!("give {} iron_pickaxe", player(p)));
