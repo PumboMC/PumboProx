@@ -1,8 +1,9 @@
 //! Registering the built-in modules and building them from the config.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use pumbo_core::engine::{EngineAdapter, EngineRef, SignedChatCancel};
+use pumbo_core::engine::{EngineAdapter, EngineProbe, EngineRef, SignedChatCancel};
 use pumbo_core::forwarding::ForwardingMode;
 use pumbo_core::hook::{SessionHook, SessionHookFactory, SessionInfo};
 use pumbo_core::identity::Authenticator;
@@ -11,7 +12,7 @@ use pumbo_core::routing::BackendSelector;
 use pumbo_core::section::SectionInfo;
 use pumbo_core::storage::KeyValueStore;
 use pumbo_core::translate::TranslatorProvider;
-use pumbo_protocol::VersionRegistry;
+use pumbo_protocol::{ProtocolVersion, VersionRegistry};
 
 use crate::config::{Config, ServerConfig};
 use crate::server::Proxy;
@@ -34,11 +35,30 @@ pub fn builtin() -> Result<ModuleRegistry, ModuleError> {
 /// one the proxy assumed before it had adapters.
 const DEFAULT_ENGINE: &str = pumbo_engines::PUMPKIN;
 
-/// A server's adapter and the engine it stands for.
+/// The engine of a server the proxy cannot recognise and whose protocol no
+/// release of [`DEFAULT_ENGINE`] has, and the adapter of an engine a bridge
+/// names that this build has no adapter for.
+pub const NO_ENGINE: &str = pumbo_engines::GENERIC;
+
+/// Why a server has its engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineSource {
+    /// Its `servers` entry, or the software of a server the proxy runs.
+    Declared,
+    /// What its bridge said.
+    Bridge,
+    /// The brand it sent.
+    Brand,
+    /// Nothing named it: the proxy assumes one.
+    Assumed,
+}
+
+/// A server's adapter, the engine it stands for and why.
 #[derive(Debug, Clone)]
 pub struct ServerEngine {
     pub adapter: Arc<dyn EngineAdapter>,
     pub engine: EngineRef,
+    pub source: EngineSource,
 }
 
 impl ServerEngine {
@@ -56,17 +76,68 @@ impl ServerEngine {
     }
 }
 
-/// The engine of every server.
-#[derive(Debug)]
+/// Every engine adapter of the build, by name.
+#[derive(Debug, Clone)]
 pub struct Engines {
-    default: Arc<ServerEngine>,
+    adapters: BTreeMap<String, Arc<dyn EngineAdapter>>,
+    /// [`DEFAULT_ENGINE`]'s and [`NO_ENGINE`]'s, which `build` requires.
+    assumed: Arc<dyn EngineAdapter>,
+    plain: Arc<dyn EngineAdapter>,
 }
 
 impl Engines {
-    /// Shared, not borrowed: an engine found while the proxy runs lives
-    /// outside this table.
-    pub fn of(&self, _server: &str) -> Arc<ServerEngine> {
-        self.default.clone()
+    /// The adapter registered as `name`.
+    pub fn adapter(&self, name: &str) -> Option<&Arc<dyn EngineAdapter>> {
+        self.adapters.get(name)
+    }
+
+    /// The engine a brand certainly names: the first adapter, by name,
+    /// whose `matches` answers.
+    pub fn recognise(&self, brand: &str) -> Option<EngineRef> {
+        let probe = EngineProbe {
+            brand: Some(brand),
+            protocol: None,
+        };
+        self.adapters.values().find_map(|a| a.matches(&probe))
+    }
+
+    /// A server's engine: its entry, then its bridge, then the engine its
+    /// brand named, then the assumption.
+    pub fn resolve(
+        &self,
+        declared: Option<&EngineRef>,
+        bridge: Option<&EngineRef>,
+        brand: Option<&EngineRef>,
+        protocol: Option<ProtocolVersion>,
+    ) -> ServerEngine {
+        let signs = [
+            (declared, EngineSource::Declared),
+            (bridge, EngineSource::Bridge),
+            (brand, EngineSource::Brand),
+        ];
+        if let Some((engine, source)) = signs.into_iter().find_map(|(e, s)| Some((e?, s))) {
+            // A bridge may name an engine this build has no adapter for.
+            let adapter = self.adapter(&engine.name).unwrap_or(&self.plain);
+            return ServerEngine {
+                adapter: adapter.clone(),
+                engine: engine.clone(),
+                source,
+            };
+        }
+        // A server older than any release of the default engine is of
+        // another one, which shows nothing.
+        let adapter = match protocol {
+            Some(p) if !self.assumed.speaks(p) => &self.plain,
+            _ => &self.assumed,
+        };
+        ServerEngine {
+            adapter: adapter.clone(),
+            engine: EngineRef {
+                name: adapter.name().to_string(),
+                version: None,
+            },
+            source: EngineSource::Assumed,
+        }
     }
 }
 
@@ -151,16 +222,21 @@ pub fn build(reg: &ModuleRegistry, cfg: &Config) -> Result<Modules, ModuleError>
     let store = (reg.stores.get(&cfg.storage.backend)?)(&cfg.storage.rest)?;
     let authenticator =
         (reg.authenticators.get(&cfg.authentication.service)?)(&cfg.authentication.rest)?;
-    let adapter = (reg.engines.get(DEFAULT_ENGINE)?)();
-    // The key in the registry is the engine's one name: configs look it up,
-    // logs and metrics show it.
-    debug_assert_eq!(adapter.name(), DEFAULT_ENGINE);
-    let engine = EngineRef {
-        name: DEFAULT_ENGINE.to_string(),
-        version: None,
-    };
+    let adapters: BTreeMap<String, Arc<dyn EngineAdapter>> = reg
+        .engines
+        .names()
+        .map(|name| {
+            let adapter = (reg.engines.get(name)?)();
+            // The key in the registry is the engine's one name: configs
+            // look it up, logs and metrics show it.
+            debug_assert_eq!(adapter.name(), name);
+            Ok((name.to_string(), adapter))
+        })
+        .collect::<Result<_, ModuleError>>()?;
     let engines = Engines {
-        default: Arc::new(ServerEngine { adapter, engine }),
+        assumed: (reg.engines.get(DEFAULT_ENGINE)?)(),
+        plain: (reg.engines.get(NO_ENGINE)?)(),
+        adapters,
     };
     Ok(Modules {
         forwarding,
@@ -222,11 +298,27 @@ mod tests {
     fn engine(d: BackendDefaults) -> ServerEngine {
         ServerEngine {
             adapter: Arc::new(Fixed(d)),
-            engine: EngineRef {
-                name: pumbo_engines::PUMPKIN.into(),
-                version: None,
-            },
+            engine: named(pumbo_engines::PUMPKIN),
+            source: EngineSource::Assumed,
         }
+    }
+
+    fn named(name: &str) -> EngineRef {
+        EngineRef {
+            name: name.into(),
+            version: None,
+        }
+    }
+
+    /// The engines of the build.
+    fn engines() -> Engines {
+        let cfg = Config::parse("forwarding:\n  mode: none\n").unwrap();
+        build(&builtin().unwrap(), &cfg).unwrap().engines
+    }
+
+    /// The adapter's name, the engine and the source of `e`.
+    fn shown(e: &ServerEngine) -> (&str, &EngineRef, EngineSource) {
+        (e.adapter.name(), &e.engine, e.source)
     }
 
     #[test]
@@ -236,21 +328,82 @@ mod tests {
         reg.engines
             .register(pumbo_engines::PUMPKIN, || Arc::new(Fixed(STRICT)))
             .unwrap();
+        reg.engines
+            .register(pumbo_engines::GENERIC, pumbo_engines::plain::generic)
+            .unwrap();
         let cfg = Config::parse(
             "listener:\n  - bind: \"127.0.0.1:0\"\nforwarding:\n  mode: none\n\
-             servers:\n  lobby: { address: \"127.0.0.1:1\", protocol: 777 }\n  \
-             games: { address: \"127.0.0.1:2\", protocol: 777 }\n",
+             servers:\n  lobby: { address: \"127.0.0.1:1\", protocol: 777 }\n",
         )
         .unwrap();
         let m = build(&reg, &cfg).unwrap();
-        for server in ["lobby", "games", "nowhere"] {
-            let e = m.engines.of(server);
-            assert_eq!(e.adapter.defaults(&e.engine), STRICT, "{server}");
-            let want = EngineRef {
-                name: pumbo_engines::PUMPKIN.into(),
-                version: None,
-            };
-            assert_eq!(e.engine, want, "{server}");
+        for protocol in [None, Some(ProtocolVersion::V777)] {
+            let e = m.engines.resolve(None, None, None, protocol);
+            assert_eq!(e.adapter.defaults(&e.engine), STRICT, "{protocol:?}");
+            assert_eq!(e.engine, named(pumbo_engines::PUMPKIN), "{protocol:?}");
+        }
+    }
+
+    #[test]
+    fn the_entry_wins_then_the_bridge_then_the_brand() {
+        use EngineSource::{Brand, Bridge, Declared};
+        let e = engines();
+        let (paper, vanilla, pumpkin) = (named("paper"), named("vanilla"), named("pumpkin"));
+        let v777 = Some(ProtocolVersion::V777);
+        let all = e.resolve(Some(&paper), Some(&vanilla), Some(&pumpkin), v777);
+        assert_eq!(shown(&all), ("paper", &paper, Declared));
+        let no_entry = e.resolve(None, Some(&vanilla), Some(&pumpkin), v777);
+        assert_eq!(shown(&no_entry), ("vanilla", &vanilla, Bridge));
+        let brand = e.resolve(None, None, Some(&vanilla), v777);
+        assert_eq!(shown(&brand), ("vanilla", &vanilla, Brand));
+        // A bridge may name an engine this build lacks: the generic adapter,
+        // the bridge's engine.
+        let odd = EngineRef {
+            name: "stone".into(),
+            version: Some("1.0".into()),
+        };
+        let unknown = e.resolve(None, Some(&odd), Some(&pumpkin), v777);
+        assert_eq!(shown(&unknown), (NO_ENGINE, &odd, Bridge));
+    }
+
+    #[test]
+    fn without_a_sign_a_server_is_pumpkin_unless_it_is_too_old() {
+        let e = engines();
+        for (protocol, adapter) in [
+            (None, "pumpkin"),
+            (Some(776), "pumpkin"),
+            (Some(777), "pumpkin"),
+            (Some(767), "generic"),
+            (Some(775), "generic"),
+        ] {
+            let got = e.resolve(None, None, None, protocol.map(ProtocolVersion));
+            let want = (adapter, &named(adapter), EngineSource::Assumed);
+            assert_eq!(shown(&got), want, "{protocol:?}");
+        }
+    }
+
+    /// Pumpkin 0.1.0-dev takes clients older than 26.2 and answers in their
+    /// version; its brand still names it.
+    #[test]
+    fn a_pumpkin_brand_on_an_old_protocol_is_pumpkin() {
+        let pumpkin = named("pumpkin");
+        let got = engines().resolve(None, None, Some(&pumpkin), Some(ProtocolVersion::V767));
+        assert_eq!(shown(&got), ("pumpkin", &pumpkin, EngineSource::Brand));
+        assert_eq!(got.chat(None).1, SignedChatCancel::Drop);
+    }
+
+    #[test]
+    fn brands_are_recognised_through_the_adapters() {
+        let e = engines();
+        for (brand, name) in [
+            ("Pumpkin", "pumpkin"),
+            ("vanilla", "vanilla"),
+            ("Paper", "paper"),
+        ] {
+            assert_eq!(e.recognise(brand), Some(named(name)), "{brand}");
+        }
+        for brand in ["MyNet", ""] {
+            assert_eq!(e.recognise(brand), None, "{brand}");
         }
     }
 
