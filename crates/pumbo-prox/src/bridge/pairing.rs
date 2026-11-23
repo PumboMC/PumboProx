@@ -3,12 +3,8 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use bytes::BytesMut;
 use pumbo_bridge_proto::wire::Msg;
-use pumbo_protocol::frame::{self, FrameConfig};
-use pumbo_protocol::packets::status::{Intention, StatusRequest};
-use pumbo_protocol::packets::{self, Ctx, Packet};
-use pumbo_protocol::{Direction, Phase, ProtocolVersion, VersionModule};
+use pumbo_protocol::{ProtocolVersion, VersionModule};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::Instant;
@@ -161,7 +157,7 @@ async fn status_ping(module: &dyn VersionModule, address: &str, nonce: &str) -> 
     let (host, port) =
         crate::config::split_host_port(address).ok_or_else(|| "bad address".to_string())?;
     let name = format!("{}{nonce}", pumbo_bridge_proto::PING_PREFIX);
-    let out = ping_frames(module, &name, port)?;
+    let out = crate::ping::frames(module, module.protocol().0, &name, port)?;
     let mut sock = tokio::time::timeout(Duration::from_secs(3), TcpStream::connect((host, port)))
         .await
         .map_err(|_| "connect timed out".to_string())?
@@ -173,34 +169,13 @@ async fn status_ping(module: &dyn VersionModule, address: &str, nonce: &str) -> 
     Ok(())
 }
 
-/// `intention` (status, to `host`) and `status_request` as uncompressed frames.
-fn ping_frames(module: &dyn VersionModule, host: &str, port: u16) -> Result<BytesMut, String> {
-    fn put<P: Packet>(
-        out: &mut BytesMut,
-        ctx: &Ctx<'_>,
-        phase: Phase,
-        p: &P,
-    ) -> Result<(), String> {
-        let id = packets::id_of::<P>(ctx, phase, Direction::Serverbound)
-            .ok_or_else(|| format!("{:?} has no {:?}", ctx.protocol(), P::KIND))?;
-        let payload = packets::encode(p, ctx).map_err(|e| e.to_string())?;
-        frame::encode(out, id, &payload, &FrameConfig::from_client()).map_err(|e| e.to_string())
-    }
-    let ctx = Ctx::new(module, Direction::Serverbound);
-    let intention = Intention {
-        protocol: module.protocol().0,
-        address: host.to_string(),
-        port,
-        intent: Intention::STATUS,
-    };
-    let mut out = BytesMut::new();
-    put(&mut out, &ctx, Phase::Handshake, &intention)?;
-    put(&mut out, &ctx, Phase::Status, &StatusRequest)?;
-    Ok(out)
-}
-
 #[cfg(test)]
 mod tests {
+    use pumbo_protocol::frame::{self, FrameConfig};
+    use pumbo_protocol::packets::status::{Intention, StatusRequest};
+    use pumbo_protocol::packets::{self, Ctx};
+    use pumbo_protocol::{Direction, Phase};
+
     use super::*;
 
     /// The pairing ping of a 26.2 (776) and a 26.3 (777) server is a status
@@ -210,7 +185,8 @@ mod tests {
         let versions = crate::modules::versions().unwrap();
         for protocol in [776, 777] {
             let module = versions.get(ProtocolVersion(protocol)).unwrap();
-            let mut buf = ping_frames(&**module, "pumbo-bridge.ab12", 25701).unwrap();
+            let mut buf =
+                crate::ping::frames(&**module, protocol, "pumbo-bridge.ab12", 25701).unwrap();
             let cfg = FrameConfig::from_client();
             let ctx = Ctx::new(&**module, Direction::Serverbound);
             let hs = frame::decode(&mut buf, &cfg).unwrap().unwrap();
