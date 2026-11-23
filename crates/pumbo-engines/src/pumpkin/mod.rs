@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use pumbo_core::engine::{
-    BackendDefaults, EngineAdapter, EngineRef, PacketFilter, SignedChatCancel,
+    BackendDefaults, EngineAdapter, EngineProbe, EngineRef, PacketFilter, SignedChatCancel,
 };
 use pumbo_protocol::ProtocolVersion;
 
@@ -36,12 +36,22 @@ impl EngineAdapter for PumpkinAdapter {
     fn quirks(&self, _: &EngineRef, wire: ProtocolVersion) -> Option<Box<dyn PacketFilter>> {
         trail::TrailFix::for_version(wire).map(|f| Box::new(f) as Box<dyn PacketFilter>)
     }
+
+    fn matches(&self, probe: &EngineProbe<'_>) -> Option<EngineRef> {
+        (probe.brand == Some("Pumpkin")).then(|| EngineRef {
+            name: crate::PUMPKIN.into(),
+            version: None,
+        })
+    }
+
+    /// No Pumpkin release has an own version older than 26.2.
+    fn speaks(&self, protocol: ProtocolVersion) -> bool {
+        protocol >= ProtocolVersion::V776
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use pumbo_core::ModuleRegistry;
-
     use super::*;
 
     fn pumpkin() -> EngineRef {
@@ -52,11 +62,11 @@ mod tests {
     }
 
     #[test]
-    fn the_adapter_registers_as_pumpkin() {
-        let mut reg = ModuleRegistry::new();
-        crate::register(&mut reg).unwrap();
-        assert_eq!(reg.engines.names().collect::<Vec<_>>(), ["pumpkin"]);
-        assert_eq!((reg.engines.get("pumpkin").unwrap())().name(), "pumpkin");
+    fn pumpkin_starts_at_26_2() {
+        assert!(!PumpkinAdapter.speaks(ProtocolVersion::V775));
+        for p in [776, 777, 778] {
+            assert!(PumpkinAdapter.speaks(ProtocolVersion(p)), "{p}");
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "pumbo-engines"
-description = "Server engine adapters: Pumpkin"
+description = "Server engine adapters: Pumpkin, Paper, vanilla and a generic one"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
