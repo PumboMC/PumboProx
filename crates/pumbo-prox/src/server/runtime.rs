@@ -53,6 +53,7 @@ impl Runtime {
                 name: name.clone(),
                 address: s.address.clone(),
                 protocol: s.protocol.fixed().map(ProtocolVersion),
+                engine: None,
                 online: true,
                 players: 0,
             })

@@ -68,6 +68,15 @@ pub trait PacketFilter: Send {
     fn backend_to_client(&mut self, phase: Phase, kind: PacketKind, frame: &RawFrame) -> Filtered;
 }
 
+/// What a server shows of itself.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EngineProbe<'a> {
+    /// Its `minecraft:brand` from configuration, as sent.
+    pub brand: Option<&'a str>,
+    /// Its protocol, from its status answer or its `servers` entry.
+    pub protocol: Option<ProtocolVersion>,
+}
+
 /// What servers of one engine need from the proxy.
 pub trait EngineAdapter: Send + Sync + std::fmt::Debug {
     /// The engine's name in configs and in the registry: `pumpkin`.
@@ -79,5 +88,54 @@ pub trait EngineAdapter: Send + Sync + std::fmt::Debug {
     /// `None`: this engine and version need none.
     fn quirks(&self, _engine: &EngineRef, _wire: ProtocolVersion) -> Option<Box<dyn PacketFilter>> {
         None
+    }
+    /// The engine of a server that shows `probe`, when that is certainly
+    /// this one. A brand a server plugin made up matches nothing.
+    fn matches(&self, _probe: &EngineProbe<'_>) -> Option<EngineRef> {
+        None
+    }
+    /// Whether `protocol` is the own version of a release of this engine.
+    /// A server that shows nothing is only assumed to be of an engine that
+    /// says yes.
+    fn speaks(&self, _protocol: ProtocolVersion) -> bool {
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An adapter with nothing but what it must have.
+    #[derive(Debug)]
+    struct Bare;
+
+    impl EngineAdapter for Bare {
+        fn name(&self) -> &str {
+            "bare"
+        }
+        fn defaults(&self, _: &EngineRef) -> BackendDefaults {
+            BackendDefaults {
+                signed_chat_cancel: SignedChatCancel::Drop,
+                chat_session_forwarding: true,
+            }
+        }
+    }
+
+    #[test]
+    fn an_adapter_matches_nothing_and_speaks_everything_unless_it_says_so() {
+        let probes = [
+            EngineProbe::default(),
+            EngineProbe {
+                brand: Some("bare"),
+                protocol: Some(ProtocolVersion(777)),
+            },
+        ];
+        for probe in &probes {
+            assert_eq!(Bare.matches(probe), None, "{probe:?}");
+        }
+        for p in [0, 767, 776, 777] {
+            assert!(Bare.speaks(ProtocolVersion(p)), "{p}");
+        }
     }
 }

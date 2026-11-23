@@ -102,6 +102,7 @@ mod tests {
             name: name.into(),
             address: "127.0.0.1:1".into(),
             protocol: protocol.map(ProtocolVersion),
+            engine: None,
             online,
             players: 0,
         }

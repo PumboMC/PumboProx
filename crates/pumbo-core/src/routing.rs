@@ -2,6 +2,8 @@
 
 use pumbo_protocol::ProtocolVersion;
 
+use crate::engine::EngineRef;
+
 /// A backend from the config with its state from the health ping.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendInfo {
@@ -9,6 +11,9 @@ pub struct BackendInfo {
     pub address: String,
     /// Backend protocol, if declared or known from the ping.
     pub protocol: Option<ProtocolVersion>,
+    /// The server's engine, when its entry names it or the server revealed
+    /// it; `None` while the proxy only assumes one.
+    pub engine: Option<EngineRef>,
     pub online: bool,
     pub players: u32,
 }
