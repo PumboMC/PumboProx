@@ -1,6 +1,6 @@
 //! The facts of the servers and what they give each runtime.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use pumbo_core::engine::{EngineRef, SignedChatCancel};
 
@@ -258,4 +258,69 @@ fn facts_of_removed_servers_go_after_a_reload_that_passed() {
     let left: Vec<String> = facts(&p).into_keys().collect();
     assert_eq!(left, ["lobby"]);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The lines of `log` that name `lobby`.
+fn lines(log: &Mutex<Vec<u8>>) -> Vec<String> {
+    let text = String::from_utf8(log.lock().unwrap().clone()).unwrap();
+    text.lines()
+        .filter(|l| l.contains("lobby"))
+        .map(String::from)
+        .collect()
+}
+
+#[test]
+fn a_wrong_protocol_entry_is_reported_when_the_answer_changes() {
+    let (_guard, log) = capture_logs();
+    let p = proxy(LOBBY);
+    let rt = p.runtime();
+    for _ in 0..3 {
+        p.detect.answered(&rt, "lobby", 777, Ok(776));
+    }
+    let said = lines(&log);
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].ends_with(
+            "server lobby: protocol is set to 777 but the server answers 776; the proxy uses 776. Fix servers.lobby.protocol, or set protocol: any when the server takes several versions itself"
+        ),
+        "{said:?}"
+    );
+    p.detect.answered(&rt, "lobby", 777, Ok(775));
+    assert_eq!(lines(&log).len(), 2);
+    p.detect.answered(&rt, "lobby", 777, Ok(777));
+    let said = lines(&log);
+    assert!(
+        said[2]
+            .ends_with("server lobby runs Minecraft 26.3 (protocol 777), from its status answer"),
+        "{said:?}"
+    );
+}
+
+#[test]
+fn a_silent_server_is_reported_once_per_outage() {
+    let (_guard, log) = capture_logs();
+    let p = proxy(AUTO);
+    let rt = p.runtime();
+    let silent = || p.detect.answered(&rt, "lobby", -1, Err("timed out".into()));
+    silent();
+    silent();
+    let said = lines(&log);
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].ends_with(
+            "server lobby does not answer the status ping (timed out); its version stays unknown and every client is sent to it"
+        ),
+        "{said:?}"
+    );
+    p.detect.answered(&rt, "lobby", -1, Ok(776));
+    silent();
+    silent();
+    let said = lines(&log);
+    assert_eq!(said.len(), 3, "{said:?}");
+    assert!(
+        said[2].ends_with(
+            "server lobby does not answer the status ping (timed out); the proxy keeps protocol 776 from its last answer"
+        ),
+        "{said:?}"
+    );
 }
