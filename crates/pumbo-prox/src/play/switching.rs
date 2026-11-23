@@ -188,7 +188,12 @@ impl Play<'_> {
             .iter()
             .find(|b| b.name == name)
             .and_then(|b| b.protocol);
-        let e = self.rt.modules.engines.resolve(None, None, None, protocol);
+        let declared = server.and_then(|s| s.engine.as_ref());
+        let e = self
+            .rt
+            .modules
+            .engines
+            .resolve(declared, None, None, protocol);
         let (chat_sessions, signed_cancel) = e.chat(server);
         // Without a translator the server's frames are in the client's
         // version; a translator repairs what it translates itself.

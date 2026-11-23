@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use pumbo_core::engine::EngineRef;
 use pumbo_servers::{Manager, Network, ProcessRunner, Source, State};
 use tracing::{info, warn};
 
@@ -136,6 +137,7 @@ pub fn backends(proxy: &Proxy, m: &Manager) -> BTreeMap<String, ServerConfig> {
                     .map(|v| v.0)
             });
             let backend = ServerConfig {
+                engine: engine_of(&e.source, &e.version),
                 address: format!("127.0.0.1:{}", e.port),
                 protocol: protocol.map_or(ServerProtocol::Auto, ServerProtocol::Fixed),
                 chat_session_forwarding: None,
@@ -146,6 +148,19 @@ pub fn backends(proxy: &Proxy, m: &Manager) -> BTreeMap<String, ServerConfig> {
             (name, backend)
         })
         .collect()
+}
+
+/// The engine of a server the proxy runs: its software's, when this build
+/// has that software. The manager's file names it, so an unknown name
+/// cannot stop the proxy.
+pub fn engine_of(source: &str, version: &str) -> Option<EngineRef> {
+    crate::modules::server_sources()
+        .iter()
+        .any(|s| s.name() == source)
+        .then(|| EngineRef {
+            name: source.to_string(),
+            version: Some(version.to_string()),
+        })
 }
 
 /// `pumbo.proxy.servers.<node>`; operators and the console by default.
@@ -259,5 +274,20 @@ pub fn suggest(proxy: &Proxy, words: &[&str], arg: usize) -> Vec<String> {
         ("servers", 3) if word(1) == "logs" => vec!["20".into(), "50".into(), "100".into()],
         ("servers", 4) if word(1) == "new" => m.template_names(),
         _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_managed_server_of_unknown_software_gets_no_engine() {
+        let pumpkin = EngineRef {
+            name: "pumpkin".into(),
+            version: Some("0.2.0+26.3-26.51".into()),
+        };
+        assert_eq!(engine_of("pumpkin", "0.2.0+26.3-26.51"), Some(pumpkin));
+        assert_eq!(engine_of("stone", "1.0"), None);
     }
 }

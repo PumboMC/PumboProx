@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use pumbo_core::registry::ModuleConfig;
 use serde::Deserialize;
 
+use pumbo_core::engine::EngineRef;
 pub use pumbo_core::engine::SignedChatCancel;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -227,6 +228,9 @@ pub struct ServerConfig {
     pub address: String,
     #[serde(default)]
     pub protocol: ServerProtocol,
+    /// The server's engine; `None` (`auto`): the proxy finds it.
+    #[serde(default, deserialize_with = "engine")]
+    pub engine: Option<EngineRef>,
     /// Pass the client's `chat_session_update` on; `false` makes this backend
     /// treat all chat as unsigned (§2.8 point 4). `None`: the engine's value.
     #[serde(default)]
@@ -332,6 +336,17 @@ impl<'de> Deserialize<'de> for ServerProtocol {
         }
         d.deserialize_any(Entry)
     }
+}
+
+/// `servers.<name>.engine`: `auto` (or nothing) or an engine's name.
+fn engine<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<EngineRef>, D::Error> {
+    let name: Option<String> = Option::deserialize(d)?;
+    Ok(name
+        .filter(|n| !n.eq_ignore_ascii_case("auto"))
+        .map(|name| EngineRef {
+            name,
+            version: None,
+        }))
 }
 
 /// What happens to the previous server's resource packs on a switch (§3.3).

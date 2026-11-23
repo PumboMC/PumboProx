@@ -1,5 +1,7 @@
+use pumbo_core::engine::EngineRef;
 use pumbo_prox::config::{Config, ServerProtocol};
 use pumbo_prox::modules;
+use pumbo_prox::server::Runtime;
 
 const SAMPLE: &str = r#"
 listener:
@@ -635,4 +637,41 @@ fn a_number_the_build_does_not_know_is_a_warning() {
     let want =
         "server lobby: protocol 7777 is no version this build knows, so no client reaches it";
     assert_eq!(remarks.warnings, [(line, want.to_string())]);
+}
+
+/// The lobby's `engine` with `entry` after its `protocol`.
+fn lobby_engine(entry: &str) -> Result<Option<EngineRef>, String> {
+    let text = SAMPLE.replace("protocol: 777 }", &format!("protocol: 777{entry} }}"));
+    let cfg = Config::parse(&text).map_err(|e| e.to_string())?;
+    let lobby = cfg.servers.get("lobby").ok_or("no lobby")?;
+    Ok(lobby.engine.clone())
+}
+
+#[test]
+fn an_engine_entry_takes_auto_or_a_name() {
+    for entry in ["", ", engine: ~", ", engine: auto"] {
+        assert_eq!(lobby_engine(entry), Ok(None), "{entry}");
+    }
+    let paper = EngineRef {
+        name: "paper".into(),
+        version: None,
+    };
+    assert_eq!(lobby_engine(", engine: paper"), Ok(Some(paper)));
+}
+
+#[test]
+fn an_unknown_engine_stops_the_load() {
+    for name in ["papr", "pumpkin@0.2.0"] {
+        let text = SAMPLE.replace(
+            "protocol: 777 }",
+            &format!("protocol: 777, engine: \"{name}\" }}"),
+        );
+        let err = Runtime::build(Config::parse(&text).unwrap()).unwrap_err();
+        assert_eq!(
+            err,
+            format!(
+                "server lobby: unknown engine module \"{name}\" (available: generic, paper, pumpkin, vanilla)"
+            )
+        );
+    }
 }

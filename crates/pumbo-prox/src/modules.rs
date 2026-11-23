@@ -393,6 +393,14 @@ mod tests {
     }
 
     #[test]
+    fn every_server_source_has_an_engine_of_its_name() {
+        let reg = builtin().unwrap();
+        for source in server_sources() {
+            assert!(reg.engines.get(source.name()).is_ok(), "{}", source.name());
+        }
+    }
+
+    #[test]
     fn brands_are_recognised_through_the_adapters() {
         let e = engines();
         for (brand, name) in [
@@ -412,6 +420,7 @@ mod tests {
         let entry = |sessions, cancel| ServerConfig {
             address: "127.0.0.1:1".into(),
             protocol: ServerProtocol::Auto,
+            engine: None,
             chat_session_forwarding: sessions,
             signed_chat_cancel: cancel,
             allow_transfers: false,

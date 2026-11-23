@@ -45,6 +45,11 @@ impl Runtime {
                     modules.forwarding.name()
                 ));
             }
+            if let Some(e) = &s.engine
+                && let Err(unknown) = registry.engines.get(&e.name)
+            {
+                return Err(format!("server {name}: {unknown}"));
+            }
         }
         let backends = config
             .servers
@@ -53,7 +58,7 @@ impl Runtime {
                 name: name.clone(),
                 address: s.address.clone(),
                 protocol: s.protocol.fixed().map(ProtocolVersion),
-                engine: None,
+                engine: s.engine.clone(),
                 online: true,
                 players: 0,
             })

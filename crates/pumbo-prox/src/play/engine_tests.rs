@@ -77,3 +77,13 @@ async fn a_brand_the_proxy_cannot_read_is_forwarded_untouched() {
         encode(&*rig.module, Direction::Clientbound, &cut)
     );
 }
+
+#[tokio::test]
+async fn a_declared_engine_sets_the_chat_default() {
+    let (rig, cmds) = Rig::lobby(", engine: vanilla", "");
+    let (mut play, _client) = rig.session(cmds);
+    let _lobby = attach(&mut play, "lobby");
+    let b = play.backend.as_ref().unwrap();
+    assert_eq!(b.signed_cancel, SignedChatCancel::Kick);
+    assert!(b.quirks.is_none());
+}

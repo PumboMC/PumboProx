@@ -173,6 +173,12 @@ async fn a_new_server_joins_the_network() {
     let port = m.entry("arena").unwrap().port;
     assert_eq!(b.address, format!("127.0.0.1:{port}"));
     assert_eq!(b.protocol.map(|p| p.0), Some(777), "26.3");
+    let version = m.entry("arena").unwrap().version;
+    let engine = pumbo_core::engine::EngineRef {
+        name: "pumpkin".into(),
+        version: Some(version),
+    };
+    assert_eq!(b.engine, Some(engine));
     assert!(rt.config.servers.contains_key("lobby"));
 
     let started = console(&proxy, "prox servers start arena");

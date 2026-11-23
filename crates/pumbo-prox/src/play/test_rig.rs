@@ -45,11 +45,17 @@ pub(super) struct Rig {
 impl Rig {
     /// `extra` goes at the end of the config.
     pub(super) fn new(extra: &str) -> (Self, mpsc::Receiver<SessionCmd>) {
+        Self::lobby("", extra)
+    }
+
+    /// `entry` goes at the end of `lobby`'s entry (`, engine: vanilla`),
+    /// `extra` at the end of the config.
+    pub(super) fn lobby(entry: &str, extra: &str) -> (Self, mpsc::Receiver<SessionCmd>) {
         let text = format!(
             "listener:\n  - bind: \"127.0.0.1:0\"\n\
              forwarding:\n  mode: none\n\
              servers:\n  \
-               lobby: {{ address: \"127.0.0.1:1\", protocol: 777 }}\n  \
+               lobby: {{ address: \"127.0.0.1:1\", protocol: 777{entry} }}\n  \
                games: {{ address: \"127.0.0.1:2\", protocol: 777 }}\n\
              routing:\n  try: [lobby]\n\
              limits:\n  \
