@@ -1,0 +1,165 @@
+//! The facts of the servers and what they give each runtime.
+
+use std::sync::Arc;
+
+use pumbo_core::engine::{EngineRef, SignedChatCancel};
+
+use super::*;
+use crate::config::Config;
+use crate::modules::EngineSource::{Assumed, Brand, Bridge, Declared};
+use crate::play::quirk_tests::capture_logs;
+
+/// A proxy whose `servers` section is `servers`.
+fn proxy(servers: &str) -> Arc<Proxy> {
+    let text = format!("forwarding:\n  mode: none\nservers:\n{servers}");
+    Proxy::new(Config::parse(&text).unwrap(), None).unwrap()
+}
+
+const LOBBY: &str = "  lobby: { address: \"127.0.0.1:1\", protocol: 777 }\n";
+
+fn named(name: &str) -> EngineRef {
+    EngineRef {
+        name: name.into(),
+        version: None,
+    }
+}
+
+/// The adapter's name, the engine's and the source.
+fn shown(e: &ServerEngine) -> (&str, &str, EngineSource) {
+    (e.adapter.name(), e.engine.name.as_str(), e.source)
+}
+
+fn facts(proxy: &Proxy) -> HashMap<String, Facts> {
+    proxy.detect.lock().clone()
+}
+
+#[test]
+fn the_first_recognised_brand_stays() {
+    let (_guard, log) = capture_logs();
+    let p = proxy(LOBBY);
+    let rt = p.runtime();
+    let first = p.detect.brand(&p, &rt, "lobby", "vanilla");
+    assert_eq!(shown(&first), ("vanilla", "vanilla", Brand));
+    for _ in 0..3 {
+        // This connection's own brand counts for it; the fact stays.
+        let second = p.detect.brand(&p, &rt, "lobby", "Paper");
+        assert_eq!(shown(&second), ("paper", "paper", Brand));
+    }
+    assert_eq!(facts(&p)["lobby"].brand, Some(named("vanilla")));
+    assert_eq!(
+        shown(&p.detect.engine(&rt, "lobby")),
+        ("vanilla", "vanilla", Brand)
+    );
+    let log = String::from_utf8(log.lock().unwrap().clone()).unwrap();
+    let lines: Vec<&str> = log.lines().filter(|l| l.contains("brand")).collect();
+    assert_eq!(lines.len(), 1, "{log}");
+    assert!(
+        lines[0].ends_with(
+            "server lobby now shows the brand of paper, it showed vanilla before; the proxy keeps vanilla until a reload"
+        ),
+        "{log}"
+    );
+}
+
+#[test]
+fn made_up_brands_leave_no_trace() {
+    let p = proxy(LOBBY);
+    let rt = p.runtime();
+    let long = "Pumpkin".repeat(30);
+    let brands = (0..50).map(|n| format!("MyNet {n}")).chain([long]);
+    for brand in brands {
+        let e = p.detect.brand(&p, &rt, "lobby", &brand);
+        assert_eq!(shown(&e), ("pumpkin", "pumpkin", Assumed), "{brand}");
+    }
+    assert!(facts(&p).is_empty());
+}
+
+#[test]
+fn the_bridge_beats_the_brand_and_the_entry_beats_both() {
+    let p = proxy(&format!(
+        "{LOBBY}  games: {{ address: \"127.0.0.1:2\", protocol: 777, engine: pumpkin }}\n"
+    ));
+    let rt = p.runtime();
+    for server in ["lobby", "games"] {
+        p.detect.brand(&p, &rt, server, "vanilla");
+        p.detect.bridge_hello(&rt, server, Some(named("paper")));
+    }
+    assert_eq!(
+        shown(&p.detect.engine(&rt, "lobby")),
+        ("paper", "paper", Bridge)
+    );
+    assert_eq!(
+        shown(&p.detect.engine(&rt, "games")),
+        ("pumpkin", "pumpkin", Declared)
+    );
+    // A bridge that names no engine leaves the brand.
+    p.detect.bridge_hello(&rt, "lobby", None);
+    assert_eq!(
+        shown(&p.detect.engine(&rt, "lobby")),
+        ("vanilla", "vanilla", Brand)
+    );
+}
+
+#[test]
+fn facts_of_another_address_do_not_count() {
+    let p = proxy(LOBBY);
+    p.detect.brand(&p, &p.runtime(), "lobby", "vanilla");
+    let moved = proxy("  lobby: { address: \"127.0.0.1:3\", protocol: 777 }\n");
+    let rt = moved.runtime();
+    let old = p.detect.lock().clone();
+    *moved.detect.lock() = old.clone();
+    assert_eq!(
+        shown(&moved.detect.engine(&rt, "lobby")),
+        ("pumpkin", "pumpkin", Assumed)
+    );
+    assert_eq!(moved.detect.backends(&rt)[0].engine, None);
+    assert_eq!(facts(&moved), old);
+}
+
+#[test]
+fn the_facts_reach_the_backends_and_twice_is_the_same() {
+    let p = proxy(&format!(
+        "{LOBBY}  games: {{ address: \"127.0.0.1:2\", protocol: 777 }}\n"
+    ));
+    let rt = p.runtime();
+    p.detect.brand(&p, &rt, "games", "Paper");
+    let first = p.detect.backends(&rt);
+    let engines: Vec<_> = first
+        .iter()
+        .map(|b| (b.name.as_str(), b.engine.clone()))
+        .collect();
+    assert_eq!(engines, [("games", Some(named("paper"))), ("lobby", None)]);
+    assert_eq!(p.detect.backends(&rt), first);
+    // The runtime's own list does not count: its servers are worked out
+    // from the config.
+    let mut stale = Runtime::build(rt.config.clone()).unwrap();
+    stale.backends.clear();
+    assert_eq!(p.detect.backends(&stale), first);
+    let kick = p.detect.engine(&rt, "games").chat(None).1;
+    assert_eq!(kick, SignedChatCancel::Kick);
+}
+
+#[test]
+fn the_first_runtime_and_a_reloaded_one_carry_the_engines() {
+    let dir = std::env::temp_dir().join(format!("pumbo-detect-reload-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("pumboprox.yml");
+    let text = format!(
+        "forwarding:\n  mode: none\nservers:\n{LOBBY}  games: {{ address: \"127.0.0.1:2\", engine: paper }}\n"
+    );
+    std::fs::write(&path, &text).unwrap();
+    let p = Proxy::new(Config::parse(&text).unwrap(), Some(path.clone())).unwrap();
+    let engine = |rt: &Runtime, name: &str| {
+        rt.backends
+            .iter()
+            .find(|b| b.name == name)
+            .and_then(|b| b.engine.clone())
+    };
+    assert_eq!(engine(&p.runtime(), "games"), Some(named("paper")));
+    p.detect.brand(&p, &p.runtime(), "lobby", "vanilla");
+    p.reload().unwrap();
+    assert_eq!(engine(&p.runtime(), "lobby"), Some(named("vanilla")));
+    assert_eq!(engine(&p.runtime(), "games"), Some(named("paper")));
+    assert_eq!(facts(&p)["lobby"].brand, None);
+    let _ = std::fs::remove_dir_all(&dir);
+}

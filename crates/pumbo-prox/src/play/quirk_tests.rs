@@ -86,7 +86,7 @@ async fn relayed(v: ProtocolVersion, payloads: &[Vec<u8>]) -> (Vec<Vec<u8>>, u64
 }
 
 /// The log of this thread while the guard lives.
-fn capture_logs() -> (tracing::subscriber::DefaultGuard, Arc<Mutex<Vec<u8>>>) {
+pub(crate) fn capture_logs() -> (tracing::subscriber::DefaultGuard, Arc<Mutex<Vec<u8>>>) {
     // With one live subscriber, tracing asks only the current thread whether
     // a log line met for the first time is wanted, so a line another test
     // reaches first would stay off here. A second one that lives as long as

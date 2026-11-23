@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
+use pumbo_core::engine::SignedChatCancel;
 use pumbo_core::profile::ForwardedPlayer;
 use pumbo_core::routing::{BackendInfo, SelectContext, SelectReason};
 use pumbo_protocol::packets;
@@ -19,6 +20,7 @@ use tracing::{debug, info, warn};
 
 use crate::conn::Conn;
 use crate::metrics::Metrics;
+use crate::modules::ServerEngine;
 use crate::server::Runtime;
 use crate::session::{
     BackendFail, BackendVersion, Fail, backend_login, backend_version, ctx, queue, queue_out,
@@ -181,26 +183,10 @@ impl Play<'_> {
         self.pumbox = None;
         self.epoch += 1;
         self.own_keep_alive = None;
-        let server = self.rt.config.servers.get(&name);
-        let protocol = self
-            .rt
-            .backends
-            .iter()
-            .find(|b| b.name == name)
-            .and_then(|b| b.protocol);
-        let declared = server.and_then(|s| s.engine.as_ref());
-        let e = self
-            .rt
-            .modules
-            .engines
-            .resolve(declared, None, None, protocol);
-        let (chat_sessions, signed_cancel) = e.chat(server);
-        // Without a translator the server's frames are in the client's
-        // version; a translator repairs what it translates itself.
-        let quirks = (!conn.translates())
-            .then(|| e.adapter.quirks(&e.engine, self.module.protocol()))
-            .flatten()
-            .map(Quirks::new);
+        // Its brand in configuration may name another engine (`server_brand`).
+        let e = self.proxy.detect.engine(&self.rt, &name);
+        let (chat_sessions, signed_cancel, quirks) =
+            self.engine_fields(&name, &e, conn.translates());
         debug!("{}: configuring on {name}", self.player.profile.name);
         self.backend = Some(Backend {
             conn,
@@ -227,6 +213,24 @@ impl Play<'_> {
             Some(end) => Err(end),
             None => Ok(()),
         }
+    }
+
+    /// What `e` gives this connection: the entry's chat keys first, the
+    /// engine's repairs only without a translator.
+    pub(super) fn engine_fields(
+        &self,
+        name: &str,
+        e: &ServerEngine,
+        translates: bool,
+    ) -> (bool, SignedChatCancel, Option<Quirks>) {
+        let (chat_sessions, signed_cancel) = e.chat(self.rt.config.servers.get(name));
+        // Without a translator the server's frames are in the client's
+        // version; a translator repairs what it translates itself.
+        let quirks = (!translates)
+            .then(|| e.adapter.quirks(&e.engine, self.module.protocol()))
+            .flatten()
+            .map(Quirks::new);
+        (chat_sessions, signed_cancel, quirks)
     }
 
     /// What a client sends right after login: settings and brand.

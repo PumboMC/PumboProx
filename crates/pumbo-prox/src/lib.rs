@@ -7,6 +7,7 @@ pub mod commands;
 pub mod config;
 pub mod config_edit;
 pub mod conn;
+pub mod detect;
 pub mod health;
 mod keys;
 pub mod limits;

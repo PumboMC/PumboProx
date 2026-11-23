@@ -208,6 +208,8 @@ pub struct Proxy {
     pub servers: OnceLock<Arc<pumbo_servers::Manager>>,
     /// Backends that failed their last logins (passive health).
     pub health: crate::health::Health,
+    /// What the servers revealed while the proxy runs.
+    pub detect: crate::detect::Detect,
     /// `/prox claim`: the operator code and the wrong tries so far; gone
     /// for good once the network has a server.
     pub(crate) claim: Mutex<Option<(String, u8)>>,
@@ -250,7 +252,9 @@ impl Proxy {
         let ip_display = IpDisplay::new(config.logging.log_ips);
         let pending = Arc::new(Semaphore::new(config.limits.max_pending_logins));
         let auth_slots = Arc::new(Semaphore::new(config.limits.max_concurrent_has_joined));
-        let runtime = Runtime::build(config)?;
+        let detect = crate::detect::Detect::default();
+        let mut runtime = Runtime::build(config)?;
+        runtime.backends = detect.backends(&runtime);
         let key = ServerKey::generate().map_err(|e| e.to_string())?;
         Ok(Arc::new(Self {
             versions,
@@ -277,6 +281,7 @@ impl Proxy {
             bridge: OnceLock::new(),
             servers: OnceLock::new(),
             health: crate::health::Health::default(),
+            detect,
             claim: Mutex::new(None),
         }))
     }

@@ -223,6 +223,8 @@ impl Proxy {
         }
         let unreachable = crate::versions::unreachable(&runtime);
         self.commit(runtime);
+        // The software under an address may have changed: the next brand counts.
+        self.detect.rearm();
         for w in loaded
             .unknown
             .iter()
@@ -300,6 +302,7 @@ impl Proxy {
         }
         let mut runtime = Runtime::build(config)?;
         runtime.managed = managed;
+        runtime.backends = self.detect.backends(&runtime);
         Ok(runtime)
     }
 

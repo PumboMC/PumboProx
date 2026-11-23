@@ -56,7 +56,7 @@ mod hooks;
 #[cfg(test)]
 mod messaging_tests;
 #[cfg(test)]
-mod quirk_tests;
+pub(crate) mod quirk_tests;
 mod quirks;
 mod switching;
 #[cfg(test)]

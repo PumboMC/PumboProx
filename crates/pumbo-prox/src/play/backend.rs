@@ -436,18 +436,46 @@ impl Play<'_> {
         Ok(Step::Forward)
     }
 
+    /// The server's brand in configuration: the engine it names gives this
+    /// connection its chat defaults and repairs, before the server's login.
+    fn server_brand(&mut self, brand: &str) {
+        let Some((name, translates)) = self
+            .backend
+            .as_ref()
+            .map(|b| (b.name.clone(), b.conn.translates()))
+        else {
+            return;
+        };
+        let e = self.proxy.detect.brand(self.proxy, &self.rt, &name, brand);
+        let (chat_sessions, signed_cancel, quirks) = self.engine_fields(&name, &e, translates);
+        if let Some(b) = self.backend.as_mut() {
+            b.chat_sessions = chat_sessions;
+            b.signed_cancel = signed_cancel;
+            b.quirks = quirks;
+        }
+    }
+
     /// Brand rewrite, channels of the hooks, size limit (§2.8).
     fn backend_payload(&mut self, phase: Phase, f: &RawFrame) -> Result<Step, Fail> {
         let mut r = Reader::new(&f.payload);
         let channel = r.identifier()?;
-        let suffix = &self.rt.config.plugin_messages.server_brand_suffix;
-        if channel == "minecraft:brand" && !suffix.is_empty() {
-            let brand = r.string(32_767)?;
-            let mut data = Vec::new();
-            data.put_string(&format!("{brand}{suffix}"), 32_767)?;
-            let p = ClientboundCustomPayload { channel, data };
-            queue_out(&mut self.client, self.module, phase, &p)?;
-            return Ok(Step::Drop);
+        if channel == "minecraft:brand" {
+            // Detection only looks: a brand it cannot read is handled as
+            // before, and one longer than 64 characters names no engine.
+            if phase == Phase::Configuration
+                && let Ok(brand) = r.clone().string(64)
+            {
+                self.server_brand(&brand);
+            }
+            let suffix = &self.rt.config.plugin_messages.server_brand_suffix;
+            if !suffix.is_empty() {
+                let brand = r.string(32_767)?;
+                let mut data = Vec::new();
+                data.put_string(&format!("{brand}{suffix}"), 32_767)?;
+                let p = ClientboundCustomPayload { channel, data };
+                queue_out(&mut self.client, self.module, phase, &p)?;
+                return Ok(Step::Drop);
+            }
         }
         if self.hooks.wants_channel(&channel) {
             match self.channel_hooks(phase, &channel, f)? {
