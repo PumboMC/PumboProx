@@ -93,6 +93,22 @@ impl Runtime {
             ways: crate::versions::Ways::default(),
         })
     }
+
+    /// The same runtime with these servers: nothing is read or built again.
+    fn with_backends(&self, backends: Vec<BackendInfo>) -> Runtime {
+        Runtime {
+            config: self.config.clone(),
+            modules: self.modules.clone(),
+            backends,
+            motd: self.motd.clone(),
+            favicon: self.favicon.clone(),
+            version_name: self.version_name.clone(),
+            operators: self.operators.clone(),
+            sensitive: self.sensitive.clone(),
+            managed: self.managed.clone(),
+            ways: crate::versions::Ways::default(),
+        }
+    }
 }
 
 /// A semaphore of `from` permits to `to`. Permits held now stay valid; a
@@ -304,6 +320,25 @@ impl Proxy {
         runtime.managed = managed;
         runtime.backends = self.detect.backends(&runtime);
         Ok(runtime)
+    }
+
+    /// A new runtime when the facts give a server another protocol or
+    /// engine than the runtime has; `true` when they did. Facts of
+    /// servers and addresses the runtime no longer has are dropped.
+    pub fn apply_detection(&self) -> bool {
+        off_worker(|| {
+            let _one = self.config_lock();
+            let old = self.runtime();
+            let backends = self.detect.backends(&old);
+            let changed = backends != old.backends;
+            if changed {
+                self.commit(old.with_backends(backends));
+            }
+            let now = self.runtime();
+            self.detect.report(self, &old.backends, &now);
+            self.detect.forget(&now);
+            changed
+        })
     }
 
     fn commit(&self, runtime: Runtime) {

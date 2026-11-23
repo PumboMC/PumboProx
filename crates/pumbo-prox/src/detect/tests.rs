@@ -163,3 +163,99 @@ fn the_first_runtime_and_a_reloaded_one_carry_the_engines() {
     assert_eq!(facts(&p)["lobby"].brand, None);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn the_protocol_follows_the_entry_and_the_answer() {
+    use ServerProtocol::{Any, Auto, Fixed};
+    let p = |n| Some(ProtocolVersion(n));
+    for (entry, answer, want) in [
+        (Auto, None, None),
+        (Auto, Some((-1, 776)), p(776)),
+        (Auto, Some((-1, 7777)), None),
+        (Any, Some((-1, 776)), None),
+        (Fixed(777), None, p(777)),
+        (Fixed(777), Some((777, 777)), p(777)),
+        (Fixed(777), Some((777, 776)), p(776)),
+        (Fixed(777), Some((777, 7777)), p(777)),
+        // An answer to another question than the entry asks now.
+        (Auto, Some((775, 775)), None),
+        (Fixed(776), Some((-1, 777)), p(776)),
+    ] {
+        assert_eq!(protocol(entry, answer), want, "{entry:?} {answer:?}");
+    }
+}
+
+/// `lobby` and its protocol in the runtime.
+fn lobby_protocol(p: &Proxy) -> Option<i32> {
+    let rt = p.runtime();
+    let lobby = rt.backends.iter().find(|b| b.name == "lobby");
+    lobby.and_then(|b| b.protocol).map(|v| v.0)
+}
+
+const AUTO: &str = "  lobby: { address: \"127.0.0.1:1\" }\n";
+
+#[test]
+fn only_a_changed_result_makes_a_new_runtime() {
+    let p = proxy(AUTO);
+    for _ in 0..2 {
+        p.detect.answered(&p.runtime(), "lobby", -1, Ok(776));
+    }
+    assert!(p.apply_detection());
+    let rt = p.runtime();
+    p.detect.answered(&rt, "lobby", -1, Ok(776));
+    assert!(!p.apply_detection());
+    assert!(Arc::ptr_eq(&rt, &p.runtime()));
+    assert_eq!(lobby_protocol(&p), Some(776));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_protocol_drops_the_remembered_ways() {
+    let p = proxy(AUTO);
+    let old = p.runtime();
+    assert!(crate::versions::way(&old, ProtocolVersion::V777).await);
+    p.detect.answered(&old, "lobby", -1, Ok(776));
+    assert!(p.apply_detection());
+    assert!(!crate::versions::way(&p.runtime(), ProtocolVersion::V777).await);
+}
+
+#[test]
+fn a_refused_reload_keeps_the_facts() {
+    let dir = std::env::temp_dir().join(format!("pumbo-detect-refused-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("pumboprox.yml");
+    let text = format!("forwarding:\n  mode: none\nservers:\n{AUTO}");
+    std::fs::write(&path, &text).unwrap();
+    let p = Proxy::new(Config::parse(&text).unwrap(), Some(path.clone())).unwrap();
+    p.detect.answered(&p.runtime(), "lobby", -1, Ok(776));
+    assert!(p.apply_detection());
+    let before = (facts(&p), p.runtime().backends.clone());
+    // What a reload works out before it is refused: the server moved.
+    let moved = text.replace("127.0.0.1:1", "127.0.0.1:3");
+    let prepared = Runtime::build(Config::parse(&moved).unwrap()).unwrap();
+    assert_eq!(p.detect.backends(&prepared)[0].protocol, None);
+    std::fs::write(&path, moved.replace("\" }", "\", engine: stone }")).unwrap();
+    assert!(p.reload().is_err());
+    assert!(!p.apply_detection());
+    assert_eq!((facts(&p), p.runtime().backends.clone()), before);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn facts_of_removed_servers_go_after_a_reload_that_passed() {
+    let dir = std::env::temp_dir().join(format!("pumbo-detect-removed-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("pumboprox.yml");
+    let games = "  games: { address: \"127.0.0.1:2\" }\n";
+    let text = format!("forwarding:\n  mode: none\nservers:\n{AUTO}{games}");
+    std::fs::write(&path, &text).unwrap();
+    let p = Proxy::new(Config::parse(&text).unwrap(), Some(path.clone())).unwrap();
+    for server in ["lobby", "games"] {
+        p.detect.answered(&p.runtime(), server, -1, Ok(776));
+    }
+    std::fs::write(&path, text.replace(games, "")).unwrap();
+    p.reload().unwrap();
+    p.apply_detection();
+    let left: Vec<String> = facts(&p).into_keys().collect();
+    assert_eq!(left, ["lobby"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

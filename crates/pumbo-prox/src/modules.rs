@@ -167,7 +167,7 @@ pub fn versions() -> Result<VersionRegistry, pumbo_data::DataError> {
 
 /// Modules built from the config (without listeners, which start separately
 /// because they open sockets).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Modules {
     pub forwarding: Arc<dyn ForwardingMode>,
     pub selector: Arc<dyn BackendSelector>,

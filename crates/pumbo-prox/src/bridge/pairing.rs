@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use pumbo_bridge_proto::wire::Msg;
-use pumbo_protocol::{ProtocolVersion, VersionModule};
+use pumbo_protocol::VersionModule;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::Instant;
@@ -111,10 +111,12 @@ impl Bridge {
                     st.nonces
                         .insert(nonce.clone(), (name.clone(), Instant::now()));
                     // The server's own protocol; the newest for one without.
-                    let module = s
-                        .protocol
-                        .fixed()
-                        .and_then(|p| proxy.versions.get(ProtocolVersion(p)).cloned())
+                    let module = rt
+                        .backends
+                        .iter()
+                        .find(|b| &b.name == name)
+                        .and_then(|b| b.protocol)
+                        .and_then(|p| proxy.versions.get(p).cloned())
                         .unwrap_or_else(|| proxy.newest());
                     targets.push((s.address.clone(), nonce, module));
                 }
@@ -175,9 +177,7 @@ mod tests {
     use pumbo_protocol::frame::{self, FrameConfig};
     use pumbo_protocol::packets::status::{Intention, StatusRequest};
     use pumbo_protocol::packets::{self, Ctx};
-    use pumbo_protocol::{Direction, Phase};
-
-    use super::*;
+    use pumbo_protocol::{Direction, Phase, ProtocolVersion};
 
     /// The pairing ping of a 26.2 (776) and a 26.3 (777) server is a status
     /// handshake in that server's protocol, then `status_request`.
