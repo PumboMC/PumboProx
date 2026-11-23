@@ -225,7 +225,8 @@ impl Default for ForwardingConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct ServerConfig {
     pub address: String,
-    pub protocol: Option<i32>,
+    #[serde(default)]
+    pub protocol: ServerProtocol,
     /// Pass the client's `chat_session_update` on; `false` makes this backend
     /// treat all chat as unsigned (§2.8 point 4). `None`: the engine's value.
     #[serde(default)]
@@ -244,6 +245,93 @@ pub struct ServerConfig {
     /// answers travel unencrypted and could be replayed.
     #[serde(default)]
     pub allow_public: bool,
+}
+
+/// `servers.<name>.protocol`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ServerProtocol {
+    /// The proxy asks the server. Until it answers, like `Any`.
+    #[default]
+    Auto,
+    /// The server takes clients of several versions itself: every client is
+    /// sent to it in its own version and the proxy never asks.
+    Any,
+    /// The owner's entry, a protocol number or a release.
+    Fixed(i32),
+}
+
+impl ServerProtocol {
+    /// The protocol the entry names.
+    pub fn fixed(self) -> Option<i32> {
+        match self {
+            Self::Fixed(p) => Some(p),
+            Self::Auto | Self::Any => None,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ServerProtocol {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        /// A protocol number of an entry; every protocol is above 0.
+        fn fixed<E: serde::de::Error>(
+            n: Option<i32>,
+            written: &dyn std::fmt::Display,
+        ) -> Result<ServerProtocol, E> {
+            n.filter(|n| *n > 0)
+                .map(ServerProtocol::Fixed)
+                .ok_or_else(|| E::custom(format!("protocol {written} is no protocol number")))
+        }
+        struct Entry;
+        impl serde::de::Visitor<'_> for Entry {
+            type Value = ServerProtocol;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("auto, any, a protocol number or a release in quotes such as \"26.3\"")
+            }
+
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(ServerProtocol::Auto)
+            }
+
+            fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(ServerProtocol::Auto)
+            }
+
+            fn visit_i64<E: serde::de::Error>(self, n: i64) -> Result<Self::Value, E> {
+                fixed(i32::try_from(n).ok(), &n)
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, n: u64) -> Result<Self::Value, E> {
+                fixed(i32::try_from(n).ok(), &n)
+            }
+
+            // YAML reads 1.20 as the number 1.2.
+            fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
+                Err(E::custom("write the release in quotes: protocol: \"26.3\""))
+            }
+
+            fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<Self::Value, E> {
+                if s.eq_ignore_ascii_case("auto") {
+                    return Ok(ServerProtocol::Auto);
+                }
+                if s.eq_ignore_ascii_case("any") {
+                    return Ok(ServerProtocol::Any);
+                }
+                if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) {
+                    return fixed(s.parse().ok(), &s);
+                }
+                crate::versions::protocol_of(s)
+                    .map(|p| ServerProtocol::Fixed(p.0))
+                    .ok_or_else(|| {
+                        E::custom(format!(
+                            "protocol \"{s}\" is not auto, any, a protocol number or a release this build knows ({})",
+                            crate::versions::known()
+                        ))
+                    })
+            }
+        }
+        d.deserialize_any(Entry)
+    }
 }
 
 /// What happens to the previous server's resource packs on a switch (§3.3).

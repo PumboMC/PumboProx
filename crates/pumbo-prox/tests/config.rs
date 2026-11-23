@@ -1,4 +1,4 @@
-use pumbo_prox::config::Config;
+use pumbo_prox::config::{Config, ServerProtocol};
 use pumbo_prox::modules;
 
 const SAMPLE: &str = r#"
@@ -576,4 +576,63 @@ fn a_typo_of_a_section_the_file_lacks_gets_a_hint() {
             "unknown key brige (did you mean bridge?); it is ignored".to_string()
         )]
     );
+}
+
+/// The lobby's `protocol` with `entry` in place of `, protocol: 777`.
+fn lobby_protocol(entry: &str) -> Result<ServerProtocol, String> {
+    let text = SAMPLE.replace(", protocol: 777 }", &format!("{entry} }}"));
+    let cfg = Config::parse(&text).map_err(|e| e.to_string())?;
+    let lobby = cfg.servers.get("lobby").ok_or("no lobby")?;
+    Ok(lobby.protocol)
+}
+
+#[test]
+fn a_protocol_entry_takes_auto_any_numbers_and_releases() {
+    use ServerProtocol::{Any, Auto, Fixed};
+    for (entry, want) in [
+        ("", Auto),
+        (", protocol: ~", Auto),
+        (", protocol: auto", Auto),
+        (", protocol: AUTO", Auto),
+        (", protocol: any", Any),
+        (", protocol: 776", Fixed(776)),
+        (", protocol: \"776\"", Fixed(776)),
+        (", protocol: \"26.2\"", Fixed(776)),
+        (", protocol: \"1.21.1\"", Fixed(767)),
+    ] {
+        assert_eq!(lobby_protocol(entry), Ok(want), "{entry}");
+    }
+}
+
+#[test]
+fn an_unknown_release_or_a_float_is_refused() {
+    let err = lobby_protocol(", protocol: \"27.9\"").unwrap_err();
+    let want = "protocol \"27.9\" is not auto, any, a protocol number or a release this build knows (1.21 to 26.3)";
+    assert!(err.contains(want), "{err}");
+    let err = lobby_protocol(", protocol: 1.20").unwrap_err();
+    assert!(
+        err.contains("write the release in quotes: protocol: \"26.3\""),
+        "{err}"
+    );
+    for number in ["0", "-1"] {
+        let err = lobby_protocol(&format!(", protocol: {number}")).unwrap_err();
+        assert!(
+            err.contains(&format!("protocol {number} is no protocol number")),
+            "{err}"
+        );
+    }
+}
+
+#[test]
+fn a_number_the_build_does_not_know_is_a_warning() {
+    let text = SAMPLE.replace("protocol: 777", "protocol: 7777");
+    let (cfg, remarks) = Config::parse_checked(&text).unwrap();
+    assert_eq!(
+        cfg.servers.get("lobby").unwrap().protocol,
+        ServerProtocol::Fixed(7777)
+    );
+    let line = text.lines().position(|l| l.contains("7777")).map(|i| i + 1);
+    let want =
+        "server lobby: protocol 7777 is no version this build knows, so no client reaches it";
+    assert_eq!(remarks.warnings, [(line, want.to_string())]);
 }

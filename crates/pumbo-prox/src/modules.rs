@@ -195,6 +195,7 @@ mod tests {
     use pumbo_core::engine::BackendDefaults;
 
     use super::*;
+    use crate::config::ServerProtocol;
 
     /// An adapter with the given defaults, registered in place of Pumpkin's.
     #[derive(Debug)]
@@ -257,7 +258,7 @@ mod tests {
     fn a_servers_chat_keys_win_over_its_engine() {
         let entry = |sessions, cancel| ServerConfig {
             address: "127.0.0.1:1".into(),
-            protocol: None,
+            protocol: ServerProtocol::Auto,
             chat_session_forwarding: sessions,
             signed_chat_cancel: cancel,
             allow_transfers: false,

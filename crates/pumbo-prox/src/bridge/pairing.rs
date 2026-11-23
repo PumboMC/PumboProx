@@ -113,6 +113,7 @@ impl Bridge {
                     // The server's own protocol; the newest for one without.
                     let module = s
                         .protocol
+                        .fixed()
                         .and_then(|p| proxy.versions.get(ProtocolVersion(p)).cloned())
                         .unwrap_or_else(|| proxy.newest());
                     targets.push((s.address.clone(), nonce, module));

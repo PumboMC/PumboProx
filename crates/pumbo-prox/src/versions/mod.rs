@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock};
 
 use pumbo_core::routing::BackendInfo;
 use pumbo_core::translate::TranslationPlan;
-use pumbo_data::protocol_of;
+pub(crate) use pumbo_data::protocol_of;
 use pumbo_protocol::{ProtocolVersion, VersionModule};
 use pumbo_text::Component;
 use tracing::{debug, warn};
@@ -411,7 +411,7 @@ impl<'de> serde::Deserialize<'de> for ClientVersions {
 }
 
 /// Every release this build knows, as one run: "1.21 to 26.3".
-fn known() -> String {
+pub(crate) fn known() -> String {
     names(&pumbo_data::protocols().collect::<Vec<_>>(), " to ")
 }
 

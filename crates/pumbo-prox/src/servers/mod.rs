@@ -10,7 +10,7 @@ use pumbo_servers::{Manager, Network, ProcessRunner, Source, State};
 use tracing::{info, warn};
 
 use crate::commands::{Reply, Source as Who};
-use crate::config::{Config, ServerConfig};
+use crate::config::{Config, ServerConfig, ServerProtocol};
 use crate::server::{Proxy, Runtime, SessionCmd};
 
 mod control;
@@ -137,7 +137,7 @@ pub fn backends(proxy: &Proxy, m: &Manager) -> BTreeMap<String, ServerConfig> {
             });
             let backend = ServerConfig {
                 address: format!("127.0.0.1:{}", e.port),
-                protocol,
+                protocol: protocol.map_or(ServerProtocol::Auto, ServerProtocol::Fixed),
                 chat_session_forwarding: None,
                 signed_chat_cancel: None,
                 allow_transfers: false,

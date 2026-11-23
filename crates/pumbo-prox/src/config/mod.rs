@@ -277,6 +277,24 @@ impl Config {
                 "translation.chain is empty, so no player can join: add passthrough".into(),
             ));
         }
+        // A number without tables here: no client reaches the server until it
+        // answers with one this build has.
+        for (name, s) in &cfg.servers {
+            let ServerProtocol::Fixed(n) = s.protocol else {
+                continue;
+            };
+            if !pumbo_data::protocols().any(|p| p.0 == n) {
+                let path = [
+                    Seg::from("servers"),
+                    Seg::from(name.as_str()),
+                    Seg::from("protocol"),
+                ];
+                warnings.push((
+                    crate::keys::line_of(text, &path),
+                    format!("server {name}: protocol {n} is no version this build knows, so no client reaches it"),
+                ));
+            }
+        }
         // An entry that is not written as a pair stops the load, like a bad value.
         let pair_line = |n| {
             let path = [

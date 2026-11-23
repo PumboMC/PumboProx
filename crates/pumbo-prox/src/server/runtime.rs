@@ -52,7 +52,7 @@ impl Runtime {
             .map(|(name, s)| BackendInfo {
                 name: name.clone(),
                 address: s.address.clone(),
-                protocol: s.protocol.map(ProtocolVersion),
+                protocol: s.protocol.fixed().map(ProtocolVersion),
                 online: true,
                 players: 0,
             })
