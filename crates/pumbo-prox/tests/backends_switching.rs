@@ -575,7 +575,7 @@ async fn chat_scenario(
     let cfg = format!(
         "listener:\n  - bind: \"127.0.0.1:{CHAT_PROXY_PORT}\"\nlogin:\n  online-mode: false\n\
          forwarding:\n  mode: modern\n  secret-file: \"{}\"\n\
-         servers:\n  lobby: {{ address: \"127.0.0.1:{BACKEND_PORT}\", protocol: {protocol}, chat-session-forwarding: {sessions} }}\n\
+         servers:\n  lobby: {{ address: \"127.0.0.1:{BACKEND_PORT}\", protocol: {protocol}, chat-session-forwarding: {sessions}, signed-chat-cancel: drop }}\n\
          routing:\n  try: [lobby]\n",
         toml_path(&secret_path)
     );

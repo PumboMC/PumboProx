@@ -105,6 +105,23 @@ impl Rig {
         (play, Peer::new(theirs, module, Direction::Serverbound))
     }
 
+    /// Another player on the same proxy.
+    pub(super) fn another(&self, id: u128) -> (Self, mpsc::Receiver<SessionCmd>) {
+        let profile = GameProfile {
+            id: Uuid::from_u128(id),
+            name: format!("Rig{id}"),
+            properties: Vec::new(),
+        };
+        let (guard, cmds) = self.proxy.register_player(&profile, peer()).unwrap();
+        let rig = Rig {
+            proxy: self.proxy.clone(),
+            module: self.module.clone(),
+            profile,
+            guard,
+        };
+        (rig, cmds)
+    }
+
     pub(super) fn gate(&self) -> crate::bridge::TpGate {
         self.proxy.teleport_gate(self.profile.id).unwrap()
     }
