@@ -160,7 +160,12 @@ fn the_first_runtime_and_a_reloaded_one_carry_the_engines() {
     p.reload().unwrap();
     assert_eq!(engine(&p.runtime(), "lobby"), Some(named("vanilla")));
     assert_eq!(engine(&p.runtime(), "games"), Some(named("paper")));
-    assert_eq!(facts(&p)["lobby"].brand, None);
+    // The brand stays until the next player confirms or replaces it.
+    let lobby = &facts(&p)["lobby"];
+    assert_eq!(
+        (&lobby.brand, lobby.rearmed),
+        (&Some(named("vanilla")), true)
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -323,4 +328,187 @@ fn a_silent_server_is_reported_once_per_outage() {
         ),
         "{said:?}"
     );
+}
+
+/// Brands and the bridge change the result, never the pings: nothing a
+/// player or an unauthenticated server does makes the proxy connect.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_brand_or_a_bridge_asks_nobody() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let accepts = Arc::new(AtomicUsize::new(0));
+    let counted = accepts.clone();
+    tokio::spawn(async move {
+        while let Ok((s, _)) = listener.accept().await {
+            counted.fetch_add(1, Ordering::SeqCst);
+            drop(s);
+        }
+    });
+    let p = proxy(&format!("  lobby: {{ address: \"{address}\" }}\n"));
+    let wait = std::time::Duration::from_secs(15);
+    let timing = task::Timing {
+        ping_timeout: wait,
+        start_wait: wait,
+        wake_gap: std::time::Duration::ZERO,
+        ..task::Timing::default()
+    };
+    task::start_with(&p, timing).await;
+    let asked = accepts.load(Ordering::SeqCst);
+    let changes = Arc::new(AtomicUsize::new(0));
+    let mut seen = p.runtime_changes();
+    seen.mark_unchanged();
+    let counter = changes.clone();
+    tokio::spawn(async move {
+        while seen.changed().await.is_ok() {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+    let rt = p.runtime();
+    for n in 0..50 {
+        p.detect.brand(&p, &rt, "lobby", &format!("MyNet {n}"));
+    }
+    for n in 0..10 {
+        let brand = if n % 2 == 0 { "vanilla" } else { "Paper" };
+        p.detect.brand(&p, &rt, "lobby", brand);
+    }
+    p.detect.bridge_hello(&rt, "lobby", Some(named("paper")));
+    let mut now = p.runtime_changes();
+    let bridged = |rt: &Arc<Runtime>| rt.backends[0].engine == Some(named("paper"));
+    tokio::time::timeout(wait, now.wait_for(bridged))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(accepts.load(Ordering::SeqCst), asked);
+    assert!(changes.load(Ordering::SeqCst) <= 2);
+    p.stop();
+}
+
+/// A proxy that reloads from a file with these servers; the file's path.
+fn from_file(tag: &str, servers: &str) -> (Arc<Proxy>, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("pumbo-detect-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("pumboprox.yml");
+    let text = format!("forwarding:\n  mode: none\nservers:\n{servers}");
+    std::fs::write(&path, &text).unwrap();
+    let p = Proxy::new(Config::parse(&text).unwrap(), Some(path.clone())).unwrap();
+    (p, path)
+}
+
+/// A reload keeps the engine of the last brand until the next player shows
+/// a brand: no new runtime and no line about an assumed engine meanwhile.
+#[test]
+fn a_reload_keeps_a_brand_until_the_next_player() {
+    let (_guard, log) = capture_logs();
+    let (p, _) = from_file("rearm", LOBBY);
+    p.detect.brand(&p, &p.runtime(), "lobby", "Paper");
+    assert!(p.apply_detection());
+    p.reload().unwrap();
+    assert!(!p.apply_detection());
+    assert_eq!(p.runtime().backends[0].engine, Some(named("paper")));
+    // The next brand counts, a made-up one too.
+    p.detect.brand(&p, &p.runtime(), "lobby", "vanilla");
+    assert_eq!(facts(&p)["lobby"].brand, Some(named("vanilla")));
+    p.reload().unwrap();
+    p.detect.brand(&p, &p.runtime(), "lobby", "MyNet");
+    assert_eq!(facts(&p)["lobby"].brand, None);
+    let log = String::from_utf8(log.lock().unwrap().clone()).unwrap();
+    assert!(
+        !log.contains("assumed") && !log.contains("now shows"),
+        "{log}"
+    );
+}
+
+/// A session on a runtime from before a reload that moved the server
+/// leaves the facts of the new address alone.
+#[test]
+fn a_session_on_an_old_runtime_leaves_the_new_address_alone() {
+    let (p, path) = from_file("moved", LOBBY);
+    let old = p.runtime();
+    std::fs::write(
+        &path,
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .replace(":1\"", ":3\""),
+    )
+    .unwrap();
+    p.reload().unwrap();
+    p.detect
+        .bridge_hello(&p.runtime(), "lobby", Some(named("paper")));
+    let e = p.detect.brand(&p, &old, "lobby", "vanilla");
+    assert_eq!(shown(&e), ("vanilla", "vanilla", Brand));
+    assert_eq!(facts(&p)["lobby"].bridge, Some(named("paper")));
+}
+
+#[test]
+fn the_last_answer_is_of_this_address_and_while_it_answers() {
+    let p = proxy(AUTO);
+    let rt = p.runtime();
+    let other = |text: &str| Runtime::build(Config::parse(text).unwrap()).unwrap();
+    let base = format!("forwarding:\n  mode: none\nservers:\n{AUTO}");
+    p.detect.answered(&rt, "lobby", -1, Ok(776));
+    assert_eq!(p.detect.last_answer(&rt, "lobby"), Some(776));
+    let moved = other(&base.replace(":1\"", ":3\""));
+    assert_eq!(p.detect.last_answer(&moved, "lobby"), None);
+    let off = other(&format!("{base}detection:\n  ping: false\n"));
+    assert_eq!(p.detect.last_answer(&off, "lobby"), None);
+    p.detect.answered(&rt, "lobby", -1, Err("timed out".into()));
+    assert_eq!(p.detect.last_answer(&rt, "lobby"), None);
+}
+
+#[test]
+fn an_engine_change_and_a_contradicted_entry_are_logged_once() {
+    let (_guard, log) = capture_logs();
+    let p = proxy(&format!(
+        "{LOBBY}  games: {{ address: \"127.0.0.1:2\", protocol: 777, engine: pumpkin }}\n"
+    ));
+    let rt = p.runtime();
+    for server in ["lobby", "games"] {
+        p.detect.brand(&p, &rt, server, "Paper");
+    }
+    assert!(p.apply_detection());
+    assert!(!p.apply_detection());
+    let log = String::from_utf8(log.lock().unwrap().clone()).unwrap();
+    let lines: Vec<&str> = log.lines().filter(|l| l.contains("engine")).collect();
+    assert_eq!(lines.len(), 2, "{log}");
+    let mismatch = "server games: engine is set to pumpkin but the server shows paper; the proxy keeps pumpkin";
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.ends_with("server lobby: engine paper (from its brand)")),
+        "{log}"
+    );
+    assert!(lines.iter().any(|l| l.ends_with(mismatch)), "{log}");
+}
+
+/// The same brand again asks for no recheck: a player joining a server
+/// never makes the detector take the config lock.
+#[tokio::test]
+async fn only_a_new_fact_asks_for_a_recheck() {
+    let p = proxy(LOBBY);
+    let rt = p.runtime();
+    let none = std::time::Duration::ZERO;
+    p.detect.brand(&p, &rt, "lobby", "Paper");
+    assert!(
+        tokio::time::timeout(none, p.detect.recheck.notified())
+            .await
+            .is_ok()
+    );
+    p.detect.brand(&p, &rt, "lobby", "Paper");
+    assert!(
+        tokio::time::timeout(none, p.detect.recheck.notified())
+            .await
+            .is_err()
+    );
+}
+
+#[test]
+fn wakes_in_the_gap_wait() {
+    use std::time::Duration;
+    let now = tokio::time::Instant::now();
+    let gap = Duration::from_secs(5);
+    assert!(task::wake_round(true, None, now, gap));
+    assert!(!task::wake_round(true, Some(now), now, gap));
+    assert!(task::wake_round(true, Some(now), now + gap, gap));
+    assert!(!task::wake_round(false, None, now, gap));
 }

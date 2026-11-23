@@ -3,19 +3,24 @@
 //! a function of its `servers` entry and these facts.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use pumbo_core::engine::EngineRef;
 use pumbo_core::routing::BackendInfo;
 use pumbo_protocol::ProtocolVersion;
+use tokio::sync::Notify;
 use tracing::{info, warn};
 
 use crate::config::{ServerConfig, ServerProtocol};
 use crate::modules::{EngineSource, ServerEngine};
 use crate::server::{Proxy, Runtime};
 
+mod task;
 #[cfg(test)]
 mod tests;
+
+pub use task::{Timing, start, start_with};
 
 /// A brand longer than this is no engine's.
 const MAX_BRAND: usize = 64;
@@ -26,6 +31,13 @@ const MAX_BRAND: usize = 64;
 #[derive(Debug, Default)]
 pub struct Detect {
     servers: Mutex<HashMap<String, Facts>>,
+    /// Work out the result again (no ping). Shared with the detector task,
+    /// which holds no strong reference to the proxy.
+    recheck: Arc<Notify>,
+    /// Ping every server now.
+    wake: Arc<Notify>,
+    /// The detector task runs.
+    started: AtomicBool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -33,8 +45,10 @@ struct Facts {
     /// The address these are about; facts of another address do not count.
     address: String,
     /// The engine the first recognised brand named. It stays until the
-    /// address changes or a reload.
+    /// address changes; after a reload the next brand may replace it.
     brand: Option<EngineRef>,
+    /// A reload came since `brand`: the next brand confirms or replaces it.
+    rearmed: bool,
     /// The engine the server's bridge named.
     bridge: Option<EngineRef>,
     /// The last status answer and the protocol it was asked with:
@@ -69,22 +83,54 @@ impl Detect {
         let named = (brand.len() <= MAX_BRAND)
             .then(|| rt.modules.engines.recognise(brand))
             .flatten();
-        let (Some(named), Some(s)) = (named, entry) else {
-            return self.engine(rt, server);
-        };
+        // Only a session on the proxy's runtime records: one on an older
+        // runtime may see a server that has moved since.
+        let now = proxy.runtime();
+        let recorded = entry.filter(|s| {
+            now.config
+                .servers
+                .get(server)
+                .is_some_and(|c| c.address == s.address)
+        });
         let mut servers = self.lock();
+        let rearmed = recorded
+            .and_then(|s| current(&servers, server, s))
+            .is_some_and(|f| f.rearmed);
+        let (Some(s), true) = (recorded, named.is_some() || rearmed) else {
+            let mut mine = entry.and_then(|s| current(&servers, server, s).cloned());
+            drop(servers);
+            if let Some(n) = named {
+                mine.get_or_insert_with(Facts::default).brand = Some(n);
+            }
+            return engine(rt, entry, mine.as_ref());
+        };
         let facts = facts_of(&mut servers, server, s);
-        let first = facts.brand.get_or_insert_with(|| named.clone()).clone();
+        let before = facts.brand.as_ref().map(|e| e.name.clone());
+        if std::mem::take(&mut facts.rearmed) {
+            // After a reload this brand counts, a made-up one too.
+            facts.brand = named.clone();
+        } else if facts.brand.is_none() {
+            facts.brand = named.clone();
+        }
+        let after = facts.brand.as_ref().map(|e| e.name.clone());
         let mut mine = facts.clone();
         drop(servers);
-        if first.name != named.name && proxy.first_report("brand-change", server) {
+        if after != before {
+            self.recheck.notify_one();
+        }
+        if let (Some(n), Some(kept)) = (&named, &after)
+            && n.name != *kept
+            && proxy.first_report("brand-change", server)
+        {
             warn!(
-                "server {server} now shows the brand of {}, it showed {} before; the proxy keeps {} until a reload",
-                named.name, first.name, first.name
+                "server {server} now shows the brand of {}, it showed {kept} before; the proxy keeps {kept} until a reload",
+                n.name
             );
         }
         // The session saw this brand itself.
-        mine.brand = Some(named);
+        if named.is_some() {
+            mine.brand = named;
+        }
         engine(rt, entry, Some(&mine))
     }
 
@@ -93,7 +139,20 @@ impl Detect {
         let Some(s) = rt.config.servers.get(server) else {
             return;
         };
-        facts_of(&mut self.lock(), server, s).bridge = engine;
+        let mut servers = self.lock();
+        let facts = facts_of(&mut servers, server, s);
+        let changed = facts.bridge != engine;
+        facts.bridge = engine;
+        drop(servers);
+        if changed {
+            self.recheck.notify_one();
+        }
+    }
+
+    /// Asks every server again now. Wakes close together are one round,
+    /// and rounds a wake starts are [`Timing::wake_gap`] apart.
+    pub fn wake(&self) {
+        self.wake.notify_one();
     }
 
     /// `rt`'s servers with the protocol and engine the facts give them.
@@ -152,9 +211,17 @@ impl Detect {
         }
     }
 
-    /// The protocol `server` last answered with, whatever it was asked.
-    pub fn last_answer(&self, server: &str) -> Option<i32> {
-        self.lock().get(server)?.answer.map(|(_, n)| n)
+    /// The protocol `server` last answered with at the address it has in
+    /// `rt`, whatever it was asked; `None` while it does not answer or with
+    /// `detection.ping` off.
+    pub fn last_answer(&self, rt: &Runtime, server: &str) -> Option<i32> {
+        let s = rt.config.servers.get(server)?;
+        let servers = self.lock();
+        let facts = current(&servers, server, s).filter(|f| !f.silent)?;
+        facts
+            .answer
+            .filter(|_| rt.config.detection.ping)
+            .map(|(_, n)| n)
     }
 
     /// Drops the facts of servers and addresses `rt` no longer has.
@@ -210,11 +277,12 @@ impl Detect {
         }
     }
 
-    /// After a reload the next recognised brand of each server counts
-    /// again: its software may have changed under the same address.
+    /// After a reload the next brand of each server counts again: its
+    /// software may have changed under the same address. Until a player
+    /// shows it, the remembered one stays.
     pub(crate) fn rearm(&self) {
         for facts in self.lock().values_mut() {
-            facts.brand = None;
+            facts.rearmed = facts.brand.is_some();
         }
     }
 }

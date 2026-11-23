@@ -241,6 +241,7 @@ impl Proxy {
         self.commit(runtime);
         // The software under an address may have changed: the next brand counts.
         self.detect.rearm();
+        self.detect.wake();
         for w in loaded
             .unknown
             .iter()

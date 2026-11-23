@@ -170,7 +170,16 @@ pub fn ways(rt: &Runtime) -> Vec<String> {
         } else {
             names(&reach, " to ")
         };
-        lines.push(format!("  {} ({}): {reach}", b.name, server_version(b)));
+        // A server with `protocol: auto` gets its version when the proxy
+        // runs and asks it; `check-config` does not ask.
+        let auto = rt.config.servers.get(&b.name).map(|s| s.protocol);
+        let version = match (auto, b.protocol) {
+            (Some(crate::config::ServerProtocol::Auto), None) => {
+                "version asked when the proxy runs".to_string()
+            }
+            _ => server_version(b),
+        };
+        lines.push(format!("  {} ({version}): {reach}", b.name));
     }
     lines
 }

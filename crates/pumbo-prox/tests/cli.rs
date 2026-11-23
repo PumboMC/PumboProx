@@ -490,7 +490,8 @@ fn check_config_shows_the_versions_each_server_takes() {
             "versions:\n  clients: [\"1.21.4\", \"26.3\"]\nservers:\n\
              \x20 lobby: { address: \"127.0.0.1:1\", protocol: 777 }\n\
              \x20 old: { address: \"127.0.0.1:2\", protocol: 776 }\n\
-             \x20 any: { address: \"127.0.0.1:3\" }\n",
+             \x20 any: { address: \"127.0.0.1:3\" }\n\
+             \x20 every: { address: \"127.0.0.1:4\", protocol: any }\n",
         ),
     );
     let out = pumboprox(&["check-config", file.to_str().unwrap()]);
@@ -507,7 +508,8 @@ fn check_config_shows_the_versions_each_server_takes() {
         "  lobby (26.3): 26.3\n"
     };
     let want = format!(
-        "clients: 1.21.4, 26.3\n  any (any version): 1.21.4, 26.3\n{lobby}  old (26.2): none\n"
+        "clients: 1.21.4, 26.3\n  any (version asked when the proxy runs): 1.21.4, 26.3\n  \
+         every (any version): 1.21.4, 26.3\n{lobby}  old (26.2): none\n"
     );
     assert!(text.contains(&want), "{text}");
     // Only a running proxy knows the servers of `managed-servers`.

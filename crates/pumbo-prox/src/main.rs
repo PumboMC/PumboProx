@@ -673,6 +673,7 @@ async fn start(
         error!("cannot start: {e}");
         return None;
     }
+    pumbo_prox::detect::start(proxy).await;
     match proxy.bind().await {
         Ok(l) => Some(l),
         Err(e) => {
