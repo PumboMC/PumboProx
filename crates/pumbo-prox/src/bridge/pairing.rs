@@ -157,7 +157,7 @@ async fn status_ping(module: &dyn VersionModule, address: &str, nonce: &str) -> 
     let (host, port) =
         crate::config::split_host_port(address).ok_or_else(|| "bad address".to_string())?;
     let name = format!("{}{nonce}", pumbo_bridge_proto::PING_PREFIX);
-    let out = crate::ping::frames(module, module.protocol().0, &name, port)?;
+    let out = crate::ping::frames(module.protocol().0, &name, port)?;
     let mut sock = tokio::time::timeout(Duration::from_secs(3), TcpStream::connect((host, port)))
         .await
         .map_err(|_| "connect timed out".to_string())?
@@ -185,8 +185,7 @@ mod tests {
         let versions = crate::modules::versions().unwrap();
         for protocol in [776, 777] {
             let module = versions.get(ProtocolVersion(protocol)).unwrap();
-            let mut buf =
-                crate::ping::frames(&**module, protocol, "pumbo-bridge.ab12", 25701).unwrap();
+            let mut buf = crate::ping::frames(protocol, "pumbo-bridge.ab12", 25701).unwrap();
             let cfg = FrameConfig::from_client();
             let ctx = Ctx::new(&**module, Direction::Serverbound);
             let hs = frame::decode(&mut buf, &cfg).unwrap().unwrap();
