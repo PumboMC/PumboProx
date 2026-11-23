@@ -349,6 +349,20 @@ fn engine<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<EngineRef>, D
         }))
 }
 
+/// `detection`: how the proxy finds out what its servers are.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case", default)]
+pub struct DetectionConfig {
+    /// Ask every server of the config for its version with a status ping.
+    pub ping: bool,
+}
+
+impl Default for DetectionConfig {
+    fn default() -> Self {
+        Self { ping: true }
+    }
+}
+
 /// What happens to the previous server's resource packs on a switch (§3.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]

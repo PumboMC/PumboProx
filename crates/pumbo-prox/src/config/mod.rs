@@ -195,6 +195,9 @@ pub struct Config {
     /// Servers the proxy downloads, creates and runs (`managed-servers`).
     #[serde(default)]
     pub managed_servers: pumbo_servers::Config,
+    /// How the proxy finds out what its servers are (`detection`).
+    #[serde(default)]
+    pub detection: DetectionConfig,
     /// `server-group` (a list), read by the plugin host (§5.8.4).
     #[serde(default, rename = "server-group")]
     pub server_groups: Vec<ModuleConfig>,
@@ -254,6 +257,7 @@ pub fn sections() -> Vec<SectionInfo> {
         section("pumbox", keys_schema::<PumboxConfig>()),
         section("bridge", keys_schema::<crate::bridge::BridgeConfig>()),
         section("managed-servers", keys_schema::<pumbo_servers::Config>()),
+        section("detection", keys_schema::<DetectionConfig>()),
     ]
 }
 

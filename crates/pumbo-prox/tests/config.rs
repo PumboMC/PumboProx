@@ -675,3 +675,19 @@ fn an_unknown_engine_stops_the_load() {
         );
     }
 }
+
+#[test]
+fn detection_has_one_switch() {
+    assert!(Config::parse(SAMPLE).unwrap().detection.ping);
+    let off = format!("{SAMPLE}detection:\n  ping: false\n");
+    assert!(!Config::parse(&off).unwrap().detection.ping);
+    let typo = format!("{SAMPLE}detection:\n  pings: false\n");
+    let line = typo.lines().count();
+    assert_eq!(
+        Config::parse_checked(&typo).unwrap().1.unknown,
+        [(
+            Some(line),
+            "unknown key detection.pings (did you mean ping?); it is ignored".to_string()
+        )]
+    );
+}
